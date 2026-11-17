@@ -1,13 +1,13 @@
 """`on_error: continue` must null the value and clear stale result meta from
 an earlier pass, in `prompt`, `tool` and `use` (issue #260 part 2).
 
-Before this fix, only `on_error: skip` nulled the value; `continue` left
-whatever was already on the node's `value` key, so a reused node — an
-unnamed loop's later pass, most commonly — showed a previous pass's output
-sitting right next to the current pass's `meta.error`. Retry/decomposition
-meta had the same problem: it is only ever *set* on a path that reached it,
-never reset at the top of a pass, so a value like `meta.retries_used` from a
-pass that needed a retry survived onto a later pass that failed outright.
+A naive `on_error: continue` that leaves whatever was already on the
+node's `value` key would let a reused node — an unnamed loop's later
+pass, most commonly — show a previous pass's output sitting right next to
+the current pass's `meta.error`. Retry/decomposition meta has the same
+hazard: it is only ever *set* on a path that reaches it, never reset at
+the top of a pass, so a value like `meta.retries_used` from a pass that
+needed a retry could survive onto a later pass that failed outright.
 """
 
 from __future__ import annotations

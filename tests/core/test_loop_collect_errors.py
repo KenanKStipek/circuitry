@@ -1,13 +1,13 @@
 """``collect`` under a failed pass (issue #239).
 
-Before this fix, ``collected`` was assembled by walking ``iter_0 ..
+A naive implementation assembles ``collected`` by walking ``iter_0 ..
 iter_{iteration_count-1}``, where ``iteration_count`` only counts passes
 that ran to completion. A failed pass under ``on_error: continue`` (or
-``break`` in a ``tree`` loop, where every pass is already running) threw
+``break`` in a ``tree`` loop, where every pass is already running) throws
 that off two ways at once: the failed pass's own `iter_<N>` node — with a
-``None`` value and an error in ``meta`` — fell inside the walked range and
-was collected as a stray ``null``, while the walk's upper bound, now one
-short, dropped the last genuinely completed pass instead.
+``None`` value and an error in ``meta`` — falls inside the walked range and
+would be collected as a stray ``null``, while the walk's upper bound, now one
+short, would drop the last genuinely completed pass instead.
 
 The contract under test: ``collected`` holds the values of the passes that
 produced one, in pass order, never loses a completed pass, and a failed
@@ -147,8 +147,8 @@ def test_collect_ignores_stale_passes_when_a_named_loops_node_is_reused_by_an_ou
     inner loop's node — and whatever ``iter_<N>`` keys are already on it —
     is reused across outer passes.
 
-    Before this fix, ``_collect_values`` scanned every ``iter_<N>`` key still
-    on the node, so a first outer pass with 3 inner passes left ``iter_2``
+    A naive ``_collect_values`` that scans every ``iter_<N>`` key still
+    on the node would let a first outer pass with 3 inner passes leave ``iter_2``
     sitting on the node for a second, shorter (2-pass) outer pass to
     mistakenly pick up alongside its own.
     """

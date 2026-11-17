@@ -87,7 +87,7 @@ def _interrupted_tree_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path,
     """
     pidfile = tmp_path / "branch_pid"
     started = tmp_path / "branch_started"
-    # `exec` the tail command (#385 round 3): see the matching comment in
+    # `exec` the tail command (#385): see the matching comment in
     # `test_run_cancel_parallel.py`'s own `_branch_tool` for why a plain
     # `sleep N` as the last of several `;`-separated commands can leave a
     # cancellation's `killpg` racing the kernel's own registration of the

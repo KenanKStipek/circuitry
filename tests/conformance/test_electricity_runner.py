@@ -311,7 +311,7 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     # doesn't support yet (`prompt`/`shell`/`http`/a document-level
     # `adapter:`/...), kept passing (or, for a failure case, kept failing
     # the *right* way) on the Python engine and deliberately still refused
-    # by electricity until the lane that implements that capability flips
+    # by electricity until the work that implements that capability flips
     # it (never `known_divergence`, which means *both* engines succeeded
     # with one documented difference -- not applicable when one engine
     # never ran the document at all). Without the flag, any other preview

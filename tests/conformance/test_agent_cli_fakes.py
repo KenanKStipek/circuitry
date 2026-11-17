@@ -26,7 +26,7 @@ from circuitry.core.cycle_check import iter_use_children
 
 from . import harness
 
-#: The two adapter names this lane registers, mapped to their own
+#: The two adapter names this module registers, mapped to their own
 #: `adapters/factory.py` default `binary` -- `cfg.get("binary") or
 #: default`, mirrored here only to resolve which fake file a case must
 #: ship; the config parsing itself stays this test's own, deliberately

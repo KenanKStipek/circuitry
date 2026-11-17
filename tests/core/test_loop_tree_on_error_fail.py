@@ -1,10 +1,10 @@
 """Tree loop `on_error: fail` must report the lowest-index failure, with its
 iteration number, not whichever pass happens to finish first (#269 item 7).
 
-Before this fix, ``raise next(iter(errors.values()))`` re-raised the first
+A naive ``raise next(iter(errors.values()))`` re-raises the first
 exception *inserted into the errors dict*, which follows ``as_completed``'s
 completion order — the fastest failing thread, not the lowest ``each``
-index — and the raised message never named which iteration failed at all.
+index — and the raised message never names which iteration failed at all.
 """
 
 from __future__ import annotations

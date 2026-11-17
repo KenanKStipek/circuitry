@@ -125,7 +125,7 @@ def _diagnosis_header(
 
 def _process_group_and_pipe_diagnostics(pid: int | None) -> str:
     """``ps``/``lsof`` evidence of *pid*'s own session and process group,
-    taken before anything is killed (#385 round 3).
+    taken before anything is killed (#385).
 
     A stuck `cof run` child's own stack dump (from `_diagnose_and_fail`'s
     SIGUSR1, below) only ever showed that a worker thread was blocked in
@@ -272,8 +272,7 @@ def _diagnose_and_fail(
     state (:func:`_process_group_and_pipe_diagnostics`, captured before
     anything below is killed), plus a dump of every thread's Python
     stack from `_dump_every_thread_stack_then_kill` — never a bare
-    `TimeoutExpired`/`TimeoutError` with none of that (#385 review,
-    round 3).
+    `TimeoutExpired`/`TimeoutError` with none of that (#385).
     """
     diagnostics = _process_group_and_pipe_diagnostics(pid)
     _dump_every_thread_stack_then_kill(proc)

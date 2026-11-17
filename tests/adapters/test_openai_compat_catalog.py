@@ -63,7 +63,7 @@ CATALOG: list[tuple[str, str, str]] = [
     ("vllm", "", "localhost:8000"),
     ("llamacpp", "", "localhost:8080"),
     ("lmstudio", "", "localhost:1234"),
-    # Round 2 — helper-drop adapters added in the second adapter batch.
+    # Additional helper-drop adapters, beyond the initial list above.
     ("mistral", "MISTRAL_API_KEY", "api.mistral.ai"),
     ("ai21", "AI21_API_KEY", "api.ai21.com"),
     ("huggingface-inference", "HF_TOKEN", "router.huggingface.co"),

@@ -1,6 +1,6 @@
 """A `{file: ...}` prompt source in a document reached by its cache path, or
 by a remote library source's bare name, stays confined to that source's own
-fetched tree (issue #396's second review).
+fetched tree (issue #396).
 
 `default_project_root`'s ordinary "nearest `circuitry.config.json`/
 `config.json`, walking up from the document's own directory" rule, applied

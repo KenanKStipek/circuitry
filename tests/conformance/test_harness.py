@@ -817,10 +817,10 @@ def test_read_leftover_replies_reports_everything_when_export_is_absent(
     tmp_path: Path,
 ) -> None:
     """An absent export file means nothing was consumed -- either nothing in
-    the run ever loaded the replies file, or (lane F1's own electricity
-    engine, once it runs this far) the engine doesn't implement the export
-    at all. Either way `read_leftover_replies` must report every reply the
-    file configures, never `{}`."""
+    the run ever loaded the replies file, or the electricity engine (once
+    it runs this far) doesn't implement the export at all. Either way
+    `read_leftover_replies` must report every reply the file configures,
+    never `{}`."""
     replies_path = tmp_path / "replies.yaml"
     replies_path.write_text(
         yaml.dump({"prime.a": [{"text": "x"}, {"text": "y"}], "prime.b": [{"text": "z"}]}),

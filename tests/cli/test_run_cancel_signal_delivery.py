@@ -1,4 +1,4 @@
-"""#385 review: two scenarios the original fix pass's own tests never drove
+"""#385: two scenarios not covered elsewhere
 (both exercise `core.dynamic`/`core.loop` themselves, not just the
 `as_completed_promptly`/`wait_for_cancelled_branches` helpers in isolation).
 

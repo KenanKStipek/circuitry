@@ -71,8 +71,8 @@ def test_bounds_check_continue_writes_termination_detail() -> None:
 
 
 def test_bounds_check_fail_still_raises_with_detail_via_outer_catch() -> None:
-    """``on_error: fail`` (default) already worked before this fix — the
-    bounds error raises and the function-level ``except`` writes
+    """``on_error: fail`` (default) raises the bounds error directly — the
+    function-level ``except`` writes
     ``termination.detail`` from ``str(e)``. This pins that it still does."""
     import pytest
 

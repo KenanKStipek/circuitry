@@ -1,9 +1,9 @@
 """Model-mode `if`/`while` conditions read realistic yes/no replies (issue #247).
 
-Before this fix, `answer in ("yes", "true", "1", "y")` meant `"Yes."`,
-`"yes, because ..."` or `"**Yes**"` all counted as *no* — the branch/loop
-took the wrong path with nothing in meta to explain why. These tests pin
-the fixed behaviour: realistic replies parse correctly, an answer that
+A naive `answer in ("yes", "true", "1", "y")` check would make `"Yes."`,
+`"yes, because ..."` or `"**Yes**"` all count as *no* — the branch/loop
+would take the wrong path with nothing in meta to explain why. These tests
+pin the correct behaviour: realistic replies parse correctly, an answer that
 truly can't be read raises instead of silently becoming false, and the
 raw reply/adapter/model land on `meta`.
 """

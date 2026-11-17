@@ -404,7 +404,7 @@ def test_assert_events_equal_allows_unnamed_tree_loop_pass_interleaving() -> Non
     an unnamed loop's own tree passes all compile to the same body path)
     is compared as a sorted multiset, not an ordered list -- free to
     interleave with itself on either engine, the same way a tree dynamic's
-    distinct sibling paths already are (lane H, issue #466)"""
+    distinct sibling paths already are (issue #466)"""
 
     def stream(order: list[int]) -> str:
         events = [

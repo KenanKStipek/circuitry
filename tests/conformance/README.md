@@ -143,7 +143,7 @@ script is not a bug in the orchestration it drives — spec §6): both
 exported counts are empty. The export mechanism itself — variable name,
 file format, when it is written, failure behaviour — is specified in
 `electricity/docs/spec/scripted-replies.md` §7, so electricity's own
-`scripted` adapter (lane F1, #448) implements the identical one and this
+`scripted` adapter (#448) implements the identical one and this
 same harness check works unmodified against either engine's subprocess.
 `tests/conformance/test_harness.py::test_unused_scripted_reply_fails_the_case`
 is the harness-level proof.
@@ -221,7 +221,7 @@ whatever the *reference* client actually sent, not just the request a
 tool/adapter's own config describes. Python's `urllib` (the Python engine's
 own HTTP client) sends `Accept-Encoding: identity` and `Connection: close`
 on every request, neither of which any case's own fixture or document sets
-explicitly; electricity's own client (`hyper`/`hyper-util`, lane E, issue
+explicitly; electricity's own client (`hyper`/`hyper-util`, issue
 #485) sends the same headers the committed fixture already has, not
 merely the ones the orchestration document itself names.
 
@@ -536,20 +536,20 @@ case (#450) whose document uses content the electricity preview
 genuinely doesn't support yet (`shell`/`http`/a real model adapter/...)
 still passes (or, for a failure case, still fails the *right* way) on the
 Python engine, and is deliberately still refused by electricity until the
-lane that implements that capability flips it — at which point the flag
+work that implements that capability flips it — at which point the flag
 is simply removed, and the case's own assertion starts applying to
 electricity too, with no other change. Never use `known_divergence` for
 this: that key means *both* engines succeeded, with one documented,
 stated difference — not applicable when one engine never ran the
 document at all. One case sets it today, a failure case:
 `document-adapter-preflight-not-ready` (`litellm`, a Circuitry-known
-adapter with no Rust builder, settled ruling 3, electricity/DESIGN.md
+adapter with no Rust builder; see electricity/DESIGN.md
 §13). `c-shell-path-fake` ran on both engines once `shell` landed,
-`c-scripted-prompt` once lane G (issue #498) landed the `prompt` effect
+`c-scripted-prompt` once issue #498 landed the `prompt` effect
 through the `scripted` adapter, and `c-http-mock-server`/
-`c-openai-compatible-mock-server` once lane E's `http` tool and lane F2's
-(issue #503) real model adapters landed; the flag stays declared and
-validated for the next lane that needs it.
+`c-openai-compatible-mock-server` once the `http` tool (issue #485) and
+issue #503's real model adapters landed; the flag stays declared and
+validated for whatever work needs it next.
 
 ## M1 acceptance map
 
@@ -571,7 +571,7 @@ name predates the item it turned out to cover).
 | C15 | `c15-expect-cel-missing-key` |
 | C19 | `tree-stop-on-error`. The running-branch variant (a tree `stop_on_error` that must let an already-dispatched, still-running branch finish rather than cancelling it) was not added: a `shell` `sleep` branch's actual start can't be made to race the fast branch's failure deterministically -- CI scheduling has no guarantee the slow branch has actually started (not merely been queued) before the fast one fails, so the case cannot be made deterministic without changing what it exercises (making the "fast" branch artificially slow defeats the point). Left out rather than committed flaky. |
 | C20 | `concurrency-group`, `prompt-tree-group`; `c20-group-in-tree-loop` |
-| C25 | `electricity-cli/tests/signals.rs`, `signals_loop.rs` and `process_tool_signals.rs` (lane M part B adds the prompt re-run and `signals_prompt.rs`) |
+| C25 | `electricity-cli/tests/signals.rs`, `signals_loop.rs` and `process_tool_signals.rs` (the prompt re-run and `signals_prompt.rs` land later) |
 | C26 | `complexity-scoring-off`, `complexity-scoring-on-routing-off`; `c26-scoring-absent`, `c26-scoring-enabled` |
 | §7 case 1 | `c-shell-pin-denial` |
 | §7 case 2 | `c-shell-templated-allowed-commands` |

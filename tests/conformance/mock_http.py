@@ -17,7 +17,7 @@ so a malformed fixture fails the same way a malformed orchestration
 document would. Every request actually received is recorded (method,
 path, query, headers apart from `User-Agent`, and body) so a conformance
 case can commit the recording as `expected.http_requests.json` and both
-engines' runs can be diffed against it -- lane E (issue #485) wires the
+engines' runs can be diffed against it -- issue #485 wires the
 `http` tool's own electricity client through the same server, so both
 engines now run every `http`-tool case this file scripts, apart from
 the `mcp`/model-adapter transports still refused behind the preview
@@ -44,7 +44,7 @@ from circuitry.core.yaml_load import load_yaml
 #: deterministic.
 _REQUEST_KEYS = frozenset({"method", "path"})
 _RESPONSE_REQUIRED_KEYS = frozenset({"status"})
-#: Additive (lane E, issue #485): `body_base64` (a non-UTF-8 body),
+#: Additive (issue #485): `body_base64` (a non-UTF-8 body),
 #: `delay_ms` (a response-timing case) and `close_without_response`
 #: (a server that closes before ever answering) sit alongside the
 #: original four -- every existing fixture using only those four still
