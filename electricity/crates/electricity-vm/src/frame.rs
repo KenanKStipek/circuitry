@@ -167,7 +167,7 @@ pub struct Frame {
     /// one flat key on every dynamic, nested or not -- the live node
     /// stays reachable this way through a loop body, an `if` branch or
     /// a tree branch, where the canonical dotted spelling computed
-    /// from an ancestor's own path would not be (#778 finding 7).
+    /// from an ancestor's own path would not be (#778).
     /// Pushed by [`Frame::with_bare_effect_scope`], called by
     /// `exec::dynamic::execute_dynamic` for every dynamic it runs --
     /// `core/templates.py::push_bare_effect_scope`'s own `ContextVar`,
@@ -552,7 +552,7 @@ impl Frame {
     /// node) on every nested dynamic, so the live node stays reachable
     /// this way through a loop body, an `if` branch or a tree branch,
     /// where the canonical dotted spelling computed from an ancestor's
-    /// own path would not be (#778 finding 7; matches `push_bare_effect_
+    /// own path would not be (#778; matches `push_bare_effect_
     /// scope`'s own `(own_name, own_effect_names), *chain`).
     pub fn with_bare_effect_scope(
         &self,
@@ -911,7 +911,7 @@ mod tests {
 
     #[test]
     fn with_bare_effect_scope_nested_resolves_through_its_own_self_alias_not_a_dotted_path() {
-        // Finding 7/#778: a non-isolated (nested) entry's own chain key
+        // #778: a non-isolated (nested) entry's own chain key
         // is its bare self-alias (`own_name`), never a dotted path
         // computed from the parent entry's own path -- `format!("
         // {parent_path}.{own_name}")` would miss the live node while

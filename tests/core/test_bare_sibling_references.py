@@ -217,7 +217,7 @@ def test_nested_dynamic_in_loop_body_reads_its_own_child_not_a_root_sibling() ->
     context it renders against -- not the dotted path ``push_bare_effect_
     scope`` would compute from its place in the chain, which isn't live
     while a loop body, an ``if`` branch or a tree branch is running
-    (#778 finding 7). A root effect sharing the same name must not win.
+    (#778). A root effect sharing the same name must not win.
     """
     orch = {
         "effects": [

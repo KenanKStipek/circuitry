@@ -316,7 +316,7 @@ async fn decide_and_run<'a>(
         // `outcome.verdict` instead, for the same `on_error` handling
         // the CEL arm above already does.
         Condition::Model { template } => {
-            // Finding 2, #778: a frame-carrying root, not a bare
+            // #778: a frame-carrying root, not a bare
             // `super::live_ctx` snapshot -- a bare reference inside
             // *template* must still resolve through this frame's own
             // enclosing-container fallback chain.

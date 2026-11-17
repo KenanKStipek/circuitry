@@ -1729,7 +1729,7 @@ async fn attempt_once<R: ParamsCtx>(
             // AdapterCallError`] class here, even a non-retryable
             // one).
             ExpectCondition::Model { template } => {
-                // Finding 2, #778: *ctx* itself (a frame-carrying root),
+                // #778: *ctx* itself (a frame-carrying root),
                 // not `state` (`ctx.whole()`'s plain-`Value` snapshot) --
                 // a bare reference inside *template* must still resolve
                 // through *ctx*'s own enclosing-container fallback chain.

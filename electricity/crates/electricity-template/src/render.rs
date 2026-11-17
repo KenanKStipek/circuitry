@@ -629,7 +629,7 @@ mod bare_fallback_retry_tests {
 
     #[test]
     fn the_retry_checks_a_pushed_section_items_own_match_before_the_root() {
-        // Finding 6/#778: the dotted retry must walk every scope again,
+        // #778: the dotted retry must walk every scope again,
         // section items first -- not just the root, as electricity once
         // did. Here the fallback path `"container"` names a key both a
         // pushed section item and the root carry; the section item's

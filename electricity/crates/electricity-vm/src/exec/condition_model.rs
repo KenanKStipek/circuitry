@@ -180,7 +180,7 @@ pub enum ExpectCallError {
 }
 
 /// A private overlay root for a model-mode `expect:`'s own `value`/
-/// `meta` (finding 2, #778) -- `core/expect.py::evaluate_expect`'s own
+/// `meta` (#778) -- `core/expect.py::evaluate_expect`'s own
 /// `{**ctx, "value": value, "meta": meta}` shallow merge, ported the
 /// same shape as [`crate::compose`]'s own `HiddenOverlay` and
 /// [`crate::exec::yield_::InputsOverlay`]: a `value`/`meta` key shadows
@@ -602,7 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_model_if_resolves_a_bare_reference_through_the_frames_fallback_chain() {
-        // Finding 2, #778: a model-mode `if` template renders against
+        // #778: a model-mode `if` template renders against
         // a frame-carrying root now, not a plain `Value` snapshot --
         // `{{x.value}}` here misses the ctx's own normal top level
         // (its only child is "outer", not "x" directly), so it must
@@ -839,7 +839,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_model_expect_resolves_a_bare_reference_through_the_frames_fallback_chain() {
-        // Finding 2, #778: a model-mode `expect:` template renders
+        // #778: a model-mode `expect:` template renders
         // against `ExpectOverlay` wrapping a frame-carrying root now,
         // not a plain `Value` snapshot -- same shape as the `if` test
         // above, plus `value`/`meta` still shadow a same-named bare

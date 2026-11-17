@@ -467,7 +467,7 @@ received). This is deliberately *not* a dotted path recomputed from the
 container's place in the chain (e.g. `"prime.outer.d"`): that path is only
 live while this container's own render is the top-level one, and would miss
 or read a different node while a loop body, an `if` branch or a tree branch
-is running it (issue #778, review finding 7) — the self-alias key is always
+is running it (issue #778) — the self-alias key is always
 live instead, since it's the same key `ctx[self.defn.name]` every render of
 this container's own descendants already widens forward. Bare equals
 dotted by construction: live, after `resume: restart`, with saved/resumed

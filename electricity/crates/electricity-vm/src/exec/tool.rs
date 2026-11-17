@@ -2013,7 +2013,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 // cancellation) returns early.
                                                 ExpectCondition::Model { template } => {
                                                     let meta_snapshot = store.snapshot(&meta_node);
-                                                    // Finding 2, #778: *ctx* itself (a frame-carrying
+                                                    // #778: *ctx* itself (a frame-carrying
                                                     // root), not `ctx.whole()`'s plain-`Value` snapshot --
                                                     // a bare reference inside *template* must still
                                                     // resolve through *ctx*'s own enclosing-container

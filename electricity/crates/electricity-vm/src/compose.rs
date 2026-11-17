@@ -424,7 +424,7 @@ impl<R: ScopeRoot> ScopeRoot for HiddenOverlay<'_, R> {
         self.inner.contains(key)
     }
 
-    /// Forwards to *inner* unchanged (finding 2, #778): a hidden
+    /// Forwards to *inner* unchanged (#778): a hidden
     /// `__circuitry_partial_N__` binding is never itself a declared
     /// effect name an enclosing container's own fallback chain would
     /// list, so this overlay has no fallback of its own to add --
@@ -976,7 +976,7 @@ mod tests {
 
     #[test]
     fn hidden_overlay_forwards_bare_fallback_to_its_inner_root() {
-        // Finding 2, #778: a template rendered through `HiddenOverlay`
+        // #778: a template rendered through `HiddenOverlay`
         // (every one that also contains a `{{> name}}` partial) must
         // still resolve a bare sibling reference through whatever
         // chain its own `LiveRoot` carries -- the overlay has no

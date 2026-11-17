@@ -1335,7 +1335,7 @@ async fn a_disabled_op_writes_a_skip_node_instead_of_dispatching() {
 
 #[tokio::test]
 async fn a_nested_dynamics_own_child_shadows_an_outer_sibling_of_the_same_name() {
-    // Finding 8/#778 ("the self-entry narrowing"): a non-isolated
+    // #778 (the self-entry narrowing): a non-isolated
     // nested dynamic's own `ctx_chain` extension is a single detached
     // entry (its own self-alias, `name -> dyn_node`), never the whole
     // parent flattened in -- `exec::dynamic::execute_dynamic`'s own

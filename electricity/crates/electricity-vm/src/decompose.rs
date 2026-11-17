@@ -1438,7 +1438,7 @@ fn candidate_references(expanded_sources: &[String]) -> Result<Vec<String>, Stri
 }
 
 /// A frame-carrying wrapper around an already-materialized split/
-/// decomposition [`Value`] (finding 2, #778): split and decomposition
+/// decomposition [`Value`] (#778): split and decomposition
 /// build *ctx* through dotted-path `Value` surgery (`dotted_get`/
 /// `set_dotted_copy`/an `extra_state` merge) a store-backed
 /// `ScopeRoot` has no way to do directly, so the plain `Value` stays
@@ -3918,7 +3918,7 @@ mod tests {
 
     #[test]
     fn value_with_frame_fallback_resolves_a_bare_reference_through_the_frames_chain() {
-        // Finding 2, #778: split/decomposition's own renders use
+        // #778: split/decomposition's own renders use
         // `ValueWithFrameFallback` now, not a bare `Value` -- a bare
         // reference naming an effect in the frame's own chain must
         // still resolve, the same mechanism `exec::live_scope::

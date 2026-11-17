@@ -67,7 +67,7 @@ chevron.renderer._html_escape = _escape_aware
 #: key, on every dynamic, so it stays reachable this way regardless of how
 #: deep a loop body, an ``if`` branch or a tree branch nests it, where the
 #: canonical dotted spelling computed from the chain (``"prime.outer.d"``)
-#: would not be live (#778 finding 7). Populated by
+#: would not be live (#778). Populated by
 #: :func:`push_bare_effect_scope` (``core.dynamic``, on every dynamic,
 #: use/reflector/decomposition child root included) so a bare reference at
 #: the document root, in a chain or tree dynamic, in a ``use`` child's
@@ -102,7 +102,7 @@ def push_bare_effect_scope(
     this one flat key (``self.defn.name: dyn``) on every dynamic, nested
     or not — the live node stays reachable this way through a loop body,
     an ``if`` branch or a tree branch, where the canonical dotted spelling
-    computed from an ancestor's own path would not be (#778 finding 7).
+    computed from an ancestor's own path would not be (#778).
 
     *isolated* starts a brand new chain rooted at *own_name* alone, sharing
     nothing with whatever chain is already running — a document executed

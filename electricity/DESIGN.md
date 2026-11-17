@@ -801,8 +801,8 @@ Reproduces runtime-semantics §2.4 exactly:
   the live node this dynamic's own `store.ensure_dict(self.defn.name)` just returned — never the
   old `{**ctx_override, **store.state}` re-merge this design used to describe (that re-merge
   restored the enclosing overlay's *real*, un-overlaid `prime` on top of it, which is why a bare
-  sibling reference and the dotted `prime.*` form could read two different nodes; issue #778
-  review finding 7). Every ancestor dynamic's own self-alias key, back to the nearest isolated
+  sibling reference and the dotted `prime.*` form could read two different nodes; issue #778).
+  Every ancestor dynamic's own self-alias key, back to the nearest isolated
   root, stays present this way for as long as this dynamic's own descendants keep widening
   forward from it — that is what lets a nested container's own bare-fallback entry
   (`core/templates.py::push_bare_effect_scope`) resolve through its self-alias alone, rather than
