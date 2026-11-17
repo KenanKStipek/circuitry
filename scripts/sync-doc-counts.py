@@ -22,7 +22,7 @@ themselves come from:
   file's own source text, not from which tool providers
   ``electricity-tools/src/registry.rs`` happens to have a builder for —
   that map's own doc comment says builders may be pre-registered as stubs
-  before the lane that gates them lands.
+  before the work that gates them lands.
 
 Standard library only, except for importing circuitry itself.
 """

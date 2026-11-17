@@ -278,7 +278,7 @@ def _run_sandboxed(
     inside the child would have nothing useful to do (the parent kills this
     same child independently via :meth:`CancellationToken.track_process`)
     and could crash (:func:`kill_tracked_process`'s ``is_alive()`` raises
-    outside a child's own ``multiprocessing`` bookkeeping) (#357 review).
+    outside a child's own ``multiprocessing`` bookkeeping) (issue #357).
     A signal already ``SIG_IGN`` on entry is left that way rather than
     reset to ``SIG_DFL``: under `nohup`, the parent's SIGHUP (and an
     embedder that ignores SIGINT) is ``SIG_IGN`` precisely so a hangup

@@ -275,8 +275,8 @@ def test_with_no_fallbacks_configured_a_decode_failure_behaves_as_before(
 ) -> None:
     """#281's explicit non-regression: no ``provider_fallbacks`` means the
     unreadable-reply failure path is unchanged — it still fails the effect
-    (default ``retries: 0``), with the raw reply on ``meta.answer`` exactly
-    as before this fix."""
+    (default ``retries: 0``), with the raw reply on ``meta.answer``, exactly
+    as with no fallback chain configured at all."""
     orch = {
         "effects": [
             {"type": "prompt", "name": "task", "template": "hi", "prompt_type": "boolean"}

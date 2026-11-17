@@ -167,9 +167,9 @@ def test_classify_exception_defaults_unclassified_errors_to_not_retryable() -> N
 
 
 # ---------------------------------------------------------------------------
-# classify_exception's __cause__/__context__ walk — for an adapter (cyberdiner,
-# watsonx's IAM token exchange before this fix) that raises a plain exception
-# around a urllib/socket failure instead of classifying itself.
+# classify_exception's __cause__/__context__ walk — for an adapter (cyberdiner
+# among them) that raises a plain exception around a urllib/socket failure
+# instead of classifying itself.
 # ---------------------------------------------------------------------------
 
 

@@ -949,7 +949,7 @@ class AgentPlugin:
         # `None` until constructed below -- its own constructor starts a
         # background thread (`LivePublisher`) and must not be built before
         # the try/finally that removes scratch_dir, or a failure there
-        # leaks it (#636 review).
+        # leaks it (issue #636).
         live: LiveTracker | None = None
         try:
             try:

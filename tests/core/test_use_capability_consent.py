@@ -204,7 +204,7 @@ def test_a_ref_child_with_a_prompt_file_runs_once_trusted_by_its_shared_digest(
     identically — both now go through `core.prompt_compose.document_content_digest`
     — or a child that uses a prompt file and needs a gated capability can
     never run: whichever surface is consulted last finds nothing under its
-    own, differently-computed digest (#396's P0).
+    own, differently-computed digest (issue #396).
     """
     folder = tmp_path / "lib"
     helper_path = _write_yaml(

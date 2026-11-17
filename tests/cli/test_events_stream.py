@@ -689,8 +689,8 @@ def test_events_never_changes_a_failing_runs_outcome(tmp_path: Path) -> None:
     """A failing tool (`on_error: continue`, swallowed) and a failing
     prompt (default `on_error: fail`, propagates and fails the run) must
     produce the same final state and exit code with and without
-    `--events` — the stream never affects the run it observes (#419
-    review)."""
+    `--events` — the stream never affects the run it observes (issue
+    #419)."""
     replies_path = tmp_path / "replies.yaml"
     replies_path.write_text(
         "prime.fails_fail:\n  - error:\n      kind: server_error\n", encoding="utf-8"

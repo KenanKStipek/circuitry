@@ -271,8 +271,8 @@ def _submit_then_self_sigint_once(
     step1 never running at all (because the token happened to be set
     before the worker's own check) makes step2 never run for a reason
     that has nothing to do with whether its future was lost. Nothing
-    before this fix guaranteed that ordering; it depended on whichever
-    thread the scheduler happened to run first.
+    else guarantees that ordering; without the wait, it would depend on
+    whichever thread the scheduler happened to run first.
     """
     real_submit = ThreadPoolExecutor.submit
     signalled = threading.Event()
@@ -288,7 +288,7 @@ def _submit_then_self_sigint_once(
             # have it blocked -- if
             # the kernel picked a different one, the handler could run
             # after this dispatch region has already exited, and this
-            # test would then also pass against the pre-fix code it
+            # test would then also pass against the bug it
             # means to catch. Targeting the main thread directly makes
             # the handler run before this function returns, every time.
             main_tid = threading.main_thread().ident
@@ -309,13 +309,13 @@ def test_loop_tree_future_not_lost_when_signal_lands_inside_executor_submit(
     """Reproduces the 60-run stress batch's own failure (#555
     follow-up): a signal landing on the main thread *while
     `ThreadPoolExecutor.submit` itself is still running*, not merely
-    between submits (the test above). Before this fix, the future
-    `submit` was about to return was discarded the moment
+    between submits (the test above). Without the dispatch loop
+    recording the future right away, it would be discarded the moment
     `submit_with_context`'s own region raised, before this loop's own
-    `future_to_idx[future] = idx` line ever ran -- so nothing ever
-    waited for that branch; `sigterm_as_interrupt` reset the token on
-    its way out while the branch was still mid-step1, and step2 ran once
-    its own (now-cleared) `get_token().check()` found nothing set.
+    `future_to_idx[future] = idx` line ever ran -- so nothing would ever
+    wait for that branch; `sigterm_as_interrupt` would reset the token on
+    its way out while the branch was still mid-step1, and step2 would run
+    once its own (now-cleared) `get_token().check()` found nothing set.
     """
     ran: list[str] = []
     step1_started = threading.Event()

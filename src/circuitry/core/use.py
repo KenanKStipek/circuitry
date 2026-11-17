@@ -1816,8 +1816,8 @@ class UseRuntime:
                 # validation failure, or a bad interface input is a
                 # configuration problem, not a transient one — the same
                 # ctx/defn fails the exact same way on every attempt, so a
-                # retry only burns the backoff wait for nothing (#273
-                # review). These are raised before the child ever executes
+                # retry only burns the backoff wait for nothing (issue
+                # #273). These are raised before the child ever executes
                 # (_load_child_orch/_check_allowlists/_check_interface); a
                 # failure inside the child's own run surfaces as RuntimeError
                 # (see core.dynamic._execute_chain), never these.

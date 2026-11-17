@@ -576,7 +576,7 @@ class Store:
         """The ``--events`` ``start`` instance currently open for *name*,
         read right now on this thread -- the capture-at-attempt-start call
         a streamed prompt makes once, before it ever calls *on_progress*
-        (#674 review), so every later ``progress`` line it fires carries
+        (issue #674), so every later ``progress`` line it fires carries
         this same instance, never one a same-path concurrent ``start``
         (an unnamed tree-flow loop sharing one compiled path) has since
         moved a path-keyed lookup on to. ``None`` when nothing is wired or

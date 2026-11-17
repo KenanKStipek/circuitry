@@ -1,10 +1,10 @@
 """A `use` child's `concurrent_dispatch`/`branch_settled` (#483): a tree
 loop's dispatch and branch-settled events must carry the same absolute path
 its own `start`/`end` events use, the rule #470/#475 already settled for a
-tree loop nested inside another tree loop's branch. Before this fix,
-`core/use.py` wrapped `effect_start`/`effect_complete` with
-`_namespaced_effect_cb` but passed `concurrent_dispatch`/`branch_settled`
-through unwrapped, so a child loop's dispatch carried the child store's own
+tree loop nested inside another tree loop's branch. A naive `core/use.py`
+that wraps `effect_start`/`effect_complete` with
+`_namespaced_effect_cb` but passes `concurrent_dispatch`/`branch_settled`
+through unwrapped would let a child loop's dispatch carry the child store's own
 unnamespaced `prime.<loop>` path instead.
 """
 

@@ -285,7 +285,7 @@ class LivePublisher:
             # A failing *publish* (the running node already gone, a
             # cof instance that no longer owns the store, ...) must not
             # kill this thread -- the same as `LiveStateMirror._write_loop`
-            # already does for its own writer thread (#636 review).
+            # already does for its own writer thread (issue #636).
             try:
                 self._publish(snapshot() if callable(snapshot) else snapshot)
             except Exception:
@@ -556,8 +556,8 @@ class LiveTracker:
                 self._pending_fifo.append(pending)
             # The tool just started is always the highest-seq pending one,
             # so it becomes `current_tool` outright -- no need to recompute
-            # it from the rest of `_pending_by_id`/`_pending_fifo` (#636
-            # review).
+            # it from the rest of `_pending_by_id`/`_pending_fifo` (issue
+            # #636).
             self._current_tool = {"name": bucket, "started_at": started_at}
         self._write_transcript("tool_start", id=seq, tool=bucket, target=target)
         self._publish_now()
@@ -568,7 +568,7 @@ class LiveTracker:
         called with ``self._lock`` already held, right after popping
         whichever call just ended, so a Claude Task's own ``current_tool``
         doesn't go blank just because its subagent's tool call ended first
-        (#636 review).
+        (issue #636).
         """
         candidates = list(self._pending_by_id.values()) + list(self._pending_fifo)
         if not candidates:
@@ -761,7 +761,7 @@ class LiveTracker:
             # ``parent_tool_use_id``; it's its own session's own API call,
             # not one of this session's own turns, and its usage is its own
             # session's spend, not the main session's context -- so it's
-            # left out of ``turns`` and tokens/context here (#636 review).
+            # left out of ``turns`` and tokens/context here (issue #636).
             # Its tool calls are still counted below like any other.
             is_subagent = event.get("parent_tool_use_id") is not None
             if first_for_message:

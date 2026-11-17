@@ -26,7 +26,7 @@ from circuitry.core.cycle_check import iter_use_children
 
 from . import harness
 
-#: The two adapter names this lane registers, mapped to their own
+#: The two agent-CLI adapter names (issue #520), mapped to their own
 #: `adapters/factory.py` default `binary` -- `cfg.get("binary") or
 #: default`, mirrored here only to resolve which fake file a case must
 #: ship; the config parsing itself stays this test's own, deliberately
@@ -34,9 +34,9 @@ from . import harness
 #: trust the very code path it exists to keep honest).
 AGENT_CLI_DEFAULT_BINARY = {"claude_code": "claude", "pi": "pi"}
 
-#: A binary name under this prefix can never exist (issue #520's own
-#: settled question 15) -- a case that configures one is deliberately
-#: testing the start-failure path, never a case that forgot a fake.
+#: A binary name under this prefix can never exist (issue #520) -- a
+#: case that configures one is deliberately testing the start-failure
+#: path, never a case that forgot a fake.
 MISSING_BINARY_PREFIX = "circuitry-test-missing-"
 
 CASE_DIRS = harness.list_case_dirs()

@@ -40,8 +40,8 @@ def test_construction_loads_user_env(
     env_path.chmod(0o600)
     # `load_user_env` mutates `os.environ` directly, bypassing monkeypatch's
     # own tracking — `delenv` still records whatever value was really
-    # present (the lane's shell exports a real `OPENAI_API_KEY`) and
-    # restores exactly that at teardown.
+    # present (the surrounding environment may already export a real
+    # `OPENAI_API_KEY`) and restores exactly that at teardown.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)

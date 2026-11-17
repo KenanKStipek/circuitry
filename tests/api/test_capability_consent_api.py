@@ -16,8 +16,8 @@ from circuitry import run_orchestration, run_shared_orchestration
 from circuitry.cli.config import CircuitryConfig, trust_store_path
 from circuitry.cli.document_consent import document_digest, record_consent
 
-# A document whose only `shell` use is in `finally:` (#332 review: the
-# static walk must cover `finally:`, not just `effects:`).
+# A document whose only `shell` use is in `finally:` (issue #332): the
+# static walk must cover `finally:`, not just `effects:`.
 _SHELL_IN_FINALLY = {
     "effects": [],
     "finally": [

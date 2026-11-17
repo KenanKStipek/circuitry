@@ -26,8 +26,8 @@ from circuitry.tui import library as library_module
 from circuitry.tui.library import LibraryScreen
 from circuitry.tui.run_view import RunScreen
 
-# A document whose only `shell` use is in `finally:` (#332 review: the
-# static walk must cover `finally:`, not just `effects:`).
+# A document whose only `shell` use is in `finally:` (issue #332): the
+# static walk must cover `finally:`, not just `effects:`.
 _SHELL_IN_FINALLY: dict[str, Any] = {
     "effects": [],
     "finally": [

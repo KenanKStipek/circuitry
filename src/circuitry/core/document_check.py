@@ -83,7 +83,7 @@ _MISTAKEN_FOR = {"adapter": "provider"}
 #: Keys whose value is a list of child effects. ``finally`` is only legal on
 #: ``dynamic`` (and the document root, walked separately below), but a
 #: near-miss key inside one is still a document author's typo worth catching
-#: here rather than only at runtime (#272 review).
+#: here rather than only at runtime (issue #272).
 _CHILD_KEYS = ("effects", "steps", "then", "else", "body", "finally")
 
 
