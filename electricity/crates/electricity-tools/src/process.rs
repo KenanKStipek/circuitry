@@ -819,9 +819,8 @@ fn universal_newlines(text: &str) -> String {
 
 /// Why *bytes* is not valid UTF-8, formatted exactly like CPython's
 /// `UnicodeDecodeError.__str__` -- a small, self-contained duplicate of
-/// `electricity_compiler::prompt_files`'s own (private) helper of the
-/// same shape: that crate has no dependency on this one, so this crate
-/// carries its own copy rather than reaching across crates for it.
+/// `electricity_compiler::prompt_files`'s own private helper of the
+/// same shape; it isn't exported, so this crate carries its own copy.
 pub(crate) fn describe_utf8_error(bytes: &[u8]) -> String {
     let (start, consumed, reason) =
         find_utf8_error(bytes).expect("describe_utf8_error called on valid UTF-8");

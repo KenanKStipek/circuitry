@@ -1233,7 +1233,7 @@ mod tests {
         // CPython's own encoder invokes the error handler once per
         // *run* of consecutive unencodable characters, not once per
         // character (`"\u65e5\u672c".encode("ascii")`'s own text) --
-        // Issue #460.
+        // issue #460.
         let err = encode_text(Codec::Ascii, "\u{65e5}\u{672c}").unwrap_err();
         assert_eq!(
             err.message,
@@ -1256,7 +1256,7 @@ mod tests {
         // <root>/file.txt/sub` can never succeed, and CPython's own
         // `Path.mkdir(parents=True, exist_ok=True)` names *that*
         // directory in its error, not the write's own leaf path --
-        // Issue #460.
+        // issue #460.
         let dir = TempDir::new();
         let blocker = dir.0.join("file.txt");
         std::fs::write(&blocker, b"").unwrap();
@@ -1341,7 +1341,7 @@ mod tests {
     async fn a_write_with_a_real_but_unimplemented_codec_touches_nothing() {
         // "utf-16" is a real Python codec (`cof run` would succeed);
         // this preview doesn't implement it, and refuses up front --
-        // No file created at all, unlike the
+        // no file is created at all, unlike the
         // `bogus-codec`/`UnicodeEncodeError` cases above.
         let dir = TempDir::new();
         let path = dir.0.join("never-created.txt");
