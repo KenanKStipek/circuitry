@@ -1,4 +1,4 @@
-//! M1 lane G (issue #498): `prompt` effect execution -- integration
+//! Issue #498: `prompt` effect execution -- integration
 //! tests against a real, compiled document (`execute_root`, this
 //! crate's own one `pub` entry point), the same convention `tests/
 //! use_effect.rs` uses.
@@ -305,7 +305,7 @@ async fn a_dispatch_against_an_unbuildable_known_adapter_is_a_fatal_refusal() {
     // "openai") that this test's own, deliberately empty
     // `AdapterRegistry` has no builder for -- exactly
     // `preflight::PlaceholderAdapter`'s own shape, reached only
-    // through a `use` child in a real run (issue #498 ruling 4); here
+    // through a `use` child in a real run (issue #498); here
     // reached directly, since this crate's own `execute_root` has no
     // concept of "inside a use child" at all.
     let default = Rc::new(NamedUnbuiltAdapter {
@@ -448,7 +448,7 @@ async fn a_schema_decode_failure_is_retried_down_then_across_passes() {
     let (store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
     let err = result.unwrap_err();
     // The bare schema text, not the "All adapter attempts failed"
-    // wrapper -- issue #498's own C14.
+    // wrapper (issue #498).
     assert!(
         err.to_string()
             .contains("JSON schema validation failed: model returned None")
@@ -1032,10 +1032,10 @@ effects:
     );
 }
 
-/// Issue #498 (review of PR #502): a render failure must
+/// Issue #498, PR #502: a render failure must
 /// also call `record_totals` before `effect_complete` -- on a reused
 /// node, a render failure must not leave the run's totals double-
-/// counting (or under-counting) an earlier pass's tokens (ruling 7).
+/// counting (or under-counting) an earlier pass's tokens.
 #[tokio::test]
 async fn a_render_failure_also_calls_record_totals_before_effect_complete() {
     let op = subscripted_int_prompt();
@@ -1552,7 +1552,7 @@ async fn meta_key_order_on_a_reused_node_matches_cof_run() {
     );
 }
 
-/// Issue #498 ruling 4: a `use` child's own unbuildable fallback is
+/// Issue #498: a `use` child's own unbuildable fallback is
 /// claimed by the nearest enclosing `use` node's own label, the same
 /// as any other refused child.
 #[tokio::test]
@@ -1669,7 +1669,7 @@ async fn an_empty_model_string_falls_back_to_the_run_default() {
 /// Python list-of-dicts repr form (single quotes, `None`) -- only
 /// reached when the chain's own *last* entry is an ordinary adapter
 /// failure, not a decode/schema one (otherwise that error re-raises
-/// bare instead, issue #498's own C14).
+/// bare instead, issue #498).
 #[tokio::test]
 async fn py_repr_of_the_wrapper_message_includes_a_raw_reply() {
     let mut op = template_prompt("give json");
@@ -2030,7 +2030,7 @@ async fn an_unknown_pinned_band_raises_before_effect_start_and_on_error_skip_doe
         panic!("expected VmError::Raised, on_error: skip must not absorb the unknown-pin error");
     };
     // Wrapped like any other leaf error once it crosses the containing
-    // chain (issue #516 §7 ruling 4) -- `cause_class` is the
+    // chain (issue #516 §7) -- `cause_class` is the
     // unwrapped `ValueError` [`VmError::displayed_class`] reads back
     // off, the exact text still inside *message* after the chain's
     // own label prefix.

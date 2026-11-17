@@ -4,18 +4,18 @@
 // expected, not a real dead-code defect in any single binary.
 #![allow(dead_code)]
 
-//! Shared builders for the lane B2 (interpreter) container tests --
+//! Shared builders for the interpreter's own container tests --
 //! `Op`/`Region` fixtures a hand-written test document needs, plus a
 //! [`RecordingObserver`] that remembers every hook call in order.
 //!
-//! `exec::tool::execute_tool` (lane C, now final) runs the real `json`
+//! `exec::tool::execute_tool` runs the real `json`
 //! tool from [`json_registry`] -- every `tool` leaf built here
 //! ([`tool_leaf`]) is `mode: parse` against a fixed, deterministically
 //! malformed `input:`, so it always fails the same way
 //! ([`TOOL_FAIL_TEXT`]), real tool dispatch (its own `effect_start`/
 //! `effect_complete`/`write` hooks included) and all. That lets these
 //! tests exercise chain/tree ordering, wrapping, `on_error`, `finally`,
-//! dispatch and cancellation without depending on anything lane C's
+//! dispatch and cancellation without depending on anything the
 //! `json` tool doesn't itself need (a network call, `use`, a real
 //! model). A leaf that must *succeed* uses an empty nested `dynamic`
 //! instead (trivially `Ok(())` -- `execute_root_runs_an_empty_
@@ -118,12 +118,13 @@ pub fn json_tool_leaf(path: EffectPath, name: &str, params: IndexMap<Value, Para
 }
 
 /// A `use` leaf whose own inline child names a `prompt` effect --
-/// refused every time (`Supported::prompt` stays `false` until lane G
-/// lands), so `exec::use_::execute_use`'s own real `first_unsupported`
+/// refused every time (`Supported::prompt` stays `false` until
+/// prompt support lands), so
+/// `exec::use_::execute_use`'s own real `first_unsupported`
 /// check against the freshly-compiled child produces a real
 /// `electricity_vm::VmError::Refused`, exercising that variant's
 /// propagation through a real, compiled `Op` tree without depending on
-/// a filesystem child or a test-only sentinel (M1 lane I, issue #469 --
+/// a filesystem child or a test-only sentinel (issue #469 --
 /// replaces the deleted `__test_only_refused__` sentinel in
 /// `exec/use_.rs`).
 pub fn refused_use_leaf(path: EffectPath, name: &str, on_error: OnError) -> Op {
@@ -327,7 +328,7 @@ pub fn cel_if(
 
 /// A `mode: model` `if` -- `execute_conditional`'s own `decide_and_run`
 /// routes this through `condition_model::evaluate_model_condition`
-/// (lane G2, #513), real since that lane landed.
+/// (#513), real since that landed.
 pub fn model_if(path: EffectPath, name: Option<&str>, template: &str, on_error: OnError) -> Op {
     Op {
         path,

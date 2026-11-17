@@ -1,4 +1,4 @@
-//! Lane B2: `if`/`conditional` in `mode: cel`, ported from `core/
+//! `if`/`conditional` in `mode: cel`, ported from `core/
 //! conditional.py::ConditionalRuntime`.
 //!
 //! A *named* `if` creates its own node (`value`/`meta`) and fires
@@ -170,7 +170,7 @@ fn write_conditional_meta_start(
 }
 
 /// `core/conditional.py::ConditionalRuntime._decide_and_run` --
-/// evaluates *cond* (CEL or model mode, lane G2/#513 -- a
+/// evaluates *cond* (CEL or model mode, #513 -- a
 /// `Condition::Model` arm below dispatches to `condition_model::
 /// evaluate_model_condition`), selects exactly one of
 /// *then_*/*else_*, and runs that branch's own effects in order against
@@ -193,20 +193,19 @@ fn write_conditional_meta_start(
 /// single such snapshot, taken once up front, cannot reproduce
 /// liveness: `Value` is owned data, not a reference, so it would
 /// freeze every nested value exactly as it stood at that one moment --
-/// the P0 "a nested container freezes its own ancestors' state"
-/// case from PR #440's review, found *twice*: once for *ctx_chain* itself
-/// (fixed by threading the chain this far at all, rather than a
-/// resolved `ctx: &Value`), and once more for the overlay this
-/// function rebuilds after every branch step ([`build_overlay`]) --
-/// an *initial* fix collapsed that overlay into a [`super::
-/// CtxSource::Frozen`] `Value` too, which is exactly as wrong one level
-/// later: a branch's own *later* step can create a container nested
-/// two or more `dynamic` levels under an ancestor the overlay already
-/// covers (`state.prime.<outer>.<sibling>.<grandchild>`), and a
-/// `Frozen` snapshot taken before that container existed can never
-/// gain it, no matter how many times it gets rebuilt from a *fresh*
-/// chain read afterward -- the snapshot itself is already inert data
-/// one level down. `build_overlay` instead builds the overlay as a
+/// the same live-ancestors hazard PR #440 fixed, which applies in two
+/// places here: *ctx_chain* itself (fixed by threading the chain this
+/// far at all, rather than a resolved `ctx: &Value`), and the overlay
+/// this function rebuilds after every branch step ([`build_overlay`]):
+/// a [`super::CtxSource::Frozen`] `Value` for that overlay would be
+/// just as wrong one level down, because a branch's own *later* step
+/// can create a container nested two or more `dynamic` levels under an
+/// ancestor the overlay already covers
+/// (`state.prime.<outer>.<sibling>.<grandchild>`), and a `Frozen`
+/// snapshot taken before that container existed can never gain it, no
+/// matter how many times it gets rebuilt from a *fresh* chain read
+/// afterward -- the snapshot itself is already inert data one level
+/// down. `build_overlay` instead builds the overlay as a
 /// *detached* [`crate::NodeRef`] whose own [`crate::Slot`]s are cloned
 /// (not snapshotted) from *ctx_chain*'s current state plus *local* --
 /// a [`crate::Slot::Node`] clone is an `Rc` clone of the live node
@@ -503,10 +502,10 @@ async fn decide_and_run<'a>(
         // `cof run --resume` only skips a finished effect once
         // `completed_at` is truthy *and* there is no error, so the
         // truthy `error` alone already keeps this branch resumable
-        // regardless of `completed_at`. `VmError::Refused` (M1 lane I,
-        // new: no Python equivalent) is fatal the same way -- never
-        // absorbed, never retried -- but is *not* Cancelled: ruling R1
-        // on PR #462 treats a refusal as a failure for recording
+        // regardless of `completed_at`. `VmError::Refused` (no Python
+        // equivalent) is fatal the same way -- never
+        // absorbed, never retried -- but is *not* Cancelled: PR #462
+        // treats a refusal as a failure for recording
         // purposes, same as an ordinary one (`value`/`meta.error`/
         // `completed_at` all written, the `end` event's own error text
         // read off `meta.error` by the caller's `node_error` just as for
@@ -741,11 +740,10 @@ fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
 /// it is the exact same object the source dict held -- so a `Slot::Node`
 /// clone (an `Rc` clone, the live node itself) reproduces that exactly,
 /// where cloning a already-materialized `Value` cannot (that copies the
-/// whole subtree, permanently losing liveness below the top level -- the
-/// P0 "a nested container freezes its own ancestors' state" case from
-/// PR #440's review, found again on a second review after `CtxSource::Frozen`
-/// alone -- itself still a `Value` under the hood -- turned out to make
-/// exactly the same mistake one level later: a branch's *second* step
+/// whole subtree, permanently losing liveness below the top level --
+/// the same live-ancestors hazard PR #440 fixed: `CtxSource::Frozen`
+/// alone -- itself still a `Value` under the hood -- makes exactly the
+/// same mistake one level later. A branch's *second* step
 /// could see a sibling *earlier* step's own write, but a container that
 /// sibling itself went on to create nested *two* `dynamic` levels under
 /// an already-live ancestor (`prime.<outer>.<sibling>.<grandchild>`)
