@@ -22,7 +22,7 @@ Three sections, one generator (the no-escape section is replayed against
   failure under `on_error: fail`.
 
 Every case is synthetic, written directly against runtime-semantics.md
-§3.1/§3.4/§3.6/§5.9 and the rulings on issue #487 -- nothing here is
+§3.1/§3.4/§3.6/§5.9 and issue #487 -- nothing here is
 copied from any real orchestration.
 
 Must be run with Python 3.11 (a local Python 3.11 venv; `actions/setup-python`
@@ -314,7 +314,7 @@ def build_compose_cases() -> list[dict]:
     # A hidden key (the first effect reference mints `__circuitry_
     # partial_0__`) shadowing a *real*, pre-existing top-level key of
     # that exact name -- the shallow `{**ctx, **extra}` merge must have
-    # the hidden binding win outright (issue #492's review).
+    # the hidden binding win outright (issue #492).
     cases.append(
         compose_case(
             "{{> reply}}:{{__circuitry_partial_0__}}",
@@ -327,7 +327,7 @@ def build_compose_cases() -> list[dict]:
     # `{{.}}` at the root, with a hidden binding present -- the only
     # case that actually exercises the hidden overlay's own `whole()`
     # (a section over `.` pushes it as the new nearest scope) rather
-    # than just `lookup` (issue #492's review).
+    # than just `lookup` (issue #492).
     cases.append(
         compose_case(
             "{{> reply}}{{#.}}[{{__circuitry_partial_0__}}]{{/.}}",

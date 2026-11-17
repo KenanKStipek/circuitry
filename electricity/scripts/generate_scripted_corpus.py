@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane F1 of issue #448 (#478):
+"""Generate the golden corpus for issue #448 (#478):
 electricity's own Rust `scripted` adapter, replayed against Circuitry's
 real `circuitry.adapters.scripted.ScriptedAdapter` (`check()`/`generate()`,
 driven through real replies files -- never a private helper reached into
@@ -20,7 +20,7 @@ for the duration of one dispatch; this script sets it directly (the same
 context manager without needing a real `Store`) rather than building one
 just to get a call path into scope.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_scripted_corpus.py [--check]
 """
 

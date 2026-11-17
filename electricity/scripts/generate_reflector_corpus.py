@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane L1 of issue #448 (electricity's
+"""Generate the golden corpus for issue #448 (electricity's
 `reflector` effect, issue #506) from Circuitry's own real
 `core/reflector.py` functions.
 
@@ -15,10 +15,10 @@ with no real `Store` needed:
   `{{max_effects}}`), no HTML escaping, a literal single brace left
   untouched, an unknown field, a malformed template and a partial tag
   (both refused -- there is no fallback to the raw template).
-- `_best_effort_context`/`_best_effort_goal`, called directly (PR
-  #510's first review: an earlier draft of this script
-  re-implemented `_best_effort_context`'s own redact/`json.dumps`/
-  truncate body instead of calling it) -- both only ever read
+- `_best_effort_context`/`_best_effort_goal`, called directly (an
+  earlier draft of this script re-implemented `_best_effort_context`'s
+  own redact/`json.dumps`/truncate body instead of calling it, fixed
+  in PR #510) -- both only ever read
   `_run_root_state(store)`, and that function's own `getattr(store,
   "true_root_state", None)` check is satisfied by a bare
   `types.SimpleNamespace(true_root_state={...})`, with no real `Store`
@@ -224,10 +224,10 @@ def context_cases() -> list[dict]:
         context_case({"model": "caf\u00e9-\U0001f600", "adapter": "openai", "plugins": []}),
         # A secret-shaped *value* inside one of the three fields
         # `_best_effort_context`'s own summary keeps (`model`/`adapter`/
-        # `plugins`) -- PR #510's first review: an
-        # earlier draft put `api_key` as a sibling top-level key, which
-        # the summary-building step drops before redaction ever runs,
-        # so it never actually exercised `redact()` at all.
+        # `plugins`) -- an earlier draft put `api_key` as a sibling
+        # top-level key, which the summary-building step drops before
+        # redaction ever runs, so it never actually exercised
+        # `redact()` at all (fixed in PR #510).
         context_case(
             {
                 "model": "sk-" + "a" * 32,

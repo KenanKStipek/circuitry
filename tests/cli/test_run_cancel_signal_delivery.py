@@ -237,7 +237,7 @@ def test_parallel_loop_pass_the_kill_cannot_reach_delays_exit_and_blocks_next_st
 def test_second_sigint_delivered_to_a_worker_thread_ends_process_promptly(
     tmp_path: Path,
 ) -> None:
-    """#385 review required test 2: the second SIGINT is self-delivered by
+    """#385: the second SIGINT is self-delivered by
     the branch's own worker thread via `signal.pthread_kill` (see the
     fixture's `test_block` plugin) -- standing in for POSIX routing a
     user's real second Ctrl-C to that thread instead of the main one,

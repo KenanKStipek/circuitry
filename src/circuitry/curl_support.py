@@ -266,8 +266,8 @@ def _curl_supports_retry_after_header() -> bool:
             except subprocess.TimeoutExpired:
                 # A hung probe must not block forever: leaving the `with`
                 # block on a bare TimeoutExpired calls Popen.__exit__,
-                # which waits again with no timeout at all (#357 review
-                # N3) -- kill it ourselves first so that wait() is instant.
+                # which waits again with no timeout at all (#357) -- kill
+                # it ourselves first so that wait() is instant.
                 proc.kill()
                 proc.wait()
                 return False

@@ -24,7 +24,7 @@ truth electricity-yaml's composer must match (DESIGN.md §3.2, issue #376):
   third-party text only has to fail at the same place with a non-empty
   message, never the same words).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_yaml_corpus.py [--check]
 """
 
@@ -409,7 +409,7 @@ def _extra_known_divergence_cases() -> list[dict]:
         # fullwidth) decimal digits under an explicit tag -- the same
         # digits CPython's own `int`/`float` constructors accept from
         # any string; `num_bigint::BigInt::from_str_radix` and Rust's
-        # `f64::from_str` don't (PR #388's third review).
+        # `f64::from_str` don't (PR #388).
         _divergence_from_error(
             'a: !!int "\u0661\u0662"\n', rust_error_contains="invalid int scalar"
         ),
@@ -428,8 +428,7 @@ def _extra_known_divergence_cases() -> list[dict]:
         # (`crate::MAX_NODES`'s doc comment): `b`'s merge retags its own
         # *copy*, leaving `deep.inner`'s own, never-merged node with its
         # original, un-retagged `=` key -- which still has no
-        # constructor, so loading fails (PR #388's third
-        # review).
+        # constructor, so loading fails (PR #388).
         _divergence_from_error(
             "deep:\n  inner: &a {=: 1}\nb: {<<: *a}\n",
             rust_error_tag="tag:yaml.org,2002:value",
@@ -442,8 +441,7 @@ def _extra_known_divergence_cases() -> list[dict]:
         # how many *line breaks* it contains), just reporting it one
         # line apart -- Circuitry's own line is one higher, since it
         # counts the embedded separator as an extra line break the
-        # comment's own `\n` doesn't repeat (PR #388's third
-        # review; the column-in-a-*scalar* -- not a comment -- direction
+        # comment's own `\n` doesn't repeat (PR #388; the column-in-a-*scalar* -- not a comment -- direction
         # of this same gap is documented below instead, since there
         # Circuitry fails outright while electricity-yaml successfully
         # loads a value, the one direction this corpus's `known_divergence`
@@ -497,10 +495,9 @@ def anchor_cases() -> list[dict]:
         "a: &x 1\nb: &x 2\n",  # error: a reused anchor name
         # same reused-anchor check, across a lone \r (not \r\n or \n):
         # both loaders count a lone \r as its own line break, so this is
-        # an ordinary parity case, not a divergence (PR #388's fourth
-        # review; previously mishandled by this crate's own byte-offset
-        # bookkeeping, not by saphyr-parser, which already counts it
-        # correctly).
+        # an ordinary parity case, not a divergence (PR #388; previously
+        # mishandled by this crate's own byte-offset bookkeeping, not by
+        # saphyr-parser, which already counts it correctly).
         "a: &x 1\rb: &x 2\r",
         # an alias used as a mapping key, then duplicated -- the position
         # for both is the *anchor's* own, confirmed against the real
@@ -668,12 +665,12 @@ def duplicate_key_cases() -> list[dict]:
         # the single-document check runs once the *whole* tree is
         # composed, before anything in it (including this duplicate) is
         # ever constructed -- so a second document after it is the error
-        # that's reported, not the duplicate `a` (first review)
+        # that's reported, not the duplicate `a`
         "a: 1\na: 2\n---\nb: 1\n",
         # a *parser* error (an unclosed flow sequence for `c`) after an
         # already-composed duplicate key never gets a chance to surface:
         # the whole document must compose cleanly before any mapping's
-        # own duplicate-key check ever runs (first review)
+        # own duplicate-key check ever runs
         "a:\n  b: 1\n  b: 2\nc: [\n",
     ]
     return [case(y) for y in yaml_texts]
@@ -756,7 +753,7 @@ def non_ascii_cases() -> list[dict]:
 
 
 # ---------------------------------------------------------------------
-# D1 (the fix-pass notes on PR #388): a non-ASCII variant of
+# PR #388: a non-ASCII variant of
 # *every* case above, mechanically derived -- never handwritten -- so
 # this corpus's non-ASCII coverage isn't limited to the handful of cases
 # that happened to be written with non-ASCII text in mind. Two mechanical
@@ -853,7 +850,7 @@ def non_ascii_variants(cases: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------
-# PR #388's third review: PyYAML's `Reader` (`reader.py`)
+# PR #388: PyYAML's `Reader` (`reader.py`)
 # strips a leading BOM before scanning ever starts -- no column counted
 # for it (`scan_to_next_token`'s own comment: "the byte order mark is
 # stripped if it's the first character in the stream") -- and rejects
@@ -941,7 +938,7 @@ def block_scalar_eof_cases() -> list[dict]:
         "input: >2\n   folded\n   text",  # ... folded
         "input: |\r\n  text",  # CRLF throughout
         "|\n  text",  # a document that is only a block scalar
-        # PR #500's review: the scalar's last line holds *fewer*
+        # PR #500: the scalar's last line holds *fewer*
         # columns than its own body indent -- `saphyr-parser`'s own EOF
         # check (`self.mark.col >= indent.max(1)`) already agrees with
         # PyYAML without any correction here; a fix that pops regardless

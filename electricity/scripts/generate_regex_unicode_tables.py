@@ -2,7 +2,7 @@
 """Generate the Unicode codepoint ranges the Python-`re` translation
 layer (`electricity-pyre::translate`, shared by the `regex` tool and
 electricity-schema's JSON Schema `pattern` keyword) needs for Python `re`'s
-`\\w`, `\\s` and `\\d` classes (#479, #448 lane D2), read directly from
+`\\w`, `\\s` and `\\d` classes (#479, #448), read directly from
 CPython's own definitions rather than guessed at or copied from Rust's
 own (different) Unicode tables:
 
@@ -15,8 +15,9 @@ own (different) Unicode tables:
 table of their own.
 
 Must be run with the same Python version/Unicode Character Database
-version used to generate the other regex corpora -- CI and the lane
-venv both pin Python 3.11 (Unicode 14.0).
+version used to generate the other regex corpora: Python 3.11, pinned
+by `electricity/scripts/generator-constraints.txt`, same as CI (Unicode
+14.0).
 
 Usage: python3 generate_regex_unicode_tables.py [--check]
 Writes: crates/electricity-pyre/src/regex_unicode.rs

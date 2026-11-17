@@ -12,7 +12,7 @@ table lets the Rust side tell apart two different failures: a name CPython
 itself would also reject (`LookupError: unknown encoding: x`, this
 preview's and `cof run`'s own text) from a name CPython accepts but this
 preview doesn't implement (refused upfront, before anything touches the
-filesystem, with the preview marker -- #460's lane D1 fix pass, "R2").
+filesystem, with the preview marker -- #460).
 
 Must be run with the same Python version as the rest of the generated
 corpus (3.11) -- the `encodings` package's own module list is a stdlib

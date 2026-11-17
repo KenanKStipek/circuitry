@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane D1 of issue #448 (#460):
+"""Generate the golden corpus for issue #448 (#460):
 `electricity-tools`'s `fs`/`env_vars`/`hash`/`uuid`/`clock` tools, by
 actually running Circuitry's own real plugins (`plugins/{fs,env_vars,
 hash,uuid,clock}.py`). `clock` is recorded a different way (see its own
@@ -23,7 +23,7 @@ through a conformance case's `size`/`is_file` extract, not here.
 a small, fixed synthetic environment, so `list`'s own `environ`-order
 recording is deterministic across machines.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_stdlib_tools_corpus.py [--check]
 """
 
@@ -216,7 +216,7 @@ def build_fs_cases(root: Path) -> list[dict]:
 
 def build_encode_run_hash_cases() -> list[dict]:
     """A *run* of consecutive unencodable characters gets one error for
-    the whole run, not one per character (issue #460's own fix pass --
+    the whole run, not one per character (issue #460 --
     "日本".encode("ascii")'s own text)."""
     return [
         hash_case(
@@ -423,8 +423,8 @@ def build_uuid_cases() -> list[dict]:
 # datetime import datetime`) is swapped for a subclass whose `now(tz)`
 # always returns the *same* fixed instant, converted into whatever `tz`
 # the real code asks for -- exactly what the Rust side's own
-# `execute_at(params, now)` injection point does (#460's own lane D1
-# ruling: "a module-level function..., never a global mutable"), so
+# `execute_at(params, now)` injection point does (#460: "a module-level
+# function..., never a global mutable"), so
 # both sides inject the identical instant rather than one trying to
 # replay the other's wall-clock reading.
 

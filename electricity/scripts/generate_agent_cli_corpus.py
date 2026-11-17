@@ -15,7 +15,7 @@ functions' own answer:
 - `adapters._agent_cli.check_binary`'s own text (part B);
 - `adapters.factory._string_list`'s own `ValueError` text (part B).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI), with Circuitry installed (`pip install -e . -c
 electricity/scripts/generator-constraints.txt`, as CI does).
 
@@ -477,7 +477,7 @@ def _parse_pi_output_cases() -> list[dict[str, Any]]:
 def _timeout_text(binary: str, timeout_seconds: float) -> str:
     """`run_agent_cli`'s own timeout text, never a copied f-string: a
     `run_tracked` that always raises `subprocess.TimeoutExpired` makes
-    `run_agent_cli` build the real sentence itself (PR #525's review
+    `run_agent_cli` build the real sentence itself (PR #525
     -- the docstring above already promised this, but the
     `:g}s` text used to be re-derived here instead).
     """
@@ -503,7 +503,7 @@ def _timeout_text_cases() -> list[dict[str, Any]]:
         4294967295,
         # Ties at the 6th significant digit, where a mantissa computed by
         # dividing by `10 ** exponent` can round the wrong way or miss a
-        # carry into the next exponent (PR #525's review).
+        # carry into the next exponent (PR #525).
         9999995,
         1000015,
         2000025,

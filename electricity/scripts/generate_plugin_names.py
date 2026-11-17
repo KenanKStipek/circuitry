@@ -6,7 +6,7 @@ plugins: ..." text lists Python's *full* registry (every provider name in
 ``PLUGIN_REGISTRY``, sorted), not just the handful electricity itself can
 build. electricity-tools's own builder (``registry.rs::build_plugin``) needs
 that exact list to word its own unknown-plugin message the same way, even for
-a provider name no electricity lane has implemented yet -- it must speak to
+a provider name electricity has no builder for yet -- it must speak to
 "every provider Circuitry itself knows", not "every provider electricity
 knows".
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane L2a of issue #448 (#521):
+"""Generate the golden corpus for issue #448 (#521):
 `electricity-tools::validate_yaml`, a close port of
 `plugins/validate_yaml.py::ValidateYamlPlugin`, by actually running
 that real plugin against synthetic params.
@@ -12,7 +12,7 @@ JSON-Schema violation is third-party text (DESIGN.md §1, §12): recorded
 schema error's own `"<location>: "`), never its full wording -- the
 Rust side only checks the prefix matches and the rest is non-empty.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`).
 Usage: python3 generate_validate_yaml_corpus.py [--check]
 """
@@ -140,7 +140,7 @@ def succeeding_case(
     assert outcome["value_ok"] is expect_ok, f"{name}: value['ok'] mismatch: {outcome}"
     # The generator asserts its own expected texts directly (never only via
     # the Rust replay's comparison, per DESIGN.md's own L2 standard,
-    # reviewed as missing on PR #524): an `exact` tag's own
+    # PR #524): an `exact` tag's own
     # *text* must equal the real plugin's own output, word for word, not
     # just a hand-typed guess that happens to look right.
     assert len(errors_tagged) == len(outcome["errors"]), (
@@ -512,7 +512,7 @@ def build_cases() -> list[dict[str, Any]]:
     # Python sorts by `str(err)` and electricity sorts by `(location,
     # message)` -- the kept order (and, under a low `max_errors`, the kept
     # *subset*) can differ even though the error set itself agrees
-    # (DESIGN.md's own Hazards section; PR #524's review).
+    # (DESIGN.md's own Hazards section; PR #524).
     outcome = run({"yaml": _SCHEMA_ERRORS_MULTI})
     assert not outcome["raised"] and len(outcome["errors"]) == 2
     cases.append(
@@ -603,7 +603,7 @@ def build_cases() -> list[dict[str, Any]]:
             }
         )
 
-    # --- `_as_bool` string forms for `compile` too (PR #524's review:
+    # --- `_as_bool` string forms for `compile` too (PR #524:
     # only `strip_fences` was covered) -- `_DUPLICATE_SIBLING_NAMES`
     # only fails under compile, so a truthy/falsy form flips `ok` the same
     # way `strip_fences`'s own loop does for a fence-free/fenced document.
@@ -679,9 +679,9 @@ def build_cases() -> list[dict[str, Any]]:
         ("list", ["a"]),
         ("dict", {"a": 1}),
         ("bytes", b"effects: []"),
-        # Settled 6 singles out `date`/`datetime` for `type(x).__name__`
-        # (never `datetime.date`/`datetime.datetime`) -- PR #524's
-        # review: these two were missing from this loop.
+        # The reported type name is `type(x).__name__`, so `date`/
+        # `datetime` (never `datetime.date`/`datetime.datetime`) --
+        # PR #524 added these two, missing from this loop.
         ("date", datetime.date(2024, 1, 1)),
         # Deliberately naive (no `tzinfo`) -- `yaml.dump`'s own implicit
         # timestamp resolver produces a naive `datetime.datetime` just the
