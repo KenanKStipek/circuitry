@@ -3661,8 +3661,8 @@ mod tests {
         }
     }
 
-    /// An unnamed loop's own leaf: its body reuses the document root's own path (DESIGN.md
-    /// §1.3, `is_transparent`), so unlike
+    /// An unnamed loop's own leaf: its body reuses the document
+    /// root's own path (DESIGN.md §1.3, `is_transparent`), so unlike
     /// `named_loop_with_one_leaf_program`'s `fan.iter_*.nap`, this has
     /// no `iter_*` placeholder segment of its own at all -- just
     /// `prime.u_nap`.

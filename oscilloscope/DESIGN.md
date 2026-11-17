@@ -2495,7 +2495,7 @@ breakpoints (§6.3's `tui::thresholds`) are unchanged.
 `draw_totals_row`) now wraps every screen, not only the Tape: `osi
 <document> · <status> <elapsed>` on the left of a `statusbar.bg`
 band, with the scope icon's own trace taking the `osi` word's cells
-while it animates (issue #677's settled §9 point 1) and the screen's
+while it animates (issue #677, §9.1) and the screen's
 own chip (`TAPE`/`TIME`/`FLOW`/`COST`) and the clock on the right; a
 status line (the run's own latest report when there is one, in its
 level's colour and collapsing to a bare `▸` when it would not fit,
@@ -4227,10 +4227,8 @@ it owns, left after #779 fixed the plan-order splice above:
 
 ## 7. Open questions (each with a recommendation)
 
-Each row below is already settled: Q1-Q10 here are the same Q1-Q10 the
-owner decided in issue #418's own "Taken here; the owner can override"
-table, kept here with the reasoning rather than as still-open
-questions. None of them are waiting on a decision.
+Q1-Q10 below restate, with reasoning, the decisions the owner already
+made in issue #418's own "Taken here; the owner can override" table.
 
 | # | Question | Recommendation |
 |---|---|---|

@@ -414,7 +414,7 @@ fn build_engine(
 }
 
 /// The notice `do_run` prints right after `build_engine`'s own probe,
-/// when it has one (M4/#433) -- pulled out of `do_run` itself so the
+/// when it has one (issue #433) -- pulled out of `do_run` itself so the
 /// exact wording for each of `caps`'s own cases is unit-testable
 /// without a real engine binary on `PATH`.
 fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<String> {
@@ -1368,7 +1368,7 @@ fn do_run(args: RunArgs) -> ExitCode {
 /// torn down and a plain writer is all that's left): reaps the
 /// engine, drains whatever's left of its stderr and the final
 /// live-state write, computes the run's own summary line exactly
-/// once (M1: never mid-run), and prints the exit code and (for the
+/// once (never mid-run), and prints the exit code and (for the
 /// default run directory only) where its files ended up. Returns the
 /// engine's own exit code, the same number every path through here
 /// has always used to build its `ExitCode` from.
@@ -1426,7 +1426,7 @@ fn finish_run(
     // `document_hash`.
     history.write(Some(engine_name), final_state.as_ref(), model, plan);
 
-    // M1: the run's own summary line is computed exactly once, here,
+    // The run's own summary line is computed exactly once, here,
     // after every other line this run will ever produce has already
     // been printed -- `Differ::finish` never emits it mid-run, and a
     // per-tick heuristic no longer exists to race state and events
@@ -3041,8 +3041,8 @@ fn run_tui(
 /// `cof`'s own pre-execution failure shape (DESIGN.md §4.1): with no
 /// orchestration ever started, it prints exactly `{"ok":false,
 /// "error":"..."}` to stdout and nothing reaches `--live-state`/`--out`
-/// at all. Parsed as a stream of whole JSON values, not split by line
-/// (M2): stdout is a pipe, so a real `cof` pretty-prints that object
+/// at all. Parsed as a stream of whole JSON values, not split by
+/// line: stdout is a pipe, so a real `cof` pretty-prints that object
 /// across several lines (`console.print_json`'s default), and a
 /// line-by-line scan never finds it there -- only against a fixture
 /// someone had already flattened to one line by hand.
@@ -3063,7 +3063,7 @@ fn read_stdout_json_error(path: &Path) -> Option<String> {
 }
 
 /// The engine's own last word when neither state nor stdout said
-/// anything at all (M2's last-resort reason): a trimmed, non-empty
+/// anything at all (the last-resort reason): a trimmed, non-empty
 /// line from the very end of its stderr tee.
 fn last_nonempty_stderr_line(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -3075,7 +3075,7 @@ fn last_nonempty_stderr_line(path: &Path) -> Option<String> {
 }
 
 /// The failed run's own reason, when `prime.meta.error` has none to
-/// give (M2) -- in priority order: a `run_end` event's own `error`
+/// give -- in priority order: a `run_end` event's own `error`
 /// (DESIGN.md §3's format table always carries one for a failing
 /// run), then cof's pre-execution stdout JSON (DESIGN.md §4.1), then
 /// its last stderr line.
@@ -5983,7 +5983,7 @@ fn run_combined_signal_leg(
 /// own loop stopped (a completed run, a local Ctrl-C, or a dead pid
 /// with nothing left to watch): one more drain for anything that
 /// landed between the loop's last check and now, the same single
-/// final-summary computation `do_run`'s own `finish_run` uses (M1),
+/// final-summary computation `do_run`'s own `finish_run` uses,
 /// and the exit code `osi run` of the same document would have used
 /// — from a signal `run_end` named, or from watch's own local Ctrl-C,
 /// rather than only ok-vs-failed. Returns that exit code; the caller
@@ -7991,10 +7991,10 @@ mod tests {
 
     #[test]
     fn the_summary_line_is_last_when_the_events_stream_is_already_complete() {
-        // M1, case A: the events writer has already caught up (its own
+        // Case A: the events writer has already caught up (its own
         // `end`/`run_end` already on disk) by the same tick the state
-        // write lands -- the exact race the measured bug hit, since
-        // the event's own millisecond-plus-`Z` timestamp and the
+        // write lands -- a race that can duplicate the summary line,
+        // since the event's own millisecond-plus-`Z` timestamp and the
         // state's microsecond-plus-offset one for the same instant
         // are not comparable as strings at all.
         let dir = tempfile::tempdir().unwrap();
@@ -8043,7 +8043,7 @@ mod tests {
 
     #[test]
     fn the_summary_line_is_last_when_the_state_write_arrives_before_the_events_stream_does() {
-        // M1, case B: the reverse race -- the live-state file already
+        // Case B: the reverse race -- the live-state file already
         // shows the run complete while the events writer is still
         // catching up (only `start` on disk so far), the end event
         // and the final `--out` write both landing only on the next
@@ -8112,7 +8112,7 @@ mod tests {
 
     #[test]
     fn read_stdout_json_error_parses_a_pretty_printed_object() {
-        // M2: a real `cof`, with stdout as a pipe, pretty-prints its
+        // A real `cof`, with stdout as a pipe, pretty-prints its
         // pre-execution failure object across several lines -- a
         // line-by-line scan never finds it there, only a fixture
         // already flattened to one line by hand.
@@ -8131,7 +8131,7 @@ mod tests {
 
     #[test]
     fn a_validation_failure_puts_cofs_own_reason_on_the_summary_line() {
-        // M2: a run that ended with no `prime` node at all (a document
+        // A run that ended with no `prime` node at all (a document
         // invalid enough that nothing ran) has no `prime.meta.error` of
         // its own -- cof's own pre-execution stdout JSON is the only
         // place the real reason lives.

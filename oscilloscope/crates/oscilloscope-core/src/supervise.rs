@@ -80,7 +80,7 @@ impl SupervisedChild {
         stdout_path: &Path,
         stderr_path: &Path,
     ) -> io::Result<(Self, Receiver<String>)> {
-        // Both tee files are opened *before* `cmd.spawn()` (N1): if
+        // Both tee files are opened *before* `cmd.spawn()`: if
         // either `File::create` failed after the engine was already
         // spawned, the early `?` return would drop a plain
         // `std::process::Child` with no `SupervisedChild` ever built
@@ -397,12 +397,12 @@ mod tests {
 
     #[test]
     fn a_stdout_file_that_cannot_be_created_never_spawns_the_engine() {
-        // N1 probe: `stdout_path` is a directory, so `File::create`
-        // fails. Before the fix, `cmd.spawn()` ran first, so the
+        // `stdout_path` is a directory, so `File::create` fails. If
+        // `cmd.spawn()` ran before both tee files were opened, the
         // engine (a `sleep` whose argument is this test's own unique
-        // needle) was already running by the time `spawn` returned
-        // `Err` -- left behind forever, since no `SupervisedChild` was
-        // ever built to `Drop` it.
+        // needle) would already be running by the time `spawn`
+        // returned `Err` -- left behind forever, since no
+        // `SupervisedChild` was ever built to `Drop` it.
         let dir = tempfile::tempdir().unwrap();
         let stdout_as_dir = dir.path().join("stdout.txt");
         std::fs::create_dir(&stdout_as_dir).unwrap();
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn a_panic_while_a_child_is_alive_still_kills_it() {
         // osi must never leave the engine behind on *any* exit path,
-        // panics included (issue #424's lane decisions): a
+        // panics included (issue #424): a
         // `SupervisedChild` held across a panicking scope is dropped
         // during unwind the same way a normal early return drops it, so
         // this exercises the same `Drop` impl through a real unwind,

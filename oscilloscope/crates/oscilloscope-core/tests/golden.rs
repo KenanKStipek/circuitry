@@ -82,8 +82,8 @@ fn format_rows(rows: &BTreeMap<String, RowStatus>) -> String {
 
 /// Replays `name`'s recorded snapshots through a fresh `Differ`/
 /// `RunModel`, with no plan (today's only fully-working path, issue
-/// #424's lane decision) — one block of status-table text and log
-/// lines per observation, plus a final process-exit block.
+/// #424) — one block of status-table text and log lines per
+/// observation, plus a final process-exit block.
 fn replay(name: &str) -> String {
     let fixture = load_fixture(name);
     let plan = PlanTree::empty();
@@ -114,7 +114,7 @@ fn replay(name: &str) -> String {
         };
 
         let mut lines = differ.diff(state, &plan);
-        // M1: `diff` itself never emits the `■ run ...` line any more
+        // `diff` itself never emits the `■ run ...` line any more
         // -- `finish` is called exactly once, on the last observation,
         // the same single call site `do_run`/`do_watch` use after
         // draining everything else.
@@ -322,14 +322,15 @@ fn on_error_continue_with_a_compiled_plan() {
     insta::assert_snapshot!("on_error_continue_with_plan", rendered);
 }
 
-/// Committed fixtures must never carry a local machine's own path (the
-/// lane contract's standing rule for generated/recorded files): this
-/// runs on every `cargo test`, not just when fixtures are re-recorded.
+/// Committed fixtures must never carry a local machine's own path:
+/// this runs on every `cargo test`, not just when fixtures are
+/// re-recorded.
 #[test]
 fn fixtures_have_no_leaked_local_paths() {
-    // No trailing slash on `/private`/`/var/folders`: K2's own bug left
-    // exactly `/private<SCRUBBED>` behind, which a `/private/`-shaped
-    // needle (requiring a second slash) never matched.
+    // No trailing slash required on `/private`/`/var/folders`: the
+    // scrub bug this guards against left exactly `/private<SCRUBBED>`
+    // behind, with no second slash for a `/private/`-shaped needle to
+    // ever match.
     let needles = [
         "/Users/",
         "/home/",

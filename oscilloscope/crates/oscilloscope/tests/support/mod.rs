@@ -56,7 +56,7 @@ pub fn e2e_electricity_enabled() -> bool {
 /// `default_adapter`/`default_model` are Circuitry's own config keys
 /// (`cli/config.py`); a bare `"adapter": "scripted"` is an unknown key
 /// the config loader silently ignores, so every one of these runs
-/// used to fall back to the built-in `ollama` default instead (K1).
+/// used to fall back to the built-in `ollama` default instead.
 pub const SCRIPTED_CONFIG: &str =
     r#"{"default_adapter":"scripted","default_model":"scripted-model"}"#;
 
@@ -64,14 +64,14 @@ pub const SCRIPTED_CONFIG: &str =
 /// (the `tool`-only and signal tests below) uses this empty config --
 /// the same one `electricity/crates/electricity/tests/run_wiring.rs`'s
 /// own tests already use. A test that does dispatch a prompt effect
-/// (issue #538's B1) builds its own config instead, with
+/// (issue #538) builds its own config instead, with
 /// [`scripted_config`].
 pub const ELECTRICITY_CONFIG: &str = "{}";
 
 /// A `runtime.adapters.scripted.replies_file` config pointing at
 /// *replies_path* (an absolute path in the test's own temp directory),
 /// for an electricity e2e test whose document sets its own
-/// document-level `adapter: scripted`/`model:` (issue #538's B1): no
+/// document-level `adapter: scripted`/`model:` (issue #538): no
 /// `default_adapter`/`default_model` of its own, since the document
 /// already names both.
 pub fn scripted_config(replies_path: &Path) -> String {
@@ -925,9 +925,9 @@ fn stdio_from_slave(path: &Path) -> Stdio {
 
 /// Spawns `osi` with every one of its standard streams attached to
 /// the pty's slave side, in its own process group (the same
-/// isolation `osi` itself gives `cof`, and the lane rule this
-/// repository's tests all follow: "signals only to processes you
-/// started, in their own session").
+/// isolation `osi` itself gives `cof`: this repository's tests only
+/// ever send signals to processes they started themselves, in their
+/// own session).
 pub fn spawn_osi_on_pty(home: &TestHome, slave_path: &Path, args: &[&OsStr]) -> Child {
     spawn_osi_on_pty_with_env(home, slave_path, args, &[])
 }

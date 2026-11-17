@@ -249,7 +249,7 @@ pub struct App {
     /// same reason.
     pub flow_has_selection: bool,
     /// The Tape's own previews toggle (issue #678, §4's `p`): on by
-    /// default at 120 columns and up (§9's settled point 4).
+    /// default at 120 columns and up (§9.4).
     pub tape_previews_on: bool,
     /// The Tape's own token column toggle (§4's `t`): fixed-scale
     /// bars by default, the deviation-from-usual view once set.

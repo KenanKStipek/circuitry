@@ -2956,7 +2956,7 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
     );
     // The Tape's own header band (issue #678) carries the status
     // glyph and word together, `✗ Failed` -- the icon trace just
-    // ahead of it is in the same failed colour now (§9's settled
+    // ahead of it is in the same failed colour now (§9's
     // icon-in-the-word-osi rule), so ratatui's own diff can reuse
     // that run's SGR code across the cursor jump between them
     // rather than emitting a fresh one right before the glyph.

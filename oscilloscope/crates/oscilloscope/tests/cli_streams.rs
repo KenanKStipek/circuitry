@@ -85,7 +85,7 @@ fn version_prints_to_stdout_not_stderr() {
 
 #[test]
 fn a_dash_e_input_reaches_the_plan_compile() {
-    // K4: a document with a required `interface.inputs` entry only
+    // A document with a required `interface.inputs` entry only
     // compiles into a real plan once the matching `-e` reaches
     // `electricity::check_options` via osi's own CLI, not just
     // electricity-compiler's own already-tested behavior one layer
@@ -160,7 +160,7 @@ fn a_dash_e_input_reaches_the_plan_compile() {
 
 #[test]
 fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
-    // K7: osi must never force a pre-existing --out-dir to 0700 (it
+    // osi must never force a pre-existing --out-dir to 0700 (it
     // didn't create it, and chmod'ing a directory outside its own run
     // directory is an unrequested, possibly even EPERM-failing,
     // change) -- it only warns on stderr. `--engine electricity` with
@@ -271,7 +271,7 @@ fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
 
 #[test]
 fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
-    // N3: a run directory from a bare `cof run --live-state ... --out
+    // A run directory from a bare `cof run --live-state ... --out
     // ...` (no `--events`) gives `osi watch` no pid to probe, and an
     // aborted run never writes a completed state either — the
     // decision here is no staleness timeout (a quiet

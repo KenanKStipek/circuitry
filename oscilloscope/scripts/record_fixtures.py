@@ -642,12 +642,13 @@ FAKE_PI_BINARY = str(Path(__file__).resolve().parent.parent / "tests" / "agent_l
 FAKE_CLAUDE_BINARY = str(
     Path(__file__).resolve().parent.parent / "tests" / "agent_live_fakes" / "fake_claude.py"
 )
-# Committed in place of the real, machine-local path above, applied
-# here deliberately rather than relying on `scrub`'s
-# safety net: a path under this repository's own worktree still
-# starts with `/Users/<name>/...` on the recording machine, which
-# `scrub`'s `/Users/` pattern only strips the username segment from,
-# leaving the rest of the local checkout's own path -- not a secret,
+# Committed in place of the real, machine-local path above, so a
+# committed fixture never carries a local path, deliberately rather
+# than relying on `scrub`'s safety net: a path under this
+# repository's own worktree still starts with `/Users/<name>/...` on
+# the recording machine, which `scrub`'s `/Users/` pattern only
+# strips the username segment from, leaving the rest of the local
+# checkout's own path -- not a secret,
 # but not reproducible either, and this reads better as a committed
 # fixture than a half-scrubbed one would).
 AGENT_LIVE_CASES: list[Case] = [
@@ -1154,9 +1155,10 @@ def write_fixture(
 def check_no_leaked_paths() -> int:
     """A standing test, not just a recording-time scrub: fails if any
     committed fixture still contains an absolute/temp path."""
-    # No trailing slash required on `/private`/`/var`: requiring one
-    # would leave exactly `/private<SCRUBBED>` behind, with
-    # no second slash for a `/private/`-shaped needle to ever match.
+    # No trailing slash required on `/private`/`/var`: the scrub bug
+    # this guards against left exactly `/private<SCRUBBED>` behind,
+    # with no second slash for a `/private/`-shaped needle to ever
+    # match.
     pattern = re.compile(r"/Users/|/home/[^\s\"']+|/var/folders|/private|(?<!<)/tmp/")
     failures = []
     for path in sorted(FIXTURES_DIR.rglob("*")):
@@ -1209,12 +1211,12 @@ def main() -> int:
                 record_one(case, cof_bin, engine="cof")
             return check_no_leaked_paths()
 
-    # `--parity-only`: re-record just PARITY_CASES (issue #431's parity
-    # milestone), leaving every other committed fixture untouched -- each
-    # snapshot's own `t` is real elapsed time, never reproducible, so
-    # re-running the full CASES list rewrites every fixture's content
-    # with new timing noise even when nothing about the case itself
-    # changed.
+    # `--parity-only`: re-record just PARITY_CASES (issue #431's
+    # parity milestone), leaving every other committed fixture
+    # untouched -- each snapshot's own `t` is real elapsed time, never
+    # reproducible, so re-running the full CASES list rewrites every
+    # fixture's content with new timing noise even when nothing about
+    # the case itself changed.
     if "--parity-only" not in sys.argv:
         for case in CASES:
             record_one(case, cof_bin, engine="cof")

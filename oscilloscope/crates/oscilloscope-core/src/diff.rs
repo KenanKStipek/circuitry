@@ -55,7 +55,7 @@ pub enum LogKind {
 /// lexicographically comparable as strings at all -- `Z` (0x5A) sorts
 /// after every digit, so an event's own millisecond-truncated
 /// timestamp can sort *after* a state timestamp in the very same
-/// millisecond (M1) -- so `sort_log_lines` must compare real instants.
+/// millisecond -- so `sort_log_lines` must compare real instants.
 pub fn parse_instant(ts: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     chrono::DateTime::parse_from_rfc3339(ts).ok()
 }
@@ -95,7 +95,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// Caps a possibly multi-line failure reason to `max` characters,
-/// keeping its newlines (M2) -- unlike `truncate_chars`, which
+/// keeping its newlines -- unlike `truncate_chars`, which
 /// collapses an effect's own error to one line, the run summary's own
 /// reason (cof's pre-execution validation JSON, or a run_end event's)
 /// can be several lines long and still worth keeping, just indented
@@ -157,7 +157,7 @@ fn report_line(
     text
 }
 
-/// The run summary's own failure reason (M2, DESIGN.md §2.4's `■ run
+/// The run summary's own failure reason (DESIGN.md §2.4's `■ run
 /// ...` row): the first line goes right on the `■` line itself, and any
 /// further lines print indented under it, rather than either losing
 /// them or breaking the log's one-timestamped-line-per-entry shape.
@@ -260,7 +260,7 @@ fn is_container(meta: &Value) -> bool {
 /// unnamed `if`/loop is the only thing that never gets one). The
 /// document root is always one (checked first, needing neither a plan
 /// nor any state at all); the plan answers for everything else when
-/// there is one; a `dispatch` event (K5) catches a *tree* container's
+/// there is one; a `dispatch` event catches a *tree* container's
 /// own `end` even with no plan at all — but, per the real recorded
 /// shape (`dispatch` always comes strictly *after* the container's
 /// own `start`, since a container must have already started to go on
@@ -421,7 +421,7 @@ pub struct Differ {
     /// each source.
     event_sourced: BTreeSet<String>,
     /// Every `(path, id)` instance whose own `end` event reported
-    /// `ok: false` (M1b): `any_descendant_failed` must see a sibling's
+    /// `ok: false`: `any_descendant_failed` must see a sibling's
     /// failure from earlier in the *same* tick, not just what `diff`'s
     /// state-sourced `self.last` already knew about as of the previous
     /// tick. Events in one tick are handled one at a time, in file
@@ -663,10 +663,10 @@ impl Differ {
             Event::Start { ts, path, .. } => {
                 self.event_sourced.insert(path.clone());
                 // `event_failed` itself (the id'd set) is never
-                // cleared here any more -- only the id-less fallback is, the same
-                // as before: a fresh `start` at this exact path clears
-                // its own entry and every descendant's (a loop's path
-                // is also every one of its children's own prefix).
+                // cleared on `start`; only the id-less fallback is: a
+                // fresh `start` at this exact path clears its own
+                // entry and every descendant's (a loop's path is also
+                // every one of its children's own prefix).
                 let restarted_prefix = format!("{path}.");
                 self.path_failed_without_id.remove(path);
                 self.path_failed_without_id
@@ -674,9 +674,7 @@ impl Differ {
                 // A named container (the document root included) fires
                 // `start`/`end` the same as a leaf (DESIGN.md §1.4's
                 // probe notes), but gets no ▶/✓/✗ of its own — same
-                // rule `diff` already applies from state, which holds
-                // once a real plan started compiling and
-                // `--events` started firing for more than leaves. A
+                // rule `diff` already applies from state. A
                 // tree container's own `dispatch` always comes
                 // strictly *after* its `start` though (it must already
                 // be running to dispatch anything), so this can't catch
@@ -706,7 +704,7 @@ impl Differ {
             } => {
                 self.event_sourced.insert(path.clone());
                 if !*ok {
-                    // M1b: recorded *before* the container branch
+                    // Recorded *before* the container branch
                     // below checks it, so a child's own failure a
                     // couple of events earlier in this same batch is
                     // already visible here, even though `diff`'s own
@@ -831,7 +829,7 @@ impl Differ {
 
     /// The run's own summary line (DESIGN.md §2.4's `■ run ...` row),
     /// computed exactly once, from whichever final state the caller
-    /// hands it (M1): `diff` itself never emits this line mid-run any
+    /// hands it: `diff` itself never emits this line mid-run any
     /// more. A per-tick "every event-sourced path has closed" gate used
     /// to approximate "the run is really over" from inside the polling
     /// loop, but state and events are two independently polled files —
@@ -843,7 +841,7 @@ impl Differ {
     /// removes the race by construction instead of narrowing its
     /// window.
     ///
-    /// `fallback_reason` (M2) fills in `prime.meta.error`'s absence — a
+    /// `fallback_reason` fills in `prime.meta.error`'s absence — a
     /// run that ended (`runtime.last_run.completed_at` set) with no
     /// `prime` node at all (a document invalid enough that nothing
     /// ran) has no error of its own to report. The caller supplies one
@@ -1091,7 +1089,7 @@ impl Differ {
                         }
                     }
                     // A retry's own `↻` line is *not* gated on
-                    // `event_sourced` (N2): once `--events` is
+                    // `event_sourced`: once `--events` is
                     // flowing, every leaf becomes event-sourced as
                     // soon as its `start` arrives (there's no earlier
                     // `prev` without a start to fall back to), and
@@ -2135,7 +2133,7 @@ mod tests {
 
     #[test]
     fn a_run_that_ended_with_no_prime_node_never_prints_run_ok() {
-        // K6: a document invalid enough that nothing ever ran still
+        // A document invalid enough that nothing ever ran still
         // sets runtime.last_run.completed_at in its final write, with
         // no `prime` key at all. The run summary must say "failed",
         // never "ok", right before the engine's own nonzero exit code.
@@ -2148,7 +2146,7 @@ mod tests {
 
     #[test]
     fn finish_returns_none_until_the_caller_has_an_ended_state() {
-        // M1: `finish` itself does no waiting at all -- unlike the old
+        // `finish` itself does no waiting at all -- unlike the old
         // per-tick heuristic this replaces, it never guesses whether a
         // run is "really" over from an in-flight state. It is the
         // caller's job (main.rs's `do_run`/`do_watch`) to call it only
@@ -2281,7 +2279,7 @@ mod tests {
 
     #[test]
     fn finish_reports_an_interrupted_run_as_cancelled_even_with_an_open_event_sourced_path() {
-        // M1: there is no `open_event_paths` gate left to release --
+        // There is no `open_event_paths` gate left to release --
         // an effect interrupted mid-flight never gets its own `end`
         // event at all, but that no longer matters, since the caller
         // decides when to call `finish`, from a state it already
@@ -2330,7 +2328,7 @@ mod tests {
 
     #[test]
     fn diff_event_container_gets_no_extra_cross_mark_when_its_child_failed_in_the_same_batch() {
-        // M1b: the container's own failing `end`
+        // The container's own failing `end`
         // event, landing in the same batch as its child's own, must
         // not get a second ✗ -- `self.last` (the state diff's own
         // record) hasn't caught up yet in the same tick, so
@@ -2576,7 +2574,7 @@ mod tests {
 
     #[test]
     fn finish_keeps_a_multi_line_reasons_first_line_on_the_summary_and_indents_the_rest() {
-        // M2: cof's own validation error can be several lines long;
+        // cof's own validation error can be several lines long;
         // the first goes right on the ■ line, the rest print indented
         // under it rather than either being lost or breaking the log's
         // one-timestamped-line-per-entry shape.
@@ -3388,7 +3386,7 @@ mod tests {
 
     #[test]
     fn an_event_sourced_nodes_moved_created_at_still_gets_a_retry_line() {
-        // N2: every leaf becomes event-sourced the moment its `start`
+        // Every leaf becomes event-sourced the moment its `start`
         // event arrives, and events carry no retry signal at all
         // (design Q4) — so gating `↻` on "not event-sourced", the same
         // as the start/end lines events already cover, made it

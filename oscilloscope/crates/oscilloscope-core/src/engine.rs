@@ -84,7 +84,7 @@ pub struct EngineCaps {
     /// engine, nor `run_start`/state at all.
     pub label: bool,
     /// Set when the `--help` probe itself couldn't find the binary at
-    /// all (M4): lets a caller skip the "this cof has no --events"
+    /// all: lets a caller skip the "this cof has no --events"
     /// notice in that case, which otherwise printed -- wrongly --
     /// ahead of the real "couldn't launch cof" error the later spawn
     /// goes on to report for the exact same reason.

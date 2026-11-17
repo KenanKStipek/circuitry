@@ -153,7 +153,7 @@ fn draw_tape_header_band(
             ),
         }
     };
-    // Issue #677's settled §9 point 1: the animated trace takes the
+    // Issue #677, §9.1: the animated trace takes the
     // `osi` word's own cells while animation is on; the word returns
     // under `--no-animation`.
     let osi_text = if ctx.no_animation {
@@ -13740,7 +13740,7 @@ fn flow_fork_folded(fork: &Fork, app: &App, area_width: u16) -> bool {
 }
 
 /// The at most three lanes an open fork actually draws at once
-/// (#677 §9.3's settled "`↑↓` scrolls them"): a decision's own two
+/// (#677 §9.3: "`↑↓` scrolls them"): a decision's own two
 /// lanes always draw in full -- a decision never folds at all, so it
 /// never needs a window either. Any other fork whose lanes run past
 /// three (a loop's passes, or a parallel `dynamic` with four or more

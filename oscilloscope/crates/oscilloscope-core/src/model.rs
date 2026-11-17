@@ -764,7 +764,7 @@ pub fn run_ended(state: &Value) -> bool {
 /// `prime.meta.error == null` (DESIGN.md §2.1 rule 7).
 ///
 /// Requires the key to be explicitly present and `null`, not merely
-/// absent (K6): a run that failed *before* ever creating a `prime`
+/// absent: a run that failed *before* ever creating a `prime`
 /// node at all (a document invalid enough that nothing ran) still
 /// gets `runtime.last_run.completed_at` set in its final write, with
 /// no `prime` key whatsoever — `/prime/meta/error` then fails to
@@ -1739,7 +1739,7 @@ impl RunModel {
             .and_then(|(_, _, signal)| signal.as_deref())
     }
 
-    /// `run_end`'s own `error` (M2): the engine's own reason for a run
+    /// `run_end`'s own `error`: the engine's own reason for a run
     /// that failed before it ever wrote a usable `prime.meta.error` of
     /// its own -- the one source DESIGN.md §3's format table always
     /// gives a failing run_end a value for, ahead of reparsing cof's
@@ -2379,8 +2379,8 @@ impl RunModel {
                 // that literal text back against a real `iter_N`
                 // segment, so seeding a row for the template itself
                 // here would only ever leave a stale `Pending` row
-                // beside the real per-pass rows observation produces
-                // (as explained above); skipped below once any real pass already
+                // beside the real per-pass rows observation produces,
+                // so it's skipped below once any real pass already
                 // exists. Before the loop's first dispatch, though
                 // (issue #678's Starting/Failed states), its own
                 // eventual passes still read ahead like any other
@@ -3818,7 +3818,7 @@ mod tests {
 
     #[test]
     fn run_ok_is_false_when_the_run_ended_with_no_prime_node_at_all() {
-        // K6: a document invalid enough that nothing ever ran still
+        // A document invalid enough that nothing ever ran still
         // gets runtime.last_run.completed_at set in its final write,
         // with no `prime` key whatsoever -- `run_ok` must not treat a
         // missing `/prime/meta/error` pointer the same as an explicit

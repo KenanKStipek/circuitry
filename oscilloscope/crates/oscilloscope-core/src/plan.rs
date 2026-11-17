@@ -13,13 +13,13 @@ use electricity_bytecode::{
 };
 use electricity_compiler::{CheckOptions, RunCheckError, check_for_run};
 
-/// `-e key=value` parsing (K4), re-exported so a caller of `compile`
+/// `-e key=value` parsing, re-exported so a caller of `compile`
 /// never needs its own direct dependency on the `electricity` crate
 /// just to build the `inputs` map this module's own functions take.
 pub use electricity::parse_inputs;
 
 /// Compiles `path` with the same options a real `electricity <config>
-/// <path> -e k=v...` run would check it against (K4): calling code has
+/// <path> -e k=v...` run would check it against: calling code has
 /// already decided to run the document, so preflight and trust checks
 /// are skipped here, not reimplemented.
 ///
@@ -509,7 +509,7 @@ impl PlanTree {
     }
 
     /// `from_program`, compiling any `use: path:` child the same way
-    /// the top-level document itself was (K4): the same config and
+    /// the top-level document itself was: the same config and
     /// `-e` inputs, so a `use` child with its own required inputs, or
     /// one that relies on the same config-defined `concurrency_groups`
     /// its parent does, grafts the same way a real run of it would
@@ -527,12 +527,10 @@ impl PlanTree {
 
     /// `from_program`, with the `use: path:` child-document loader
     /// swapped out — lets a test exercise the grafting walk itself
-    /// (DESIGN.md §5) against a hand-built child `Program`, independent
-    /// of whatever `electricity-compiler` can or can't compile yet
-    /// (the `electricity-compiler` stub fails to compile any real
-    /// document until #415/#417 land, so a test that could only reach
-    /// grafting through it would never run at all). The loader still only ever
-    /// gets called for a real, canonicalizable file on disk —
+    /// (DESIGN.md §5) against a hand-built child `Program`,
+    /// independent of whether `electricity-compiler` can compile it.
+    /// The loader still only ever gets called for a real,
+    /// canonicalizable file on disk —
     /// `try_graft_use`'s existing missing-file/cycle checks run first,
     /// unchanged.
     fn from_program_with_loader(
@@ -2011,10 +2009,10 @@ mod tests {
 
     #[test]
     fn a_document_with_a_required_input_only_compiles_with_the_matching_dash_e() {
-        // K4: a document with a required `interface.inputs` entry
+        // A document with a required `interface.inputs` entry
         // fails check_for_run with no plan at all until the matching
-        // `-e` is given -- the exact osi-side plumbing this issue asks
-        // for (`electricity::check_options`/`parse_inputs`), not just
+        // `-e` is given -- the exact osi-side plumbing `compile` needs
+        // (`electricity::check_options`/`parse_inputs`), not just
         // electricity-compiler's own already-tested behavior.
         let dir = tempfile::tempdir().unwrap();
         let doc = dir.path().join("do.yml");
@@ -2036,7 +2034,7 @@ mod tests {
 
     #[test]
     fn compile_merges_a_configs_own_runtime_block() {
-        // K4: with a config argument, `compile` must go through
+        // With a config argument, `compile` must go through
         // `electricity::check_options`, which merges the config file's
         // own `runtime:` block under the document's -- not just
         // skip_preflight/trust_document built by hand, which never
@@ -2333,8 +2331,7 @@ mod tests {
         // own missing-file/cycle checks run before the loader is ever
         // called), but not a *compilable* one — the loader is injected
         // so this exercises osi's own grafting walk, independent of
-        // whether `electricity-compiler` can compile it yet, which it
-        // can't for any real document today.
+        // whether `electricity-compiler` can compile it.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("main.yml"), "effects: []\n").unwrap();
         std::fs::write(dir.path().join("child.yml"), "effects: []\n").unwrap();
@@ -3052,10 +3049,9 @@ mod tests {
         assert!(decisions[0].else_paths.is_empty());
     }
 
-    /// An unnamed `if` directly under a
-    /// tree `dynamic`'s own `Parallel` branches is reached through
-    /// `walk_op`, never `walk_block`'s own transparent-if handling
-    /// (issue #635) --
+    /// An unnamed `if` directly under a tree `dynamic`'s own
+    /// `Parallel` branches is reached through `walk_op`, never
+    /// `walk_block`'s own transparent-if handling (issue #635) --
     /// `record_op_entry` is the one place both contexts funnel their
     /// `PlanEntryKind::If` through, so this still gets a decision
     /// entry.
@@ -3111,12 +3107,12 @@ mod tests {
         );
     }
 
-    /// An unnamed loop directly under a
-    /// tree `dynamic`'s own `Parallel` branches is reached through
-    /// `walk_op`, never `walk_block`'s own transparent-loop handling
-    /// (issue #650) -- `record_op_entry` is the one place both contexts funnel
-    /// their loop `PlanEntryKind` through, so its body paths are
-    /// still recorded.
+    /// An unnamed loop directly under a tree `dynamic`'s own
+    /// `Parallel` branches is reached through `walk_op`, never
+    /// `walk_block`'s own transparent-loop handling (issue #650) --
+    /// `record_op_entry` is the one place both contexts funnel their
+    /// loop `PlanEntryKind` through, so its body paths are still
+    /// recorded.
     #[test]
     fn an_unnamed_loop_directly_under_a_tree_dynamic_is_recorded() {
         let root_path = EffectPath::root();
