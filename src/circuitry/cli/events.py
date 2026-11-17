@@ -212,7 +212,7 @@ class EventLog:
 
     def current_instance(self, path: str) -> tuple[int, float] | None:
         """The ``(instance id, started at)`` currently open for *path* --
-        ``Store.open_instance_id``'s own backing call (#674 review): a
+        ``Store.open_instance_id``'s own backing call (issue #674): a
         streamed prompt's own attempt captures this once, right as it
         begins, rather than letting a later ``progress`` line re-derive it
         from this same lookup at fire time, which a same-path concurrent

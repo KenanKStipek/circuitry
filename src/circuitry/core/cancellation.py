@@ -350,14 +350,12 @@ class CancellationToken:
         an earlier run's cancellation leak into the next one.
 
         Builds a fresh :class:`threading.Event` rather than calling
-        ``clear()`` on the existing one: an earlier version of this
-        method relied on the reasoning that ``sigterm_as_interrupt``
-        only ever calls this before its own handlers are installed or
-        after they've been restored, so a signal landing on either call
-        can't reach a handler that could leak this lock -- that
-        reasoning was wrong. The *default* SIGINT handler installed at
-        either of those points still raises ``KeyboardInterrupt``
-        asynchronously,
+        ``clear()`` on the existing one: ``sigterm_as_interrupt`` only
+        ever calls this before its own handlers are installed or after
+        they've been restored, but that does not mean a signal landing
+        on either call can't reach a handler that could leak this lock.
+        The *default* SIGINT handler installed at either of those
+        points still raises ``KeyboardInterrupt`` asynchronously,
         same as always, and :meth:`request`'s own ``Event.set()`` (the
         one call on this object that *does* still touch its lock, since
         :meth:`sleep_or_raise` is lock-free on the main thread) could
@@ -1334,11 +1332,11 @@ def _communicate_promptly(
     ``self.stdin and input`` gates the selector registration, ``not
     self._communication_started`` gates the close. Passing *input* again
     on a retry raises ``ValueError: Cannot send input after starting
-    communication``, so an earlier version of this function passed it
-    only on the first call and ``None`` after — but then any input not
-    fully written inside that first short slice was simply never resumed
-    or closed, and a child that hadn't yet finished reading stdin waited
-    for EOF until *timeout* itself, or forever with no timeout). Instead,
+    communication``. Passing it only on the first call and ``None``
+    after would leave any input not fully written inside that first
+    short slice never resumed or closed, and a child that hadn't yet
+    finished reading stdin would wait for EOF until *timeout* itself,
+    or forever with no timeout). Instead,
     if there is input to send *and* ``proc.stdin`` is a real pipe (a
     ``subprocess.Popen`` always has one whenever ``run_tracked`` passed
     ``input``; a bare duck-typed test double usually does not), a helper
@@ -1352,10 +1350,9 @@ def _communicate_promptly(
     unconditionally would reintroduce the exact unbounded-wait bug class
     this module exists to close, this time inside the one place meant to
     guarantee *timeout* itself. Without a real ``proc.stdin`` to hand to a
-    thread, this falls back to the pre-fix shape (*input* on the first
-    call, ``None`` after) — safe there only because none of this
-    catalog's own ``Popen`` test doubles actually model a retry losing
-    unwritten input.
+    thread, this falls back to passing *input* on the first call and
+    ``None`` after — safe there only because none of this catalog's own
+    ``Popen`` test doubles actually model a retry losing unwritten input.
 
     *pgid*, when given (an isolated child -- see its own helper
     ``_isolated_pgid``), is repeat-killed (``_repeat_group_kill``) after
@@ -1399,8 +1396,8 @@ def _communicate_promptly(
     # models a `stdin` attribute at all (most of this catalog's own
     # subprocess.Popen fakes) must keep working exactly as before --
     # for those, falling back to passing *input* to `communicate()` on
-    # the first call only (the pre-fix shape) is safe, since none of
-    # them actually exercise a retry that would lose it.
+    # the first call only is safe, since none of them actually exercise
+    # a retry that would lose it.
     stdin = getattr(proc, "stdin", None)
     threaded_stdin = input is not None and stdin is not None
     if threaded_stdin:
