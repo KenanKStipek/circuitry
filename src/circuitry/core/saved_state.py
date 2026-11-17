@@ -186,20 +186,31 @@ def _json_key_sort_key(key: Any) -> tuple[str, int]:
 
 
 def canonical_key_order(value: Any) -> Any:
-    """*value* with every dict's keys reordered by the JSON text each key
-    would write, not by the keys themselves -- so a dict mixing key types
-    that ``<`` can't compare (e.g. a YAML 1.1 ``on:`` key read as the bool
-    ``True`` beside a string key) still sorts, deterministically, instead
-    of ``json.dumps(..., sort_keys=True)``'s own ``TypeError`` for that
-    case (#778; ``yaml.dump``, which this replaced in one caller, tolerated
-    it). For a dict whose keys are all the same type and all strings --
-    the common case -- the JSON text of a key is the key itself, so this
-    sorts exactly as ``sort_keys=True`` always did. The sort is stable, so
-    two keys with the same JSON text (and the same type) keep their
+    """*value* with every dict's keys sorted by the keys themselves --
+    ``sorted(d.items())``, exactly what ``json.dumps(..., sort_keys=True)``
+    already did, so an all-string dict sorts by text and an all-int (or
+    all-numeric, bools included: ``bool`` is an ``int`` subclass) dict
+    sorts numerically (``1, 2, 10``), never by each int's own decimal text
+    (``"1", "10", "2"``).
+
+    Only when that raises ``TypeError`` -- a dict mixing key types ``<``
+    can't compare, e.g. a YAML 1.1 ``on:`` key read as the bool ``True``
+    beside a string key -- does this fall back to the JSON text each key
+    would write, then its type's rank, as a deterministic order ``<``
+    itself has no opinion on (#778; ``yaml.dump``, which this replaced in
+    one caller, tolerated the mix; ``json.dumps(..., sort_keys=True)``
+    raised ``TypeError`` for it, same as the fallback itself does for a
+    key, such as a YAML 1.1 date, that JSON has no text for at all --
+    the same ``TypeError`` an un-pre-sorted ``--out`` write already
+    raises on one). Both sorts are stable, so two keys that tie (the
+    fallback's own JSON text, when their types also tie) keep their
     relative order.
     """
     if isinstance(value, dict):
-        items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
+        try:
+            items = sorted(value.items(), key=lambda kv: kv[0])
+        except TypeError:
+            items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
         return {k: canonical_key_order(v) for k, v in items}
     if isinstance(value, list):
         return [canonical_key_order(v) for v in value]

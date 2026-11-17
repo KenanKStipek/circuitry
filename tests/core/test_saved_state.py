@@ -359,6 +359,36 @@ def test_canonical_key_order_ranks_a_bool_before_a_string_of_the_same_text() -> 
     assert list(ordered.keys()) == [True, "true"]
 
 
+def test_canonical_key_order_sorts_all_int_keys_numerically() -> None:
+    """An all-int-keyed dict sorts by the int itself (1, 2, 10), not by
+    each key's own decimal text ("1", "10", "2") -- the regression #778
+    introduced and this fixes: raw ``sorted()`` compares ints numerically
+    before the JSON-text fallback is ever consulted.
+    """
+    mixed = {10: "ten", 1: "one", 2: "two"}
+    ordered = canonical_key_order(mixed)
+    assert list(ordered.keys()) == [1, 2, 10]
+
+
+def test_canonical_key_order_sorts_non_ascii_string_keys_by_code_point() -> None:
+    """An all-string dict sorts by raw ``sorted()``, the same code-point
+    order a plain ``json.dumps(..., sort_keys=True)`` already used.
+    """
+    mixed = {"ñ": 1, "z": 2, "a": 3, "é": 4}
+    ordered = canonical_key_order(mixed)
+    assert list(ordered.keys()) == ["a", "z", "é", "ñ"]
+
+
+def test_canonical_key_order_sorts_a_mix_of_int_and_string_keys_by_text_then_type() -> None:
+    """A dict mixing ints and strings can't compare with raw ``<`` --
+    falls back to the JSON-text-then-type order, same as the bool/string
+    mix above.
+    """
+    mixed = {2: "int-two", "1": "string-one", 1: "int-one"}
+    ordered = canonical_key_order(mixed)
+    assert list(ordered.keys()) == [1, "1", 2]
+
+
 def test_canonical_key_order_on_a_date_key_raises_typeerror_not_keyerror() -> None:
     """A key of a type JSON can't write at all (a YAML 1.1 date) must fail
     the same way the un-pre-sorted ``--out`` write already does --
