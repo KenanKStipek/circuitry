@@ -246,9 +246,15 @@ def test_upload_image_refuses_a_bad_port_before_reading_the_file(
 ) -> None:
     """Issue #818: `check_url` runs before the reference image is read
     (a bad scheme is already refused by `__post_init__`, so this uses an
-    out-of-range port instead to exercise the same ordering)."""
-    image = tmp_path / "ref.png"
-    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+    out-of-range port instead to exercise the same ordering). The image
+    path itself does not exist: `run_curl` would also refuse the port
+    before ever invoking curl, so a valid image can't tell this test
+    apart from a build that calls `check_url` too late, right before
+    `run_curl`, instead of before `_validate_image_path` reads the
+    file -- a missing path can, since `_validate_image_path` raises
+    `FileNotFoundError`, not the port's `ValueError`, if it ever runs
+    first."""
+    missing_image = tmp_path / "does-not-exist.png"
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         raise AssertionError("curl must never run for a refused port")
@@ -256,7 +262,7 @@ def test_upload_image_refuses_a_bad_port_before_reading_the_file(
     monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:99999")
     with pytest.raises(ValueError, match="invalid port"):
-        plugin._upload_image(image_path=str(image), timeout_seconds=10)
+        plugin._upload_image(image_path=str(missing_image), timeout_seconds=10)
 
 
 def test_check_url_travels_through_config_not_argv(monkeypatch: pytest.MonkeyPatch) -> None:
