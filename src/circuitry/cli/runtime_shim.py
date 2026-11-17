@@ -673,6 +673,21 @@ def run(req: RunRequest) -> RunResult:
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
+        # Every internal value this function and its callees install below
+        # lives on this same shared dict under an `_`-prefixed name, read
+        # straight back by trusting code elsewhere (`use`'s cycle guard,
+        # decomposition's depth ceiling, the capability ceiling/allowlist,
+        # ...) -- never a config/document setting a user can legitimately
+        # reach (checked: neither the config/profile schema nor
+        # `ORCHESTRATION_RUNTIME_KEYS` names one). Dropped in this one step,
+        # before anything below installs the real value, rather than a
+        # per-key pop list that would need to grow every time a new
+        # internal key does (#778): the user config, the project config, a
+        # profile, a document's `runtime:` block (trusted documents
+        # included) and `-e` can carry a `_`-prefixed key through to here,
+        # but never past it.
+        for _internal_key in [key for key in runtime_config if key.startswith("_")]:
+            del runtime_config[_internal_key]
         runtime_config[_CONCURRENCY_LIMITER_KEY] = concurrency_limiter
         # Root directory a `path:`-resolving `use` effect falls back to when
         # its target isn't absolute or cwd-relative — see `UseRuntime`, which
@@ -704,26 +719,17 @@ def run(req: RunRequest) -> RunResult:
             sorted(req.allow_capabilities) if req.allow_capabilities else []
         )
         # A run always starts at the top of its own call stack and at
-        # decomposition depth 0, whatever a stray `_use_call_stack`/
-        # `_decomposition_depth` a config, profile or trusted document's
-        # `runtime:` block happened to carry: `use`'s cycle guard
-        # (core.use.UseRuntime) and decomposition's depth ceiling
-        # (core.decompose) both read these straight out of this shared
-        # dict, so a user-supplied value here could fake or hide a `use`
-        # cycle, or skip decomposition by claiming the ceiling is already
-        # reached. Popped rather than reset to `[]`/`0`: both already
-        # default to the same empty/zero value when the key is simply
-        # absent (`decompose.py`'s own `runtime_config.get(_DEPTH_KEY, 0)`,
-        # `use.py`'s own `.get("_use_call_stack", [])`), and popping keeps
-        # this run's `effective_settings.runtime` snapshot the same shape
-        # as a run that was never targeted this way.
+        # decomposition depth 0: the blanket strip above already dropped
+        # any user-supplied `_use_call_stack`/`_decomposition_depth`, so
+        # `use`'s cycle guard (core.use.UseRuntime) and decomposition's
+        # depth ceiling (core.decompose), which both read these straight
+        # out of this shared dict, see only what this run itself appends --
+        # never a value that could fake or hide a `use` cycle, or skip
+        # decomposition by claiming the ceiling is already reached.
         # `_decomposition_planner_path` reaches `runtime_config` only
         # through `req.decomposition_planner_path` -- never through config,
         # a profile or a document's `runtime:` block, however trusted,
         # which could otherwise point it at an arbitrary file.
-        runtime_config.pop("_use_call_stack", None)
-        runtime_config.pop("_decomposition_depth", None)
-        runtime_config.pop("_decomposition_planner_path", None)
         if req.decomposition_planner_path is not None:
             runtime_config["_decomposition_planner_path"] = str(
                 req.decomposition_planner_path

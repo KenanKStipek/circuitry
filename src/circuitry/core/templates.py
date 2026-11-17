@@ -99,6 +99,7 @@ def push_bare_effect_scope(
     this container nests under the nearest entry already on the chain —
     a plain ``dynamic:`` block inside the same document.
     """
+    new_chain: tuple[tuple[str, frozenset[str]], ...]
     if isolated:
         new_chain = ((own_name, own_effect_names),)
     else:
