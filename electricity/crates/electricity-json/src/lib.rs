@@ -65,9 +65,11 @@
 //!   order CPython's sort produces for a `NaN` key is only done here for
 //!   dicts with fewer than 64 keys (`sorted_items`, in `writer.rs`).
 
+mod canonical;
 mod reader;
 mod writer;
 
+pub use canonical::{canonical_key_order, key_type_rank};
 pub use reader::{ReadError, load_json, loads};
 pub use writer::{Separators, WriteError, WriteMode, dumps, dumps_default_str, stringify_key};
 

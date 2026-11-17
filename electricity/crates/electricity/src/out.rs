@@ -70,62 +70,41 @@ pub fn render_state(state: &Value, pretty: bool) -> Result<String, electricity_j
 }
 
 /// `--pretty`'s own sort rule (issue #778): by the JSON text each dict key
-/// would write (via [`electricity_json::stringify_key`]), not
-/// `sort_keys=True`'s native Python-value comparison -- `sort_keys=True`
-/// raises `TypeError` for a dict mixing key types `<` can't compare, which
-/// `core/saved_state.py::dumps_saved_state` no longer does (issue #778):
-/// it pre-sorts the tree itself (`_canonical_key_order`) and writes the
-/// result with `sort_keys=False`. Ported the same way here: reorder every
-/// `Dict`'s entries first, then write with `sort_keys` always `false` (see
-/// [`pretty_write_mode`]) -- `WriteMode::PRETTY`'s own `sort_keys: true` is
-/// deliberately never used here, since other callers of that constant
-/// (`service`'s own saved record, matching `plugins/service.py`'s
-/// independent `json.dumps(record, indent=2, sort_keys=True)`) still mean
-/// literal `sort_keys=True`, unchanged by this issue.
+/// would write, then by [`electricity_json::key_type_rank`] as a tiebreak
+/// for two keys whose text is the same (e.g. the bool `true` beside the
+/// string `"true"`) -- never `sort_keys=True`'s native Python-value
+/// comparison, which raises `TypeError` for a dict mixing key types `<`
+/// can't compare, and never insertion order either. This is
+/// [`electricity_json::canonical_key_order`], the same helper
+/// `electricity-vm`'s reflector-plan digest uses and cof's own
+/// `core/saved_state.py::_canonical_key_order`/`_KEY_TYPE_RANK` matches --
+/// moved to `electricity-json` (issue #778) so this crate and
+/// `electricity-vm` share one copy rather than each keeping its own.
+/// `core/saved_state.py::dumps_saved_state` pre-sorts the tree itself this
+/// same way and writes the result with `sort_keys=False`; ported the same
+/// way here: reorder every `Dict`'s entries first, then write with
+/// `sort_keys` always `false` (see [`pretty_write_mode`]) --
+/// `WriteMode::PRETTY`'s own `sort_keys: true` is deliberately never used
+/// here, since other callers of that constant (`service`'s own saved
+/// record, matching `plugins/service.py`'s independent `json.dumps(record,
+/// indent=2, sort_keys=True)`) still mean literal `sort_keys=True`,
+/// unchanged by this issue.
 ///
 /// Not pretty: a borrow of *state* itself, no copy. A key that still can't
 /// be written at all (a `List`/`Dict`/`Bytes`/`Date`/`DateTime` key --
 /// never valid for `sort_keys=True` either) still raises, via the same
-/// [`electricity_json::stringify_key`] plain writing already calls.
+/// [`electricity_json::stringify_key`] plain writing already calls, since
+/// its own text is computed before its type rank is ever looked up.
 fn pretty_sort_if_needed(
     state: &Value,
     pretty: bool,
 ) -> Result<std::borrow::Cow<'_, Value>, electricity_json::WriteError> {
     if pretty {
-        Ok(std::borrow::Cow::Owned(canonical_key_order(state)?))
+        Ok(std::borrow::Cow::Owned(
+            electricity_json::canonical_key_order(state)?,
+        ))
     } else {
         Ok(std::borrow::Cow::Borrowed(state))
-    }
-}
-
-/// *value* with every `Dict`'s entries reordered by the JSON text each key
-/// would write, recursively -- see [`pretty_sort_if_needed`]. A stable
-/// sort, so two keys whose text is the same (e.g. the bool `true` beside
-/// the string `"true"`) keep their original (insertion) order, matching
-/// `core/saved_state.py::_canonical_key_order` exactly.
-fn canonical_key_order(value: &Value) -> Result<Value, electricity_json::WriteError> {
-    match value {
-        Value::Dict(dict) => {
-            let mut entries: Vec<(String, &Value, &Value)> = Vec::with_capacity(dict.len());
-            for (key, v) in dict.iter() {
-                let text = electricity_json::stringify_key(key)?;
-                entries.push((text, key, v));
-            }
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            let mut ordered = Dict::new();
-            for (_, key, v) in entries {
-                ordered.insert(key.clone(), canonical_key_order(v)?);
-            }
-            Ok(Value::Dict(ordered))
-        }
-        Value::List(items) => {
-            let mut ordered = Vec::with_capacity(items.len());
-            for item in items {
-                ordered.push(canonical_key_order(item)?);
-            }
-            Ok(Value::List(ordered))
-        }
-        other => Ok(other.clone()),
     }
 }
 
@@ -179,12 +158,59 @@ fn stdout_json_mode() -> electricity_json::WriteMode {
 /// the same as `cli/app.py::run_cmd`'s own `console.print_json(dumps_
 /// saved_state(...))` crashing uncaught rather than printing a
 /// placeholder and exiting 0.
+///
+/// Rich's `console.print_json` re-parses the JSON text it is handed
+/// (`json.loads`) before re-dumping it for syntax highlighting -- every
+/// JSON object key becomes a plain string there, so two dict entries
+/// whose *text* is the same (the bool `true` beside the string `"true"`)
+/// collapse into one entry, at the first one's position, holding the
+/// last one's value (issue #778's own report: cof's console does this
+/// on stdout, never on `--out`'s own file, which keeps both --
+/// [`render_state`] never calls [`collapse_duplicate_text_keys`]).
 pub fn render_state_for_stdout(
     state: &Value,
     pretty: bool,
 ) -> Result<String, electricity_json::WriteError> {
     let ordered = pretty_sort_if_needed(state, pretty)?;
-    electricity_json::dumps_default_str(ordered.as_ref(), stdout_json_mode())
+    let collapsed = collapse_duplicate_text_keys(ordered.as_ref())?;
+    electricity_json::dumps_default_str(&collapsed, stdout_json_mode())
+}
+
+/// *value* as a `console.print_json`-style `json.loads(json.dumps(value))`
+/// round trip would reshape it, without ever writing the intermediate
+/// text: every dict key becomes the plain JSON string [`electricity_json::
+/// stringify_key`] would have written for it, and two keys that write the
+/// same text collapse to the one `json.loads` would have kept -- the
+/// *first* one's position (an `IndexMap::insert` on an existing key
+/// updates the value in place rather than moving it), holding the *last*
+/// one's value (whichever of the two writes later wins the resulting
+/// Python dict's single slot for that text). See [`render_state_for_
+/// stdout`].
+fn collapse_duplicate_text_keys(value: &Value) -> Result<Value, electricity_json::WriteError> {
+    match value {
+        Value::Dict(dict) => {
+            let mut ordered: indexmap::IndexMap<String, Value> =
+                indexmap::IndexMap::with_capacity(dict.len());
+            for (key, v) in dict.iter() {
+                let text = electricity_json::stringify_key(key)?;
+                let collapsed_v = collapse_duplicate_text_keys(v)?;
+                ordered.insert(text, collapsed_v);
+            }
+            let mut out = Dict::new();
+            for (text, v) in ordered {
+                out.insert(Value::Str(text), v);
+            }
+            Ok(Value::Dict(out))
+        }
+        Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(collapse_duplicate_text_keys(item)?);
+            }
+            Ok(Value::List(out))
+        }
+        other => Ok(other.clone()),
+    }
 }
 
 /// Writes *state*'s saved form to *path*, creating its parent directory
@@ -278,16 +304,50 @@ mod tests {
     }
 
     #[test]
-    fn render_state_pretty_keeps_insertion_order_for_keys_with_equal_json_text() {
+    fn render_state_pretty_ranks_a_bool_before_a_string_with_equal_json_text() {
         // Two distinct, Python-unequal keys with the same JSON text --
         // the bool `True` and the string `"true"` are never equal in
-        // Python, so both survive as separate dict entries. A stable
-        // sort keeps them in their original order (issue #778).
+        // Python, so both survive as separate dict entries. Type rank
+        // (bool before str), not insertion order, breaks the tie here --
+        // the bool sorts first even though it was inserted second
+        // (issue #778, cof's own `test_canonical_key_order_ranks_a_bool_
+        // before_a_string_of_the_same_text`).
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("true".to_string()), Value::from(2i64));
+        dict.insert(Value::Bool(true), Value::from(1i64));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(rendered, "{\n  \"true\": 1,\n  \"true\": 2\n}\n");
+    }
+
+    #[test]
+    fn render_state_for_stdout_collapses_keys_with_equal_json_text_when_pretty() {
+        // cof's console re-parses the already-serialized JSON for
+        // syntax highlighting, so the bool `true` and the string
+        // `"true"` -- two distinct dict entries up to this point --
+        // collapse into cof's console's own single slot for the text
+        // `"true"`: the first one's position, the last one's value --
+        // `--pretty`'s own tie-break (bool before str) means the bool
+        // entry is serialized first here, so the string entry's value
+        // is the one that survives (issue #778).
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("true".to_string()), Value::from(2i64));
+        dict.insert(Value::Bool(true), Value::from(1i64));
+        let rendered = render_state_for_stdout(&Value::Dict(dict), true).unwrap();
+        assert_eq!(rendered, "{\n  \"true\": 2\n}");
+    }
+
+    #[test]
+    fn render_state_for_stdout_collapses_keys_with_equal_json_text_without_pretty() {
+        // The same collapse happens whether or not `--pretty` was given
+        // -- cof's console re-parses on every success print, not only a
+        // pretty one; only the key order differs (insertion order here,
+        // since `pretty` is false): the bool entry is serialized first
+        // (it was inserted first), so the string entry's value survives.
         let mut dict = IndexMap::new();
         dict.insert(Value::Bool(true), Value::from(1i64));
         dict.insert(Value::Str("true".to_string()), Value::from(2i64));
-        let rendered = render_state(&Value::Dict(dict), true).unwrap();
-        assert_eq!(rendered, "{\n  \"true\": 1,\n  \"true\": 2\n}\n");
+        let rendered = render_state_for_stdout(&Value::Dict(dict), false).unwrap();
+        assert_eq!(rendered, "{\n  \"true\": 2\n}");
     }
 
     #[test]
