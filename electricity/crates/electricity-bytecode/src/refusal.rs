@@ -1,41 +1,40 @@
-//! Lane A: a refusal walker over a compiled [`Program`] -- the first
-//! effect path the VM cannot yet run, so the CLI can refuse it up
-//! front, before any state is written, with the preview marker
-//! (issue #431's "Refused before the run starts" list) instead of
-//! discovering mid-run that nothing implements a `prompt`/`loop`/`use`/
-//! `reflector` effect, a model-mode condition or `expect`, or a `tool`
-//! effect naming an unsupported `provider:`. Every M1 lane has landed
-//! (issue #539): [`Supported::current`] sets every flag here `true`,
-//! so this walker's own tool-provider allow-list
+//! A refusal walker over a compiled [`Program`] -- the first effect
+//! path the VM cannot yet run, so the CLI can refuse it up front,
+//! before any state is written, with the preview marker (issue #431's
+//! "Refused before the run starts" list) instead of discovering
+//! mid-run that nothing implements a `prompt`/`loop`/`use`/`reflector`
+//! effect, a model-mode condition or `expect`, or a `tool` effect
+//! naming an unsupported `provider:`. Every M1 effect type is now
+//! supported (issue #539): [`Supported::current`] sets every flag
+//! here `true`, so this walker's own tool-provider allow-list
 //! ([`Supported::allows_provider`]) is the only check that can still
 //! fire against an ordinary, hand-written document -- a `tool` effect
 //! naming a provider outside the 13 native ones this build builds.
 //! A document's own top-level `adapter:` is no longer refused by this
-//! walker at all: lane R (#448, #495/#497) ported real preflight
-//! instead, which checks it the way `cof run` does
-//! (runtime-semantics.md §8.2); `RefusalReason::DocumentAdapter` only
-//! fires under [`Supported::m0`] now, kept for that golden test alone.
-//! `yield` and a document's own `prompts:` map are both supported as
-//! of lane P (#448, #487); an unexpanded `{{> name}}` partial
-//! reference is no longer a case this walker ever checks for at all
-//! (`RefusalReason::PartialReference` is gone, per that lane's own
-//! ruling: the run-time half of #406 removes the check from the
-//! walker entirely rather than ever gating it behind a flag).
+//! walker at all: real preflight (#448, #495/#497) checks it the way
+//! `cof run` does instead (runtime-semantics.md §8.2);
+//! `RefusalReason::DocumentAdapter` only fires under [`Supported::m0`]
+//! now, kept for that golden test alone. `yield` and a document's own
+//! `prompts:` map are both supported as of #448/#487; an unexpanded
+//! `{{> name}}` partial reference is no longer a case this walker
+//! ever checks for at all (`RefusalReason::PartialReference` is gone:
+//! the run-time half of #406 removes the check from the walker
+//! entirely rather than ever gating it behind a flag).
 //!
-//! **Capability-driven (issue #449's gate lane, item 9).** [`Supported`]
-//! is one flag per capability, plus the tool-provider allow-list, so
-//! each later M1 lane flips exactly one field of its own in one line
-//! (and, for a lane whose effect type can itself nest other effects --
+//! **Capability-driven (issue #449, item 9).** [`Supported`] is one
+//! flag per capability, plus the tool-provider allow-list, so each new
+//! M1 effect type flips exactly one field of its own in one line (and,
+//! for an effect type that can itself nest other effects --
 //! `reflector`'s own `effects:`, an `if`'s own branches -- the walker
-//! still recurses into it once that lane's flag is `true`, so an
-//! unsupported effect *inside* an otherwise-supported container is
-//! still found). The walker's own body does not otherwise need to
-//! change again after this lane: [`Supported::m0`] is the exact value
-//! M0 ran with (every flag `false`), pinned by this module's own
-//! golden tests below so no later lane can silently widen what the
-//! walker accepts without a reviewed, intentional flip. The one
-//! exception is the tool-provider check itself (issue #511): it also
-//! consults [`crate::plugin_names::PLUGIN_NAMES`] directly, not only
+//! still recurses into it once that flag is `true`, so an unsupported
+//! effect *inside* an otherwise-supported container is still found).
+//! The walker's own body does not otherwise need to change again as
+//! M1 effect types land: [`Supported::m0`] is the exact value M0 ran
+//! with (every flag `false`), pinned by this module's own golden
+//! tests below so no later change can silently widen what the walker
+//! accepts without a reviewed, intentional flip. The one exception is
+//! the tool-provider check itself (issue #511): it also consults
+//! [`crate::plugin_names::PLUGIN_NAMES`] directly, not only
 //! *supported*, to tell a cof plugin this build has no builder for yet
 //! (still refused, with the preview marker) from a provider that is
 //! not a cof plugin at all (never refused here -- it reaches the same
@@ -44,9 +43,8 @@
 //! one such flag, added by #451: a document naming a top-level
 //! `adapter:` is refused while it's `false`, the same as every other
 //! capability here, even though it stands in for a safety check this
-//! walker runs instead of real preflight rather than a VM capability a
-//! later M1 lane implements -- flipped only once lane R of #448 ports
-//! preflight for real.
+//! walker runs instead of real preflight rather than a VM capability --
+//! flipped only once real preflight (#448) lands for real.
 //!
 //! Walks the whole compiled tree in document order and stops at the
 //! first node [`RefusalReason`] names -- not a list of every offending
@@ -61,28 +59,27 @@ use crate::program::Program;
 use crate::region::{Condition, ExpectCondition, LoopSpec, Region};
 use electricity_value::Value;
 
-/// Lane C's own native providers (#448) -- process-backed, so they
-/// share one capability flag ([`Supported::tools_process`]) rather
-/// than a flag each, the way `supported_providers()` in `electricity`
-/// (lib)'s own `src/lib.rs` used to be one shared slice every one of
-/// lanes C/D1/D2/E would otherwise all edit (M1 gate seam round 2,
-/// item S3).
+/// The process-backed native providers (#448) -- they share one
+/// capability flag ([`Supported::tools_process`]) rather than a flag
+/// each, the way `supported_providers()` in `electricity` (lib)'s own
+/// `src/lib.rs` used to be one shared slice that adding any of them
+/// would otherwise have had to edit.
 const TOOLS_PROCESS_PROVIDERS: &[&str] = &["shell", "awk", "imagemagick", "ffmpeg"];
-/// Lane D1's own native providers (#448) -- pure Rust/stdlib, no
-/// subprocess.
+/// The Python-stdlib-backed native providers (#448) -- pure Rust/
+/// stdlib, no subprocess.
 const TOOLS_STDLIB_PROVIDERS: &[&str] = &["fs", "env_vars", "hash", "uuid", "clock"];
-/// Lane D2's own native provider (#448).
+/// The native `regex` provider (#448).
 const TOOL_REGEX_PROVIDERS: &[&str] = &["regex"];
-/// Lane E's own native provider (#448).
+/// The native `http` provider (#448).
 const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
-/// Lane L2's own native provider (#448) -- #448's decision 3: made a
-/// native tool (not refused behind the M2 plugin bridge like every
-/// other plugin) because decomposition's own bundled planner calls it.
-/// Its own flag, not folded into any of the four sets above (PR #454):
-/// L2's effect type isn't process-, stdlib-,
-/// regex- or HTTP-backed, so it would otherwise force L2 to add a
-/// field to this already-final struct rather than flip one lane A
-/// already named for it.
+/// The native `validate_yaml` provider (#448) -- #448's decision 3:
+/// made a native tool (not refused behind the M2 plugin bridge like
+/// every other plugin) because decomposition's own bundled planner
+/// calls it. Its own flag, not folded into any of the four sets above
+/// (PR #454): its effect type isn't process-, stdlib-, regex- or
+/// HTTP-backed, so it would otherwise force a field onto this
+/// already-final struct rather than reuse the flag already named for
+/// it.
 const TOOL_VALIDATE_YAML_PROVIDERS: &[&str] = &["validate_yaml"];
 /// Issue #723's own native provider -- a `cel` tool effect, built
 /// straight off the condition-evaluation CEL already wired for `if`/
@@ -150,26 +147,25 @@ pub enum RefusalReason {
     /// (`cli/runtime_shim.py`, `req.config is not None`); M0-H ports
     /// none of that yet, so a document naming one is refused here
     /// instead of silently running without the check Python would have
-    /// failed it on, until lane R of #448 (M1's run wiring v2) ports
-    /// preflight and flips [`Supported::preflight`] for the lanes that
-    /// no longer need this stand-in. The adapter name is carried
+    /// failed it on, until #448's run-wiring work ports preflight and
+    /// flips [`Supported::preflight`] for the effect types that no
+    /// longer need this stand-in. The adapter name is carried
     /// already `.strip()`'d, the same text `walk_orchestration_refs`
     /// itself adds to that set ([`electricity_value::pycompat::py_strip`]
     /// -- Python's exact `str.strip()` whitespace set, not
     /// `electricity-compiler::pipeline::is_python_strip_whitespace`'s
-    /// own ASCII-only approximation; issue #449's gate lane added the
-    /// shared, non-approximating version this now reuses instead of
-    /// keeping its own copy).
+    /// own ASCII-only approximation; issue #449 added the shared,
+    /// non-approximating version this now reuses instead of keeping
+    /// its own copy).
     DocumentAdapter(String),
     /// This run's own effective config enables complexity
     /// *decomposition* (`electricity_config::DecompositionSettings::
     /// enabled`), and [`Supported::decomposition`] is `false` -- issue
-    /// #516 (M1-K2)'s own narrowing of what used to be this variant's
-    /// job: K2 wires scoring
-    /// and routing into `prompt` in that same lane, so a config that
-    /// only turns those two on now runs instead of refusing; only
-    /// decomposition (L2's own job) still refuses up front with the
-    /// preview marker. Not a [`Supported`] flag `first_unsupported` can
+    /// #516's own narrowing of what used to be this variant's job:
+    /// #516 wires scoring and routing into `prompt` directly, so a
+    /// config that only turns those two on now runs instead of
+    /// refusing; only decomposition (#522's own job) still refuses up
+    /// front with the preview marker. Not a [`Supported`] flag `first_unsupported` can
     /// read off *program* alone -- complexity settings come from the
     /// config/document `runtime:` merge, not the document's own
     /// compiled tree -- so the caller passes whether this run's own
@@ -180,7 +176,7 @@ pub enum RefusalReason {
     /// explicit `provider:`/fallback token), discovered at dispatch
     /// time rather than by this static walker, named a Circuitry-known
     /// adapter (`electricity_vm::adapter_names::ADAPTER_NAMES`) this
-    /// build has no builder for at all (issue #498, ruling 4). Never
+    /// build has no builder for at all (issue #498). Never
     /// produced by [`first_unsupported`] itself -- `electricity_vm::
     /// exec::prompt::execute_prompt` constructs this directly, since
     /// deciding "unbuildable" needs the run's own
@@ -207,44 +203,48 @@ pub struct Refusal {
 }
 
 /// One flag per capability [`first_unsupported`] can refuse, plus the
-/// tool-provider allow-list -- issue #449's gate lane, item 9. Each
-/// field names the M1 lane that ever flips it from `false` to `true`;
-/// the walker's own body reads every field exactly once and never
-/// needs another lane-specific branch added to it.
+/// tool-provider allow-list (issue #449). Each field is named for the
+/// effect type or provider set it gates; the walker's own body reads
+/// every field exactly once and never needs another branch added to
+/// it.
 #[derive(Debug, Clone, Copy)]
 pub struct Supported<'a> {
-    /// M1-G.
+    /// Whether a `prompt` effect is supported.
     pub prompt: bool,
-    /// M1-H.
+    /// Whether a `loop` effect is supported.
     pub loop_: bool,
-    /// M1-I.
+    /// Whether a `use` effect is supported.
     pub use_: bool,
-    /// M1-P.
+    /// Whether a `yield` effect is supported.
     pub yield_: bool,
-    /// M1-L1.
+    /// Whether a `reflector` effect is supported.
     pub reflector: bool,
-    /// M1-G2.
+    /// Whether a model-mode `if`/`while` condition is supported.
     pub model_condition: bool,
-    /// M1-G2.
+    /// Whether a model-mode `expect` is supported.
     pub model_expect: bool,
-    /// M1-P (the document-level `prompts:` map `{{> name}}` expands).
+    /// Whether the document-level `prompts:` map `{{> name}}` expands
+    /// is supported.
     pub declared_prompts: bool,
-    /// Lane R of #448 (M1's run wiring v2): until then, a document
-    /// naming a top-level `adapter:` is refused regardless of every
-    /// other flag here, standing in for the preflight check M0-H never
-    /// ran (#451).
+    /// Whether real preflight (#448, #495) has replaced this. Until
+    /// then, a document naming a top-level `adapter:` is refused
+    /// regardless of every other flag here, standing in for the
+    /// preflight check M0-H never ran (#451).
     pub preflight: bool,
-    /// Lane C (#448): the process-backed providers (`shell`, `awk`,
-    /// `imagemagick`, `ffmpeg` -- [`TOOLS_PROCESS_PROVIDERS`]).
+    /// Whether the process-backed providers (`shell`, `awk`,
+    /// `imagemagick`, `ffmpeg` -- [`TOOLS_PROCESS_PROVIDERS`]) are
+    /// supported (#448).
     pub tools_process: bool,
-    /// Lane D1 (#448): the Python-stdlib-backed providers (`fs`,
-    /// `env_vars`, `hash`, `uuid`, `clock` -- [`TOOLS_STDLIB_PROVIDERS`]).
+    /// Whether the Python-stdlib-backed providers (`fs`,
+    /// `env_vars`, `hash`, `uuid`, `clock` -- [`TOOLS_STDLIB_PROVIDERS`])
+    /// are supported (#448).
     pub tools_stdlib: bool,
-    /// Lane D2 (#448): `regex` ([`TOOL_REGEX_PROVIDERS`]).
+    /// Whether `regex` ([`TOOL_REGEX_PROVIDERS`]) is supported (#448).
     pub tool_regex: bool,
-    /// Lane E (#448): `http` ([`TOOL_HTTP_PROVIDERS`]).
+    /// Whether `http` ([`TOOL_HTTP_PROVIDERS`]) is supported (#448).
     pub tool_http: bool,
-    /// Lane L2 (#448): `validate_yaml` ([`TOOL_VALIDATE_YAML_PROVIDERS`]).
+    /// Whether `validate_yaml` ([`TOOL_VALIDATE_YAML_PROVIDERS`]) is
+    /// supported (#448).
     pub tool_validate_yaml: bool,
     /// Issue #723: `cel` ([`TOOL_CEL_PROVIDERS`]).
     pub tool_cel: bool,
@@ -256,20 +256,19 @@ pub struct Supported<'a> {
     pub tool_service: bool,
     /// Issue #720: `agent` ([`TOOL_AGENT_PROVIDERS`]).
     pub tool_agent: bool,
-    /// Lane K2 (#448, #516): scoring and routing are wired into
-    /// `prompt` from this lane on -- read nowhere by the walker itself
-    /// (nothing in a compiled [`Program`] says "this effect is
-    /// scored"; that's driven by the run's own effective
-    /// `runtime.complexity`, resolved outside this crate), kept purely
-    /// as documentation of which M1 lane turned scoring/routing on.
-    /// [`Supported::decomposition`] is the flag the walker actually
-    /// reads, via [`RefusalReason::DecompositionEnabled`].
+    /// Whether scoring and routing are wired into `prompt` (#448,
+    /// #516) -- read nowhere by the walker itself (nothing in a
+    /// compiled [`Program`] says "this effect is scored"; that's
+    /// driven by the run's own effective `runtime.complexity`,
+    /// resolved outside this crate), kept purely as a record of when
+    /// scoring/routing turned on. [`Supported::decomposition`] is the
+    /// flag the walker actually reads, via [`RefusalReason::
+    /// DecompositionEnabled`].
     pub complexity: bool,
-    /// Lane L2 (#448): this run's own effective config may enable
-    /// complexity *decomposition*
-    /// (`RefusalReason::DecompositionEnabled`) -- the narrowed
-    /// successor to what [`Supported::complexity`] used to gate (issue
-    /// #516 §4(b)).
+    /// Whether this run's own effective config may enable complexity
+    /// *decomposition* (#448) (`RefusalReason::DecompositionEnabled`)
+    /// -- the narrowed successor to what [`Supported::complexity`]
+    /// used to gate (issue #516 §4(b)).
     pub decomposition: bool,
     /// Issue #725: `runtime.secrets.<name>` and `{secret: <name>}`,
     /// resolved at dispatch, in an `http` effect's `params.headers` or a
@@ -285,10 +284,10 @@ pub struct Supported<'a> {
     /// Extra provider names accepted on top of `json` (always on) and
     /// the four capability flags above -- only ever non-empty for the
     /// `test-tools` cargo feature's own `sleep`/`fail`, which don't
-    /// belong to any M1 lane's own provider set (M1 gate seam round 2,
-    /// item S3: this field used to be the *entire* allow-list,
-    /// `electricity` (lib)'s own `supported_providers()`, one shared
-    /// slice every one of lanes C/D1/D2/E would otherwise all edit).
+    /// belong to any native provider set above (this field used to be
+    /// the *entire* allow-list, `electricity` (lib)'s own
+    /// `supported_providers()`, one shared slice that every provider
+    /// set added here would otherwise have had to edit).
     pub providers: &'a [&'a str],
 }
 
@@ -334,52 +333,52 @@ impl<'a> Supported<'a> {
     /// `electricity` (lib)'s own run wiring passes to
     /// [`first_unsupported`] (PR #454: without
     /// a named function for "what this build can really run today",
-    /// every M1 lane would otherwise flip its own flag in the same
-    /// bare `Supported::m0(...)` call expression at that one call
-    /// site, each PR's own diff colliding with every other lane's).
-    /// Each M1 lane flips exactly one field here, in its own PR, never
-    /// [`Supported::m0`] (pinned by this module's own golden tests to
-    /// the exact M0 value forever) -- one field per line, with a
-    /// `// lane X (#448)` comment line of its own between each pair of
-    /// flags (M1 gate seam round 2, item S3), so two lanes landing
-    /// around the same time, each flipping a different flag, touch
-    /// neither the same line nor an adjacent one -- a git merge of
-    /// both lanes' own one-line diffs can never conflict. *providers*
-    /// is still only ever the `test-tools` feature's own extras;
-    /// `tools_process`/`tools_stdlib`/`tool_regex`/`tool_http` replace
-    /// what used to be `electricity` (lib)'s own `supported_providers()`
-    /// -- one shared slice every one of lanes C/D1/D2/E would
-    /// otherwise all have to edit, each on the very same line. Identical
-    /// to [`Supported::m0`]'s own value until the first M1 lane lands.
+    /// every new M1 effect type would otherwise flip its own flag in
+    /// the same bare `Supported::m0(...)` call expression at that one
+    /// call site, each PR's own diff colliding with every other one's).
+    /// Each M1 effect type flips exactly one field here, in its own
+    /// PR, never [`Supported::m0`] (pinned by this module's own golden
+    /// tests to the exact M0 value forever) -- one field per line,
+    /// with a comment of its own between each pair of flags naming the
+    /// issue that flipped it, so two changes landing around the same
+    /// time, each flipping a different flag, touch neither the same
+    /// line nor an adjacent one -- a git merge of both one-line diffs
+    /// can never conflict. *providers* is still only ever the
+    /// `test-tools` feature's own extras; `tools_process`/
+    /// `tools_stdlib`/`tool_regex`/`tool_http` replace what used to be
+    /// `electricity` (lib)'s own `supported_providers()` -- one shared
+    /// slice that every native provider set would otherwise have had
+    /// to edit, each on the very same line. Identical to [`Supported::
+    /// m0`]'s own value until the first M1 effect type landed.
     pub fn current(providers: &'a [&'a str]) -> Self {
         Supported {
-            // lane G (#448, #498)
+            // issue #448, #498
             prompt: true,
-            // lane H (#448)
+            // issue #448
             loop_: true,
-            // lane I (#448, #469)
+            // issue #448, #469
             use_: true,
-            // lane P (#448, #487)
+            // issue #448, #487
             yield_: true,
-            // lane L1 (#448, #506)
+            // issue #448, #506
             reflector: true,
-            // lane G2 (#448, #513)
+            // issue #448, #513
             model_condition: true,
-            // lane G2 (#448, #513)
+            // issue #448, #513
             model_expect: true,
-            // lane P (#448, #487)
+            // issue #448, #487
             declared_prompts: true,
-            // lane R (#448, #495)
+            // issue #448, #495
             preflight: true,
-            // lane C (#448)
+            // issue #448
             tools_process: true,
-            // lane D1 (#460)
+            // issue #460
             tools_stdlib: true,
-            // lane D2 (#448, #479)
+            // issue #448, #479
             tool_regex: true,
-            // lane E (#448, #485)
+            // issue #448, #485
             tool_http: true,
-            // lane L2a (#448, #521)
+            // issue #448, #521
             tool_validate_yaml: true,
             // issue #723
             tool_cel: true,
@@ -391,9 +390,9 @@ impl<'a> Supported<'a> {
             tool_service: true,
             // issue #720
             tool_agent: true,
-            // lane K2 (#448, #516)
+            // issue #448, #516
             complexity: true,
-            // lane L2b (#448, #522)
+            // issue #448, #522
             decomposition: true,
             // issue #725
             secrets: true,
@@ -467,7 +466,7 @@ pub fn first_unsupported(
 
 /// A disabled subtree (`op.enabled == false`, only ever set by a
 /// profile's own per-effect `enabled: false` -- `electricity_compiler::
-/// overrides::apply_effect_overrides`, lane J2, issue #518) never
+/// overrides::apply_effect_overrides`, issue #518) never
 /// executes, so it can't need a capability this build doesn't have:
 /// never refused, regardless of what it contains.
 fn walk_op(op: &Op, supported: &Supported<'_>) -> Option<Refusal> {
@@ -500,11 +499,10 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                 return refusal(path, RefusalReason::Use);
             }
             // Same `expect: {mode: model, ...}` check as `LeafKind::
-            // Tool` below -- S4(b) (M1 gate seam round 2): this walker
-            // never read `UseOp::expect` at all, so a `use` effect with
-            // a model-mode `expect:` was wrongly accepted the moment
-            // `use_` turned on, before lane G2 ever flips
-            // `model_expect` of its own.
+            // Tool` below: this walker never read `UseOp::expect` at
+            // all, so a `use` effect with a model-mode `expect:` was
+            // wrongly accepted the moment `use_` turned on, before
+            // `model_expect` had its own flag flipped.
             if !supported.model_expect
                 && matches!(&use_op.expect, Some(ExpectCondition::Model { .. }))
             {
@@ -671,19 +669,17 @@ fn walk_region(path: &EffectPath, region: &Region, supported: &Supported<'_>) ->
         Region::Loop { spec, body, .. } => {
             if !supported.loop_ {
                 // A `loop` is refused outright regardless of its own
-                // body or `while:` condition's mode -- M1-H's own
-                // milestone, not a narrower per-field gap this walker's
-                // `{{>`/model-mode checks would otherwise also catch
-                // inside it.
+                // body or `while:` condition's mode, not a narrower
+                // per-field gap this walker's `{{>`/model-mode checks
+                // would otherwise also catch inside it.
                 return refusal(path, RefusalReason::Loop);
             }
-            // S4(a) (M1 gate seam round 2): once `loop_` is on, a
-            // `while:` condition in `mode: model` needs the same
-            // `model_condition` check `Region::If`'s own `cond` gets
-            // above -- this walker never read `LoopSpec::While`'s own
-            // `Condition` at all, so it was wrongly accepted the
-            // moment `loop_` turned on, before lane G2 ever flips
-            // `model_condition` of its own.
+            // Once `loop_` is on, a `while:` condition in `mode: model`
+            // needs the same `model_condition` check `Region::If`'s
+            // own `cond` gets above -- this walker never read
+            // `LoopSpec::While`'s own `Condition` at all, so it was
+            // wrongly accepted the moment `loop_` turned on, before
+            // `model_condition` had its own flag flipped.
             if let LoopSpec::While(cond) = spec {
                 if !supported.model_condition && matches!(cond, Condition::Model { .. }) {
                     return refusal(path, RefusalReason::ModelCondition);
@@ -720,65 +716,66 @@ mod tests {
     #[test]
     fn current_matches_m0_until_the_first_m1_lane_lands() {
         // `Supported::current` is the single
-        // place every M1 lane flips its own flag, never `Supported::m0`
-        // (pinned forever to the exact M0 value by the golden tests
-        // below) -- now that lanes C (#459), D1 (#460) and H (#448,
-        // #461) have landed, `current` and `m0` diverge on
+        // place every M1 effect type flips its own flag, never
+        // `Supported::m0` (pinned forever to the exact M0 value by the
+        // golden tests below) -- now that process tools (#459), stdlib
+        // tools (#460) and loop support (#448, #461) have landed,
+        // `current` and `m0` diverge on
         // `tools_process`/`tools_stdlib`/`loop_`; every other field
         // must still agree field for field. `current.loop_` asserts
         // `true` directly instead of comparing against `m0.loop_`,
         // which stays pinned to `false` forever.
         let current = Supported::current(&["json"]);
         let m0 = Supported::m0(&["json"]);
-        // lane G (#448, #498): `prompt` is `true` now -- asserted
-        // directly rather than against `m0.prompt` (always `false`),
-        // the one field this lane's own PR flips.
+        // #448, #498: `prompt` is `true` now -- asserted directly
+        // rather than against `m0.prompt` (always `false`), the one
+        // field that change flips.
         assert!(current.prompt);
         assert!(!m0.prompt);
         assert!(current.loop_);
         assert!(!m0.loop_);
-        // lane I (#448, #469): `use_` is `true` now -- asserted
-        // directly rather than against `m0.use_` (always `false`),
-        // the one field this lane's own PR flips.
+        // #448, #469: `use_` is `true` now -- asserted directly rather
+        // than against `m0.use_` (always `false`), the one field that
+        // change flips.
         assert!(current.use_);
-        // lane P (#448, #487): `yield_`/`declared_prompts` are `true`
-        // now -- asserted directly rather than against `m0.yield_`/
-        // `m0.declared_prompts` (always `false`), the two fields this
-        // lane's own PR flips. No other field changes.
+        // #448, #487: `yield_`/`declared_prompts` are `true` now --
+        // asserted directly rather than against `m0.yield_`/
+        // `m0.declared_prompts` (always `false`), the two fields that
+        // change flips. No other field changes.
         assert!(current.yield_);
         assert!(!m0.yield_);
-        // lane L1 (#448, #506): `reflector` is `true` now -- asserted
-        // directly rather than against `m0.reflector` (always
-        // `false`), the one field this lane's own PR flips.
+        // #448, #506: `reflector` is `true` now -- asserted directly
+        // rather than against `m0.reflector` (always `false`), the
+        // one field that change flips.
         assert!(current.reflector);
-        // lane G2 (#448, #513): `model_condition`/`model_expect` are
-        // `true` now -- asserted directly rather than against
+        // #448, #513: `model_condition`/`model_expect` are `true` now
+        // -- asserted directly rather than against
         // `m0.model_condition`/`m0.model_expect` (always `false`), the
-        // two fields this lane's own PR flips.
+        // two fields that change flips.
         assert!(current.model_condition);
         assert!(!m0.model_condition);
         assert!(current.model_expect);
         assert!(!m0.model_expect);
         assert!(current.declared_prompts);
         assert!(!m0.declared_prompts);
-        // lane R (#448, #495): `preflight` is `true` now -- asserted
-        // directly rather than against `m0.preflight` (always `false`),
-        // the one field this lane's own PR flips.
+        // #448, #495: `preflight` is `true` now -- asserted directly
+        // rather than against `m0.preflight` (always `false`), the one
+        // field that change flips.
         assert!(current.preflight);
         assert!(!m0.preflight);
         assert!(current.tools_process);
         assert!(current.tools_stdlib);
-        // lane D2 (#448, #479): `tool_regex` is `true` now -- asserted
-        // directly rather than against `m0.tool_regex` (always
-        // `false`), the one field that lane's own PR flipped.
+        // #448, #479: `tool_regex` is `true` now -- asserted directly
+        // rather than against `m0.tool_regex` (always `false`), the
+        // one field that change flipped.
         assert!(current.tool_regex);
-        // lane E (#448, #485): `tool_http` is `true` now -- asserted
-        // directly rather than against `m0.tool_http` (always `false`),
-        // the one field this lane's own PR flips.
+        // #448, #485: `tool_http` is `true` now -- asserted directly
+        // rather than against `m0.tool_http` (always `false`), the one
+        // field that change flips.
         assert!(current.tool_http);
-        // lane L2a (#448, #521) -- `m0.tool_validate_yaml` is always
-        // `false`, so this asserts directly rather than against it, the
-        // same convention as `tool_http` above.
+        // #448, #521 -- `m0.tool_validate_yaml` is always `false`, so
+        // this asserts directly rather than against it, the same
+        // convention as `tool_http` above.
         assert!(current.tool_validate_yaml);
         // issue #722: `tool_gh` is `true` now -- asserted directly
         // rather than against `m0.tool_gh` (always `false`), the one
@@ -790,14 +787,14 @@ mod tests {
         // one field this change flips.
         assert!(current.tool_service);
         assert!(!m0.tool_service);
-        // lane K2 (#448, #516): `complexity` is `true` now -- asserted
-        // directly rather than against `m0.complexity` (always
-        // `false`), the one field this lane's own PR flips.
+        // #448, #516: `complexity` is `true` now -- asserted directly
+        // rather than against `m0.complexity` (always `false`), the
+        // one field that change flips.
         assert!(current.complexity);
         assert!(!m0.complexity);
-        // lane L2b (#448, #522): `decomposition` is `true` now --
-        // asserted directly rather than against `m0.decomposition`
-        // (always `false`), the one field this lane's own PR flips.
+        // #448, #522: `decomposition` is `true` now -- asserted
+        // directly rather than against `m0.decomposition` (always
+        // `false`), the one field that change flips.
         assert!(current.decomposition);
         assert!(!m0.decomposition);
     }
@@ -944,7 +941,7 @@ mod tests {
 
     #[test]
     fn a_shell_provider_is_accepted_once_tools_process_is_set() {
-        // S3: `shell`/`awk`/`imagemagick`/`ffmpeg` share lane C's own
+        // `shell`/`awk`/`imagemagick`/`ffmpeg` share the
         // `tools_process` flag, not an individual entry in `providers`.
         let tool = leaf_op(
             EffectPath::root().push_name("run"),
@@ -2130,9 +2127,9 @@ mod tests {
 
     #[test]
     fn a_use_expect_in_model_mode_is_refused_even_once_use_is_supported() {
-        // S4(b) (M1 gate seam round 2): `UseOp::expect` was never read
-        // by this walker at all -- a `use` effect with a model-mode
-        // `expect:` was wrongly accepted the instant `use_` turned on.
+        // `UseOp::expect` was never read by this walker at all -- a
+        // `use` effect with a model-mode `expect:` was wrongly
+        // accepted the instant `use_` turned on.
         let use_path = EffectPath::root().push_name("sub");
         let use_op = leaf_op(
             use_path.clone(),
@@ -2192,10 +2189,9 @@ mod tests {
 
     #[test]
     fn a_while_loops_model_mode_condition_is_refused_even_once_loop_is_supported() {
-        // S4(a) (M1 gate seam round 2): `LoopSpec::While`'s own
-        // `Condition` was never read by this walker at all -- a
-        // `while` loop in `mode: model` was wrongly accepted the
-        // instant `loop_` turned on.
+        // `LoopSpec::While`'s own `Condition` was never read by this
+        // walker at all -- a `while` loop in `mode: model` was wrongly
+        // accepted the instant `loop_` turned on.
         let loop_op = Op {
             path: EffectPath::root().push_name("poll"),
             name: Some("poll".to_string()),
@@ -2421,7 +2417,7 @@ mod tests {
         assert_eq!(refusal.path, use_path);
     }
 
-    /// Issue #518 (lane J2): a disabled subtree never executes, so it
+    /// Issue #518: a disabled subtree never executes, so it
     /// can't need a capability this build doesn't have -- a profile's
     /// own `enabled: false` (`electricity_compiler::overrides::
     /// apply_effect_overrides`) is the only thing that ever sets
