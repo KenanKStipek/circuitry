@@ -183,7 +183,7 @@ And when a run diverges from what you expected, `inspect_divergence_paths(state)
 
 ## Anti-patterns
 
-**Bare keys.** `{{issue}}` for a caller input, `each: {in: failures}`, `state.labels` in CEL. The document has three namespaces; spell them. Undeclared bare template keys are tolerated for backward compatibility, but nothing in this guidebook writes one, and a declared input written bare is an error.
+**Bare keys.** `{{issue}}` for a caller input, `each: {in: failures}`, `state.labels` in CEL. The document has three namespaces; spell them. Undeclared bare template keys are tolerated for backward compatibility, but nothing in this guidebook writes one, and a declared input written bare is an error -- unless an effect in scope shares the input's own name, in which case the effect wins and the input is unreachable bare at all.
 
 **Reading a container as if it were a leaf.** `prime.context.value` is `true` when the dynamic finished; it is not the search results. `prime.diagnoses.value` is the loop's iteration count and termination reason; it is not the collected diagnoses.
 

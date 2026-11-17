@@ -169,8 +169,11 @@ raises on things the schema itself cannot express:
 - A bare `{{name}}` template reference that collides with a name this
   document's own `interface.inputs` declares (`validate_bare_input_refs`,
   `core/state_ns.py:221`) — caller inputs live under `input.`, so a bare
-  reference to a declared input name is always the author's mistake, not a
-  loop/sibling binding (those are never declared in `interface.inputs`).
+  reference to a declared input name is the author's mistake, not a
+  loop/sibling binding (those are never declared in `interface.inputs`),
+  *unless* an effect in scope also has that name: the effect wins (§3.1's
+  fallback), the declared input is unreachable bare at all from there, and
+  this check does not fire.
 - Effect-name validation (`_validate_name`, `core/compiler.py:54`): non-empty,
   no leading/trailing/internal whitespace, no `.`, not the pattern `iter_\d+`
   (reserved for loop passes), not one of `{value, meta, input, prime, runtime}`
@@ -440,12 +443,33 @@ still simply `store.state` **by reference**, unchanged by #778. Bare
 resolution instead lives in the template renderer itself
 (`core/templates.py::_get_key`): once every scope `scope_ctx` would already
 check has missed — the container's own loop/`if` overlay, then `prime`,
-`runtime`, `input` and every other existing context key — a bare head
-naming an effect of the *nearest enclosing effect container* (the document
-root, a chain/tree `dynamic`, a `use` child's own root, `finally:`, a
-reflector's or decomposition plan's own root; nearest first) resolves to
-that container's own dotted path plus the rest of the reference, through
-the exact same live lookup the dotted spelling already uses. Bare equals
+`runtime`, `input` and every other existing context key, including an
+ancestor dynamic's own self-alias (below) — a bare head naming an effect of
+the *nearest enclosing effect container* resolves.
+
+"The container's own effect names" (`core/dynamic.py::_region_effect_names`)
+is every direct child's declared name, plus — because it writes straight
+into this container's own namespace, having none of its own — the names
+inside an *unnamed* (transparent) `if`'s own `then`/`else` or an unnamed
+loop's own body, at any depth through further unnamed `if`/loop nesting. A
+*named* `if`/loop owns its own node (the ordinary `scope_ctx` overlay
+above), so its children stay out of this set.
+
+Each container on the chain (the document root, a chain/tree `dynamic`, a
+`use` child's own root, `finally:`, a reflector's or decomposition plan's
+own root; nearest first) resolves a bare head naming one of its own names
+through **its own self-alias** — its declared name (`"prime"` for the
+document root and a `use`/reflector/decomposition child's own root,
+otherwise the dynamic's own name) — which `core/dynamic.py` installs as a
+flat, live top-level key in `ctx` for every dynamic, nested or not
+(`ctx[self.defn.name] = dyn`, widening whatever `ctx` this dynamic itself
+received). This is deliberately *not* a dotted path recomputed from the
+container's place in the chain (e.g. `"prime.outer.d"`): that path is only
+live while this container's own render is the top-level one, and would miss
+or read a different node while a loop body, an `if` branch or a tree branch
+is running it (issue #778, review finding 7) — the self-alias key is always
+live instead, since it's the same key `ctx[self.defn.name]` every render of
+this container's own descendants already widens forward. Bare equals
 dotted by construction: live, after `resume: restart`, with saved/resumed
 state, and inside a `flow: tree` branch's own snapshot. Confirmed live:
 
@@ -481,7 +505,13 @@ sections `{{^x}}...{{/x}}` render iff `x` is falsy/empty/absent. Dotted names
 (`{{a.b.c}}`) walk nested dicts and render empty on any missing/absent
 segment — never an error (confirmed: `{{a.b.c}}` on `{"a":{"b":{}}}` → `""`).
 A template referencing a key entirely absent from context also renders empty,
-not an error (confirmed: `{{missing}}` on `{}` → `""`).
+not an error (confirmed: `{{missing}}` on `{}` → `""`). A bare `{{name}}`
+whose first segment names an effect of an enclosing container is not
+"entirely absent" this way even when every other scope above misses on it:
+once that happens, it falls back to that container's own dotted path
+(nearest enclosing container first) before rendering empty for real — see
+§2.4's "Bare sibling references" and §3.4's `{{> name}}`/`inputs:` overlay
+note.
 
 ### 3.2 Python value → text
 

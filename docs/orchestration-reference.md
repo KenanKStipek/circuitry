@@ -733,20 +733,43 @@ The bare form above (`{{<step>.value}}` for `{{prime.<step>.value}}`) works
 the same way in *every* container, not only inside a loop body or an `if`
 branch: at the document root, inside a `dynamic` (`chain` or `tree`), inside
 a `use` effect's own child document, in a `finally:` block, and inside a
-reflector's or a decomposition plan's own generated effects. A bare head
-naming an effect of the nearest enclosing container resolves exactly as the
-dotted form at that point would — live, after `resume: restart`, with saved
-or resumed state, and inside a `flow: tree` branch's own snapshot — because
-it is the same lookup, consulted only once Mustache's own scope chain
-(the container's own effects, then each enclosing container's, nearest
-first) has missed on every other name: a loop binding, `iter`, `input`,
-`prime`, `runtime` and every other existing context key always win first,
-and a loop body's/`if` branch's own sibling still shadows an outer name
-exactly as above. Inside a Mustache section, the section's own items are
-checked first; only a name the items lack falls back to an outer
-effect's name. As with the loop-body form, the bare spelling is accepted,
-not preferred, for the same reason: it can collide with a user-supplied
-state key, and `prime.`-prefixed cannot.
+reflector's or a decomposition plan's own generated effects. "The
+container's own effects" includes an unnamed (transparent) `if`'s own
+branches and an unnamed loop's own body, at any depth through further
+unnamed nesting — they write their own effects straight into the enclosing
+container's namespace, having none of their own, so a bare reference to one
+of them resolves from anywhere in that namespace, not only from inside the
+`if`/loop itself.
+
+A bare head naming an effect of the nearest enclosing container resolves
+exactly as the dotted form at that point would — live, after `resume:
+restart`, with saved or resumed state, and inside a `flow: tree` branch's
+own snapshot. A nested container (any `dynamic` but the document's own
+root, a `use`/reflector/decomposition child's own root) resolves through
+its own self-alias — its declared name, always a live top-level context key
+while it renders its own children's templates — rather than a dotted path
+computed from its place in the chain, which would not be live while a loop
+body, an `if` branch or a tree branch is running it; the document's own
+root and a `use`/reflector/decomposition child's own root resolve through
+`prime` the same way, since that is their own self-alias too.
+
+This is the same lookup consulted only once Mustache's own scope chain has
+missed on every other name: a loop binding, `iter`, `input`, `prime`,
+`runtime`, an ancestor dynamic's own self-alias, and every other existing
+context key always win first — the fallback above (the container's own
+effects, then each enclosing container's, nearest first) is tried only
+after all of those miss, and a loop body's/`if` branch's own sibling still
+shadows an outer name exactly as above. Inside a Mustache section, the
+section's own items are checked first; only a name the items lack falls
+back to an outer effect's name. As with the loop-body form, the bare
+spelling is accepted, not preferred, for the same reason: it can collide
+with a user-supplied state key, and `prime.`-prefixed cannot.
+
+A bare reference whose head matches a declared `interface.inputs` name is
+not an error when an effect in scope also has that name — the effect wins,
+the same nearest-wins rule above, and the declared input is unreachable
+bare at all from there (write `{{input.<name>}}`). It is a hard error from
+`cof check` only when no effect in scope shares the name.
 
 ---
 
@@ -2351,7 +2374,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 **Rules:**
 - Never use `{{<name>.value}}` or `{{<name>}}` alone for effect outputs — always include the `prime.` prefix
-- Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
+- Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`, unless an effect in scope also has that name, in which case the effect wins and the input is unreachable bare (see [Bare sibling references everywhere](#bare-sibling-references-everywhere-not-just-inside-a-loopif))
 - Nested effects always include their parent dynamic name in the path
 - A malformed tag (`{{input.topic}`, a section closed under the wrong name) is an error from `cof check` and `cof run`, never text sent on as written
 - **A whole list or dict renders as JSON.** `{{x}}`/`{{{x}}}` against a value that is a whole list or dict (not a scalar) renders the JSON text `json.dumps` would produce (`["a", "b"]`, `{"k": 1}`), not Python's `repr()` (`['a', 'b']`, `{'k': 1}`) — nested booleans/`null`/dates included, and an empty list or dict still renders (`"[]"`/`"{}"`), never collapsed to an empty string. A section (`{{#x}}...{{/x}}`) over a list or dict is unaffected: it still iterates or scopes, and an empty one is still falsy there. Scalars (a string, number, boolean, `null`) render exactly as before.
@@ -3281,7 +3304,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 13b. Write each key at most once, and only the keys the effect type lists. A repeated key, or a near miss of a known key (`whlie`, `max_iteration`, `adapter` on a prompt where `provider` belongs), fails validation; any other unknown key is ignored with a warning. Quote every tool `params.args` entry — unquoted, YAML reads `0x1` as `1`, `off` as `false`, `-0` as `0`.
 
 **State path addressing:**
-14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
+14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name and no effect in scope shares the name; an effect sharing the name wins instead); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 14a. In prompt text (a `prompt`/`yield` effect's `template`/`messages`, a declared `prompts:` entry, a prompt file): `{{x}}` does not HTML-escape. `{{> name}}` splices in a declared prompt's own text (rendered in place, against the including template's own context) or a `yield`/text-`prompt` effect's resolved value (verbatim, never re-rendered, so a model's reply cannot inject a tag) — see [Prompt composition](#prompt-composition).
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
 16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path — or a binding of an enclosing loop (its `each.as` name), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys that name no binding in scope and `state.`-prefixed spellings are hard errors here.
