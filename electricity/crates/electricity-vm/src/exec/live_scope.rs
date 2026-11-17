@@ -283,9 +283,10 @@ impl electricity_template::ScopeRoot for LiveRoot<'_> {
     /// `core/templates.py::_get_key`'s own bare-sibling-reference
     /// fallback (issue #778): the nearest enclosing effect container
     /// (`self.frame`'s own chain, nearest first) whose own effect
-    /// names include *head*, as that container's own dotted path -- or
-    /// `None` with no [`Frame`] at all (`self.frame` is `None`) or no
-    /// match anywhere on the chain, same as before this issue existed.
+    /// names include *head*, as that container's own self-alias --
+    /// never a computed dotted path (#778 finding 7) -- or `None` with
+    /// an empty chain (`self.frame` is [`Frame::root`]) or no match
+    /// anywhere on the chain, same as before this issue existed.
     fn bare_fallback(&self, head: &str) -> Option<String> {
         self.frame
             .bare_effect_chain()
