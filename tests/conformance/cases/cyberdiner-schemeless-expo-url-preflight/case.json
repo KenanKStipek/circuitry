@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #818 (cyberdiner check() reports a schemeless expo_url as unreachable instead of crashing)",
+  "description": "expo_url has no scheme at all (no \"://\") -- check_url's refusal must land inside check()'s own try, same as any other bad expo_url, reported as an ordinary preflight 'not ready' failure, identically in both engines, never a bare uncaught urllib exception.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}
