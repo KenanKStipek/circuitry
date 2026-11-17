@@ -213,6 +213,15 @@ class RunRequest:
     # default) writes nothing to disk; the plan still lands in
     # `meta.decomposition` either way.
     decompose_out: Path | None = None
+    # Test/host hook (core.decompose's own `_decomposition_planner_path`):
+    # an absolute path to a planner orchestration to run instead of the
+    # bundled one. Reaches `runtime_config` only through this explicit,
+    # non-config field -- never through a user config, a project config, a
+    # profile, or a document's own `runtime:` block, however trusted, which
+    # is stripped unconditionally below (issue #778): otherwise a run could
+    # be pointed at an arbitrary file to execute as its own decomposition
+    # plan generator.
+    decomposition_planner_path: Path | None = None
     # True only when whoever owns this machine named the document by path
     # (`cof run ./my.yml`, the SDK's `run_orchestration`, a scheduler job): the
     # document's whole `runtime:` block and `plugins:` list then apply, with a
@@ -694,6 +703,31 @@ def run(req: RunRequest) -> RunResult:
         runtime_config["_capability_allow"] = (
             sorted(req.allow_capabilities) if req.allow_capabilities else []
         )
+        # A run always starts at the top of its own call stack and at
+        # decomposition depth 0, whatever a stray `_use_call_stack`/
+        # `_decomposition_depth` a config, profile or trusted document's
+        # `runtime:` block happened to carry: `use`'s cycle guard
+        # (core.use.UseRuntime) and decomposition's depth ceiling
+        # (core.decompose) both read these straight out of this shared
+        # dict, so a user-supplied value here could fake or hide a `use`
+        # cycle, or skip decomposition by claiming the ceiling is already
+        # reached. Popped rather than reset to `[]`/`0`: both already
+        # default to the same empty/zero value when the key is simply
+        # absent (`decompose.py`'s own `runtime_config.get(_DEPTH_KEY, 0)`,
+        # `use.py`'s own `.get("_use_call_stack", [])`), and popping keeps
+        # this run's `effective_settings.runtime` snapshot the same shape
+        # as a run that was never targeted this way.
+        # `_decomposition_planner_path` reaches `runtime_config` only
+        # through `req.decomposition_planner_path` -- never through config,
+        # a profile or a document's `runtime:` block, however trusted,
+        # which could otherwise point it at an arbitrary file.
+        runtime_config.pop("_use_call_stack", None)
+        runtime_config.pop("_decomposition_depth", None)
+        runtime_config.pop("_decomposition_planner_path", None)
+        if req.decomposition_planner_path is not None:
+            runtime_config["_decomposition_planner_path"] = str(
+                req.decomposition_planner_path
+            )
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
             effective.plugins, allowed=cfg.enabled_plugins
