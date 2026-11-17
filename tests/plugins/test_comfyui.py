@@ -2,7 +2,7 @@
 
 Covers: #280 (no argv echo in error messages), #300 (workflow body on
 stdin, not `-d`), and the general curl-hygiene (`-q` first, no header on
-argv) that this lane applies to every curl invocation under
+argv) applied to every curl invocation under
 `src/circuitry/plugins/`.
 """
 

@@ -1,6 +1,6 @@
 {
   "spec_case": "runtime-semantics.md §6.11 (profiles), cli/profiles.py::_validate_profile_schema",
-  "description": "A profile whose `adapter:` is a number fails Draft 7 schema validation -- a third-party (jsonschema) message, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md): Python's `jsonschema` and electricity's own Rust `jsonschema` crate word the same violation differently (settled ruling 9), so this is error_compare: location, not exact.",
+  "description": "A profile whose `adapter:` is a number fails Draft 7 schema validation -- a third-party (jsonschema) message, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md): Python's `jsonschema` and electricity's own Rust `jsonschema` crate word the same violation differently, so this is error_compare: location, not exact.",
   "engines": ["python", "electricity"],
   "profile": "profiles/p.yml",
   "expect": "failure",

@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #403: on_error does not reach an over-limit CEL expression any more",
-  "description": "The explicit nesting limit is checked when the document compiles, before any effect runs -- so an over-limit expression fails the whole document the same way a syntax error would, and the `gate_paren` effect's own `on_error: continue` never gets a chance to run: the document never starts, `marker` never runs, and there is no `meta.error` to catch. Before this fix, a per-shape failure like this one happened during evaluation instead, so `on_error: continue` could catch it and let the run finish; this case now proves the opposite on both engines.",
+  "description": "The explicit nesting limit is checked when the document compiles, before any effect runs -- so an over-limit expression fails the whole document the same way a syntax error would, and the `gate_paren` effect's own `on_error: continue` never gets a chance to run: the document never starts, `marker` never runs, and there is no `meta.error` to catch. A per-shape failure like this one used to happen during evaluation instead, where `on_error: continue` could catch it and let the run finish; this case proves the compile-time failure holds on both engines.",
   "engines": ["python", "electricity"],
   "expect": "failure"
 }

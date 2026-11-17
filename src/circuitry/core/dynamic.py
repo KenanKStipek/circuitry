@@ -568,8 +568,8 @@ class DynamicRuntime:
                         # only one that ever runs.
                         executor = ThreadPoolExecutor(max_workers=max_workers)
                         # Built empty, before the try, and filled by a plain
-                        # loop rather than a dict comprehension (#385 review
-                        # P1): a ``KeyboardInterrupt``/``RunCancelledBySignal``
+                        # loop rather than a dict comprehension (issue #385): a
+                        # ``KeyboardInterrupt``/``RunCancelledBySignal``
                         # landing mid-comprehension left this name unbound, so
                         # the ``except`` below calling ``futures.keys()`` raised
                         # ``UnboundLocalError`` instead — an ordinary
@@ -757,7 +757,7 @@ class DynamicRuntime:
                             # (same state path a same-named body effect would have),
                             # so the wrapped error's path should match the state
                             # tree it actually names, not a '.finally.' segment that
-                            # isn't really there (#272 review).
+                            # isn't really there (issue #272).
                             label=self.defn.name,
                         )
                 except BaseException as fe:
@@ -861,7 +861,7 @@ class DynamicRuntime:
                 # on_error is 'fail', the default — skip/continue already
                 # swallowed it inside _execute_effect) fails this dynamic the
                 # same way a body failure would — unless this *dynamic's own*
-                # on_error says to degrade that failure too (#272 review).
+                # on_error says to degrade that failure too (issue #272).
                 is_cancellation = not isinstance(finally_exc, Exception)
                 if is_cancellation or self.defn.on_error == "fail":
                     raise finally_exc

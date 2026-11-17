@@ -123,9 +123,8 @@ def test_a_cancel_landing_in_a_tools_own_retry_publish_leaves_no_orphaned_node(
     tmp_path: Path,
 ) -> None:
     """The cancel lands on the tool's own per-attempt republish
-    (`Store.publish_or_finalize`), after `created_at` is already set --
-    exactly the shape the review flagged: a node left with `created_at`
-    set and `completed_at` still null.
+    (`Store.publish_or_finalize`), after `created_at` is already set,
+    leaving a node with `created_at` set and `completed_at` still null.
     """
     observer = _CancelOnNthSight(("prime", "lp", "iter_1"), nth=2)
     result, starts, completes = _run_sequential_tree_loop(tmp_path, observer)

@@ -1,6 +1,6 @@
-"""#385 review: two scenarios the original fix pass's own tests never drove
-(both exercise `core.dynamic`/`core.loop` themselves, not just the
-`as_completed_promptly`/`wait_for_cancelled_branches` helpers in isolation).
+"""Issue #385: two scenarios that drive `core.dynamic`/`core.loop`
+end to end, not just the `as_completed_promptly`/
+`wait_for_cancelled_branches` helpers in isolation.
 
 1. A step a cancellation genuinely cannot reach (no `run_tracked`, no
    `get_token().check()` of its own — the orchestration reference names

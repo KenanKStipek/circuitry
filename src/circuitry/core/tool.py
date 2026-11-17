@@ -1337,7 +1337,7 @@ class ToolRuntime:
                 # The call itself can also raise (no adapter/model available
                 # for mode: model, a bad template) — caught here, not left to
                 # escape past retries/on_error with the start/complete pair
-                # left unbalanced (#273 review).
+                # left unbalanced (issue #273).
                 if self.defn.expect is not None:
                     try:
                         with model_call(store, self.defn.name):

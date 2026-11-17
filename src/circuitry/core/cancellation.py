@@ -162,7 +162,7 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     handler. Guard against that case and kill just the child instead.
 
     ``PermissionError`` is ignored the same as ``ProcessLookupError``
-    (#385 round 3, cause confirmed by the #385 review's own probe): once
+    (#385): once
     this call's own ``killpg`` has killed the group's last live member,
     that member is a zombie until something actually ``wait()``s on it
     (:func:`_communicate_promptly`/``run_tracked``'s own cleanup, which
@@ -206,7 +206,7 @@ def _isolated_pgid(
 ) -> int | None:
     """*proc*'s own process-group id, only when it is isolated in one of
     its own -- i.e. exactly the case :func:`kill_process_group` itself
-    already treats as safe to ``killpg`` -- else ``None`` (#385 round 3).
+    already treats as safe to ``killpg`` -- else ``None`` (#385).
 
     Captured once, right after ``Popen``, by :func:`run_tracked`: a pgid
     can never be reused while any process in it is still alive, so this
@@ -231,7 +231,7 @@ def _repeat_group_kill(pgid: int | None) -> bool:
     (the whole group is already gone) and ``PermissionError`` (the
     group's last live member is now a zombie nothing has reaped yet --
     see :func:`kill_process_group`'s own docstring for why that, not
-    pgid reuse, is what actually raises it here) (#385 round 3).
+    pgid reuse, is what actually raises it here) (#385).
 
     A real production race, not just a quirk of this suite's own test
     scripts: ``bash -c "a; b"`` forks a *child* process to run a non-tail
@@ -350,14 +350,12 @@ class CancellationToken:
         an earlier run's cancellation leak into the next one.
 
         Builds a fresh :class:`threading.Event` rather than calling
-        ``clear()`` on the existing one: an earlier version of this
-        method relied on the reasoning that ``sigterm_as_interrupt``
-        only ever calls this before its own handlers are installed or
-        after they've been restored, so a signal landing on either call
-        can't reach a handler that could leak this lock -- that
-        reasoning was wrong. The *default* SIGINT handler installed at
-        either of those points still raises ``KeyboardInterrupt``
-        asynchronously,
+        ``clear()`` on the existing one: ``sigterm_as_interrupt`` only
+        ever calls this before its own handlers are installed or after
+        they've been restored, but that does not mean a signal landing
+        on either call can't reach a handler that could leak this lock.
+        The *default* SIGINT handler installed at either of those
+        points still raises ``KeyboardInterrupt`` asynchronously,
         same as always, and :meth:`request`'s own ``Event.set()`` (the
         one call on this object that *does* still touch its lock, since
         :meth:`sleep_or_raise` is lock-free on the main thread) could
@@ -1334,11 +1332,11 @@ def _communicate_promptly(
     ``self.stdin and input`` gates the selector registration, ``not
     self._communication_started`` gates the close. Passing *input* again
     on a retry raises ``ValueError: Cannot send input after starting
-    communication``, so an earlier version of this function passed it
-    only on the first call and ``None`` after — but then any input not
-    fully written inside that first short slice was simply never resumed
-    or closed, and a child that hadn't yet finished reading stdin waited
-    for EOF until *timeout* itself, or forever with no timeout). Instead,
+    communication``. Passing it only on the first call and ``None``
+    after would leave any input not fully written inside that first
+    short slice never resumed or closed, and a child that hadn't yet
+    finished reading stdin would wait for EOF until *timeout* itself,
+    or forever with no timeout). Instead,
     if there is input to send *and* ``proc.stdin`` is a real pipe (a
     ``subprocess.Popen`` always has one whenever ``run_tracked`` passed
     ``input``; a bare duck-typed test double usually does not), a helper
@@ -1352,10 +1350,9 @@ def _communicate_promptly(
     unconditionally would reintroduce the exact unbounded-wait bug class
     this module exists to close, this time inside the one place meant to
     guarantee *timeout* itself. Without a real ``proc.stdin`` to hand to a
-    thread, this falls back to the pre-fix shape (*input* on the first
-    call, ``None`` after) — safe there only because none of this
-    catalog's own ``Popen`` test doubles actually model a retry losing
-    unwritten input.
+    thread, this falls back to passing *input* on the first call and
+    ``None`` after — safe there only because none of this catalog's own
+    ``Popen`` test doubles actually model a retry losing unwritten input.
 
     *pgid*, when given (an isolated child -- see its own helper
     ``_isolated_pgid``), is repeat-killed (``_repeat_group_kill``) after
@@ -1399,8 +1396,8 @@ def _communicate_promptly(
     # models a `stdin` attribute at all (most of this catalog's own
     # subprocess.Popen fakes) must keep working exactly as before --
     # for those, falling back to passing *input* to `communicate()` on
-    # the first call only (the pre-fix shape) is safe, since none of
-    # them actually exercise a retry that would lose it.
+    # the first call only is safe, since none of them actually exercise
+    # a retry that would lose it.
     stdin = getattr(proc, "stdin", None)
     threaded_stdin = input is not None and stdin is not None
     if threaded_stdin:
@@ -1593,7 +1590,7 @@ def run_tracked(
     # can never be reused while any member of it is still alive, so
     # this stays valid through every repeat kill below, including one
     # needed because of a process this same pgid's own leader forked
-    # after this (#385 round 3, see _repeat_group_kill's own docstring).
+    # after this (#385, see _repeat_group_kill's own docstring).
     pgid = _isolated_pgid(proc)
     # A plain local in `_communicate_promptly` itself would be lost the
     # moment an exception unwinds through it -- this list is how it

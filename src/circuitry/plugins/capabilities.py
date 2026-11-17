@@ -138,7 +138,7 @@ NO_CAPABILITIES: frozenset[str] = frozenset(
         "html_extract",
         "system_info",
         "process_list",
-        # Debatable (#275 review): both can download a model file over the
+        # Debatable (issue #275): both can download a model file over the
         # network on first use. Left unclassified pending an explicit
         # product decision rather than guessed at here.
         "embed",

@@ -73,9 +73,9 @@ CASE_DIR_PLACEHOLDER = "__CASE_DIR__"
 #: `CONFIG_ENV_VARS`/`_apply_env_vars`), since those aren't credentials but
 #: still change `effective_settings` if set in the caller's shell.
 #:
-#: Grown in issue #503 (lane F2) to cover every real provider's own
+#: Grown in issue #503 to cover every real provider's own
 #: credential variable (the issue's own "Environment variables" table) —
-#: before that lane, only `openai`/`anthropic` were real adapters, so a
+#: before issue #503, only `openai`/`anthropic` were real adapters, so a
 #: contributor's own exported `GROQ_API_KEY` (say) could never have
 #: reached a case; now that the whole family is buildable, it could.
 CREDENTIAL_ENV_VARS = (
@@ -184,7 +184,7 @@ def run_result_texts(
 #: `http` entry, so it can't hide a real proxy on its own, but is dropped
 #: here anyway for the same reason every other ambient variable is).
 #: `_sandboxed_env` drops every one of these the caller's shell might
-#: export, then sets `no_proxy=*` explicitly (issue #485, lane E's own
+#: export, then sets `no_proxy=*` explicitly (issue #485's own
 #: network-isolation rule): a developer's real proxy settings must never
 #: change an `http`-tool conformance case's own loopback request, on
 #: either engine, and a bare `no_proxy=*` also makes CPython's own
@@ -647,8 +647,8 @@ def _sandboxed_env(
     # Bypass every proxy explicitly, rather than merely clearing the
     # variables above -- a case subprocess's own loopback request to the
     # mock HTTP server must never depend on, or be routed through, a
-    # proxy the caller's shell happened to export (issue #485, lane E's
-    # own network-isolation rule).
+    # proxy the caller's shell happened to export (issue #485's own
+    # network-isolation rule).
     env["no_proxy"] = "*"
     fakes_dir = case_dir / "fakes"
     if fakes_dir.is_dir():

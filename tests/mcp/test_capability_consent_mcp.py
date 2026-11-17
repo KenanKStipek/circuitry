@@ -64,8 +64,8 @@ def _write_yaml(path: Path, orch: dict[str, Any]) -> Path:
     return path
 
 
-# A document whose only `shell` use is in `finally:` (#332 security review:
-# the static walk must cover `finally:`, not just `effects:`).
+# A document whose only `shell` use is in `finally:` (issue #332): the
+# static walk must cover `finally:`, not just `effects:`.
 _SHELL_IN_FINALLY: dict[str, Any] = {
     "effects": [],
     "finally": [

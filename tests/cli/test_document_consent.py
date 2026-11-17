@@ -61,8 +61,8 @@ def test_required_capabilities_follows_a_path_child(tmp_path: Path) -> None:
 
 def test_required_capabilities_sees_a_root_finally_only_shell_use() -> None:
     """A fetched document cannot hide `shell` from consent by putting its
-    only tool effect in a root-level `finally:` block (#275 security review):
-    the walk this check runs on must cover `finally:`, not just `effects:`.
+    only tool effect in a root-level `finally:` block (issue #275): the
+    walk this check runs on must cover `finally:`, not just `effects:`.
     """
     orch = {"effects": [], "finally": [_tool("shell")]}
     assert required_capabilities(orch, root_path=None, runtime=None) == {"shell"}
@@ -122,7 +122,7 @@ def test_ref_child_requirements_walks_through_a_path_edge_to_a_nested_ref(
 def test_ref_child_requirements_digest_matches_the_run_time_checks_for_a_prompt_file(
     tmp_path: Path,
 ) -> None:
-    """The pre-run gate's own digest for a `ref:` child (#396's P0) must be
+    """The pre-run gate's own digest for a `ref:` child (issue #396) must be
     exactly `core.prompt_compose.document_content_digest`'s — the same
     function `core.use.UseRuntime`'s run-time check and `cof trust` use —
     so consent recorded against one is found by all three."""
@@ -327,7 +327,7 @@ def test_enforce_consent_gates_the_whole_document_when_fetched(tmp_path: Path) -
 def test_enforce_consent_gates_a_fetched_document_with_a_prompt_file_by_its_shared_digest(
     tmp_path: Path,
 ) -> None:
-    """The whole-document gate's digest (#396's P0) is
+    """The whole-document gate's digest (issue #396) is
     `core.prompt_compose.document_content_digest`, the same function `cof
     trust`/the run-time check use — consent recorded via `record_consent`
     against that digest is found here, even though the document references
@@ -363,7 +363,7 @@ def test_enforce_consent_gates_a_fetched_document_with_a_prompt_file_by_its_shar
 def test_enforce_consent_refuses_a_fetched_document_whose_only_shell_use_is_in_finally(
     tmp_path: Path,
 ) -> None:
-    """Security regression (#275 review): a library/remote document that
+    """Security regression (issue #275): a library/remote document that
     puts its only `shell` tool in `finally:` must still require consent —
     and, with no prompt callback (every non-interactive surface), refuse
     rather than silently running the cleanup block.

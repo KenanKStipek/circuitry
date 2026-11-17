@@ -20,7 +20,7 @@ runner = CliRunner()
 def _locked_down_doctor_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Hermetic per the lane contract: a bare `doctor` invocation must not
+    """Hermetic: a bare `doctor` invocation must not
     depend on the developer's `CIRCUITRY_MODEL`/`CIRCUITRY_ADAPTER`/
     `CIRCUITRY_CONFIG`, the cwd's own project config, or reach any live
     service. Locking the allowlists to empty stops `_check_extensions` from

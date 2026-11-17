@@ -1601,12 +1601,12 @@ def validate(
     # already true: `False and ...` never needs the registry, and building
     # it unconditionally would make a malformed `runtime.library.sources`
     # crash `cof check`/MCP validate instead of reporting a document error
-    # (#345's own review round). A malformed config falls back to the
+    # (#345). A malformed config falls back to the
     # curation-only default, same tolerance as MCP's `_run_registry` and
     # `cof run`'s own resolution — `is_cache_path` still checks the shared
     # `default_cache_root()` regardless of which sources are configured, so
     # the fallback doesn't reopen the gate this override exists for.
-    # Built unconditionally now (issue #396's second review) — confinement
+    # Built unconditionally now (issue #396) — confinement
     # for a `{file: ...}` prompt source below needs `is_cache_path` whether
     # or not the caller passed `trust_document`, not just for the host-
     # settings override above. Still falls back to the curation-only

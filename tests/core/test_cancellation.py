@@ -238,12 +238,12 @@ def test_kill_process_group_kills_the_whole_group_when_isolated(
 def test_kill_process_group_ignores_permissionerror_from_killpg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#385 round 3, cause corrected by the #385 review: a repeated
+    """#385: a repeated
     `killpg` at the same pgid can raise `PermissionError` once the
     group's last live member is a zombie nothing has reaped yet (macOS;
     see `test_killpg_sigkill_raises_permissionerror_on_an_unreaped_zombie_pgid`
-    for the real OS-level confirmation) -- not, as an earlier revision of
-    this docstring guessed, pgid reuse by some unrelated process (same-
+    for the real OS-level confirmation) -- not pgid reuse by some
+    unrelated process (same-
     user reuse would make `killpg` *succeed*, not raise `EPERM`). Either
     way, this must be swallowed the same way an already-gone group's
     `ProcessLookupError` already is -- this is a best-effort kill, never
@@ -534,13 +534,13 @@ def _deliver_sigusr1_after(tid_holder: dict[str, int], *, delay: float = 0.3) ->
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_wait_for_cancelled_branches_notices_a_signal_delivered_to_a_worker_thread() -> None:
-    """#385: an earlier revision bounded this wait to a fixed
-    grace period, so a branch still running once it elapsed could outlive
+    """This wait must have no total time limit (issue #385): a fixed
+    grace period would let a branch still running once it elapsed outlive
     `cli.interrupts.sigterm_as_interrupt`'s own `token.reset()` and start
-    a further effect with nothing left to track or kill it. The real fix
-    is no total time limit at all -- only `as_completed_promptly`'s own
-    polled wait, which this proves still notices a signal delivered to a
-    worker thread within about one poll interval, not the whole branch.
+    a further effect with nothing left to track or kill it. Only
+    `as_completed_promptly`'s own polled wait bounds it, which this proves
+    still notices a signal delivered to a worker thread within about one
+    poll interval, not the whole branch.
     """
     worker_tid: dict[str, int] = {}
     worker_ready = threading.Event()
@@ -718,7 +718,7 @@ def test_communicate_promptly_notices_a_signal_delivered_to_a_worker_thread() ->
 def test_communicate_promptly_delivers_all_stdin_across_slices(
     monkeypatch: pytest.MonkeyPatch, timeout: float | None, armed: bool
 ) -> None:
-    """#385 round 3: a regression in `_communicate_promptly` passed
+    """#385: a regression in `_communicate_promptly` passed
     *input* to `proc.communicate()` only on its very first retry slice,
     `None` on every one after. That loses input, not just the retry
     itself: CPython 3.11's POSIX `Popen._communicate` registers `stdin`
@@ -913,7 +913,7 @@ def test_communicate_promptly_does_not_repeat_the_group_kill_during_cleanup(
 def test_communicate_promptly_cancellation_while_writing_kills_without_hanging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#385 round 3: input large enough that the writer thread is still
+    """#385: input large enough that the writer thread is still
     blocked on a full pipe -- because the child never reads it -- when
     cancellation lands (the same `CancellationToken.request()` a real
     SIGINT/SIGTERM handler calls, killing every tracked process group).
@@ -1018,7 +1018,7 @@ def test_run_tracked_decode_error_mid_stream_drains_to_eof_then_fails(
     `ValueError`) must fail this call loudly, the same as a plain
     `communicate()` always has for the same bytes -- not end the reader
     silently, close stdout while the child is still writing to it, and
-    return truncated output with no error at all (#636 review). The child
+    return truncated output with no error at all (issue #636). The child
     here writes several megabytes after the bad bytes -- more than any
     pipe buffer holds -- so if the reader stopped draining instead of
     falling back to the raw byte stream underneath, the child would block
@@ -1102,7 +1102,7 @@ def test_run_tracked_reader_thread_start_failure_does_not_leave_a_zombie(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The reader thread is started inside `with proc, token.track(proc):`'s
-    own `try:` (#636 review), not before it -- so a failed `Thread.start()`
+    own `try:` (issue #636), not before it -- so a failed `Thread.start()`
     there still reaches this `with` block's own cleanup (`Popen.__exit__`
     calls `self.wait()`), reaping the child instead of leaving it a zombie
     nothing ever waits on.
@@ -1138,7 +1138,7 @@ def test_run_tracked_reader_thread_start_failure_does_not_leave_a_zombie(
 def test_communicate_promptly_step_timeout_while_writing_does_not_hang(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#385 round 3: the step's own timeout fires while the writer thread
+    """#385: the step's own timeout fires while the writer thread
     is still blocked on a full pipe (the child never reads it). The
     timeout must still raise promptly -- `_communicate_promptly` cannot
     join that thread unconditionally, or an unread child turns the step's
@@ -1163,7 +1163,7 @@ def test_communicate_promptly_step_timeout_while_writing_does_not_hang(
 def test_communicate_promptly_repeats_the_group_kill_while_cancelled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#385 round 3: a real production race, not just a quirk of the CLI
+    """#385: a real production race, not just a quirk of the CLI
     signal tests' own scripts -- any `bash -c "a; b"` step can lose it,
     since macOS's /bin/bash (3.2) forks a *child* process to run a
     non-tail command like `b` rather than exec'ing into it. A single
