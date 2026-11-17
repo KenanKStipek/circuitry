@@ -5,6 +5,7 @@ import re
 import signal
 import threading
 import time
+from collections import ChainMap
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -30,6 +31,8 @@ from .disabled import is_enabled, write_disabled_node
 from .effect_identity import nested_container
 from .prompt import PromptDefinition, PromptRuntime
 from .resume import ResumeMode, effect_completed_ok
+from .scope import local_writes as _local_writes_state
+from .scope import scope_ctx as _scope_ctx
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -62,6 +65,36 @@ class TreeExecutionError(RuntimeError):
             original = err.__cause__ or err
             parts.append(f"  [{i}] {type(original).__name__}: {err}")
         return "\n".join(parts)
+
+
+def _rebuild_scope_ctx(
+    base_ctx: dict[str, Any],
+    child_store_state: dict[str, Any],
+    baseline: frozenset[str],
+    own_names: frozenset[str],
+) -> dict[str, Any]:
+    """*base_ctx* overlaid with this dynamic's own children so far — the
+    bare top-level form and ``ctx["prime"]`` both, like a loop body's own
+    ``scope_ctx`` (#778). ``ctx["prime"]`` differs from a plain
+    ``scope_ctx`` call, though: it is a live :class:`~collections.ChainMap`
+    reading straight off *child_store_state*, not a snapshot copy of it.
+    A snapshot taken here, before a sibling the dotted form can already
+    see has actually finished (its own decomposition/split machinery
+    reads *its own* still-in-flight ``ctx["prime"]`` to name its generated
+    effects something that can't collide with an existing one —
+    ``core.decompose._pick_effect_name`` — mid-render, before this
+    rebuild ever runs again), would go stale the moment that sibling
+    writes anything into *child_store_state* afterward: the bare and
+    nested-dotted forms must keep reading the *same* live node a plain
+    ``{{prime.<name>.value}}`` already did before this fix existed.
+    """
+    local = _local_writes_state(child_store_state, baseline, own_names)
+    ctx = _scope_ctx(base_ctx, local)
+    parent_prime = base_ctx.get("prime")
+    ctx["prime"] = ChainMap(
+        child_store_state, parent_prime if isinstance(parent_prime, Mapping) else {}
+    )
+    return ctx
 
 
 def _now_iso() -> str:
@@ -310,12 +343,48 @@ class DynamicRuntime:
 
         # A container parent (loop body, conditional branch, enclosing dynamic)
         # hands down the context its own children render against — iteration
-        # bindings, root inputs, absolute state paths.  Layer this dynamic's
-        # store namespace on top of it so the short sibling paths inside this
-        # dynamic keep resolving, with local nodes winning name collisions
-        # (same precedence the loop body uses for its own siblings).
-        ctx = store.state if ctx_override is None else {**ctx_override, **store.state}
+        # bindings, root inputs, absolute state paths. This dynamic's own
+        # children layer on top of it the same way a loop body's/if branch's
+        # do (`core.scope.scope_ctx`): a bare `{{<child>.value}}` means the
+        # same node `{{prime.<child>.value}}` does, at any depth (document
+        # root included — the root container is this same `DynamicRuntime`,
+        # named "prime") (#778). `base_ctx` is the stable enclosing scope
+        # every rebuild below layers on top of; `ctx` is rebuilt fresh from
+        # it after every child, in chain order, so a later sibling sees an
+        # earlier one and a child reusing an enclosing name wins only while
+        # this dynamic's own body is running.
+        # Overlays are always rebuilt from the context this dynamic itself
+        # started with, never from the previous overlay (same rule as a
+        # loop body's own `base_ctx`, loop.py:1574) -- so `ctx` starts as
+        # `base_ctx` unchanged, with no pre-seeded overlay of its own
+        # children's current contents: a child about to run `resume:
+        # restart` (which drops and replaces its own state dict rather
+        # than mutating it in place) would otherwise leak its *stale*,
+        # about-to-be-discarded node into this snapshot before it ever got
+        # a chance to reset. The first rebuild, after the first child's own
+        # outcome, is what exposes anything already resumed/completed to
+        # the second child onward -- nothing before the first child could
+        # read it anyway.
+        base_ctx = store.state if ctx_override is None else {**ctx_override, **store.state}
+        ctx = base_ctx
         child_store = store.child(self.defn.name)
+        # `finally:` shares this dynamic's own child_store namespace and
+        # scope (compiler.py), so its own names count too -- a `finally:`
+        # effect can shadow, or be shadowed by, a body effect the same way
+        # two body effects can shadow each other.
+        own_names = frozenset(
+            name
+            for e in (*self.defn.effects, *self.defn.finally_effects)
+            if isinstance(name := getattr(e, "name", None), str)
+        )
+        baseline = frozenset(child_store.state.keys())
+        # `_execute_chain` (`finally:`'s own runner) rebuilds `ctx` the same
+        # way, after this `execute()` call's local `ctx` variable has moved
+        # on past the body -- stashed on the instance since it has no other
+        # way to reach these three without a wider signature change.
+        self._scope_base_ctx = base_ctx
+        self._scope_baseline = baseline
+        self._scope_own_names = own_names
 
         # Build ancestor context for children (this dynamic is now a parent).
         # Skip depth 0 — that's the invisible root "prime" container.
@@ -367,6 +436,11 @@ class DynamicRuntime:
                             store.on_write(store.root_state)
                     if outcome == "ran":
                         resume_active = False
+                    # Expose this child to the next one in chain order,
+                    # bare and dotted alike -- every outcome (disabled,
+                    # resumed, reported, ran), the same as a loop body's
+                    # own per-sibling rebuild (#778).
+                    ctx = _rebuild_scope_ctx(base_ctx, child_store.state, baseline, own_names)
             else:
                 # Tree semantics: all effects run concurrently against the same
                 # deterministic snapshot from dynamic start, not sibling
@@ -675,7 +749,6 @@ class DynamicRuntime:
                         self.defn.finally_effects,
                         store=store,
                         child_store=child_store,
-                        ctx=ctx,
                         # No distinct 'finally' label segment: a finally effect
                         # writes into the same child_store namespace as the body
                         # (same state path a same-named body effect would have),
@@ -868,7 +941,6 @@ class DynamicRuntime:
         *,
         store: Store,
         child_store: Store,
-        ctx: dict[str, Any],
         label: str | None = None,
     ) -> None:
         """Run *effects* in sequence, stopping at the first failure.
@@ -883,11 +955,24 @@ class DynamicRuntime:
         effect writes into the same child_store namespace as the body, so
         its own call passes this dynamic's name too (not a distinct
         ``.finally`` segment, which wouldn't match the real state tree).
+        Its own ``ctx`` is rebuilt fresh before every effect, from
+        ``self._scope_base_ctx``/``_scope_baseline``/``_scope_own_names``
+        (set once in ``execute()``), not taken as a parameter.
         """
         container_name = label or self.defn.name
         for idx, effect in enumerate(effects):
             effect_path = self._effect_path(
                 effect=effect, index=idx, container_name=container_name
+            )
+            # Rebuilt fresh before every `finally:` effect, the same way
+            # the body's own chain loop does (#778): a `finally:` effect
+            # sees the body's last writes, and each later `finally:`
+            # effect sees the earlier ones, bare and dotted alike.
+            ctx = _rebuild_scope_ctx(
+                self._scope_base_ctx,
+                child_store.state,
+                self._scope_baseline,
+                self._scope_own_names,
             )
             try:
                 # `cof run --resume` (#330) never skips a `finally:` effect
