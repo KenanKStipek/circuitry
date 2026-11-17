@@ -5,7 +5,6 @@ import re
 import signal
 import threading
 import time
-from collections import ChainMap
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -67,6 +66,83 @@ class TreeExecutionError(RuntimeError):
         return "\n".join(parts)
 
 
+class _PrimeScope(dict):
+    """``ctx["prime"]`` for a dynamic that shadows some names (#778).
+
+    This dynamic's own completed children are plain dict entries,
+    frozen once written — a finished sibling's own node never changes
+    again, so a snapshot of it is exactly as good as a live one. A name
+    this dynamic has not written itself falls through, read live off
+    *fallback* at lookup time rather than copied: an enclosing
+    container's own ``prime`` keeps growing for as long as the
+    container this overlay belongs to runs (another sibling completing,
+    or the same named node reused across outer passes), and two
+    existing mechanisms read exactly that still-growing state through a
+    sibling's own in-flight ``ctx["prime"]`` — a loop's own named node,
+    reused across outer passes, reading its own current-pass sibling
+    through the loop's enclosing scope; a decomposition/split trigger
+    naming its generated effects something that cannot collide with
+    one already written (``core.decompose._pick_effect_name``) — both
+    of which a frozen copy of ``prime`` taken before either one
+    finished would break.
+
+    A plain ``dict`` subclass, not a :class:`~collections.ChainMap`:
+    other code in this module and elsewhere checks ``isinstance(x,
+    dict)`` (CEL's own unset-path walk uses ``Mapping``, but not every
+    caller does), and only a real ``dict`` passes those.
+    """
+
+    __slots__ = ("_fallback",)
+
+    def __init__(self, local: Mapping[str, Any], fallback: Any) -> None:
+        super().__init__(local)
+        self._fallback: Mapping[str, Any] = (
+            fallback if isinstance(fallback, Mapping) else {}
+        )
+
+    def __missing__(self, key: str) -> Any:
+        return self._fallback[key]
+
+    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        return self._fallback.get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        return dict.__contains__(self, key) or key in self._fallback
+
+    def keys(self) -> set[str]:  # type: ignore[override]
+        return set(dict.keys(self)) | set(self._fallback.keys())
+
+    def items(self) -> list[tuple[str, Any]]:  # type: ignore[override]
+        # A list, not a set: a node's own value is a dict (unhashable), and
+        # unlike `keys()` (whose elements -- state's own key names -- are
+        # always hashable strings), `items()` carries those values too.
+        return [(k, self[k]) for k in self.keys()]
+
+    def values(self) -> list[Any]:  # type: ignore[override]
+        return [self[k] for k in self.keys()]
+
+    def __iter__(self) -> Any:
+        return iter(self.keys())
+
+    def __len__(self) -> int:
+        return len(self.keys())
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> dict[str, Any]:
+        # A plain dict, every entry (local and fallback alike) deep-copied
+        # in — not another `_PrimeScope`: whatever copies this (seeding an
+        # isolated child's own state, e.g. `core.decompose._execute_in_
+        # store`) wants a frozen snapshot, not something that keeps reading
+        # an enclosing container's own `prime` live.
+        import copy as _copy
+
+        return {k: _copy.deepcopy(self[k], memo) for k in self.keys()}
+
+    def __copy__(self) -> dict[str, Any]:
+        return {k: self[k] for k in self.keys()}
+
+
 def _rebuild_scope_ctx(
     base_ctx: dict[str, Any],
     child_store_state: dict[str, Any],
@@ -74,26 +150,13 @@ def _rebuild_scope_ctx(
     own_names: frozenset[str],
 ) -> dict[str, Any]:
     """*base_ctx* overlaid with this dynamic's own children so far — the
-    bare top-level form and ``ctx["prime"]`` both, like a loop body's own
-    ``scope_ctx`` (#778). ``ctx["prime"]`` differs from a plain
-    ``scope_ctx`` call, though: it is a live :class:`~collections.ChainMap`
-    reading straight off *child_store_state*, not a snapshot copy of it.
-    A snapshot taken here, before a sibling the dotted form can already
-    see has actually finished (its own decomposition/split machinery
-    reads *its own* still-in-flight ``ctx["prime"]`` to name its generated
-    effects something that can't collide with an existing one —
-    ``core.decompose._pick_effect_name`` — mid-render, before this
-    rebuild ever runs again), would go stale the moment that sibling
-    writes anything into *child_store_state* afterward: the bare and
-    nested-dotted forms must keep reading the *same* live node a plain
-    ``{{prime.<name>.value}}`` already did before this fix existed.
+    bare top-level form and ``ctx["prime"]`` both, like a loop body/if
+    branch's own ``scope_ctx`` call (#778). ``ctx["prime"]`` is a
+    :class:`_PrimeScope`, not a plain dict copy — see its own doc.
     """
     local = _local_writes_state(child_store_state, baseline, own_names)
-    ctx = _scope_ctx(base_ctx, local)
-    parent_prime = base_ctx.get("prime")
-    ctx["prime"] = ChainMap(
-        child_store_state, parent_prime if isinstance(parent_prime, Mapping) else {}
-    )
+    ctx = dict(_scope_ctx(base_ctx, local))
+    ctx["prime"] = _PrimeScope(local, base_ctx.get("prime"))
     return ctx
 
 
