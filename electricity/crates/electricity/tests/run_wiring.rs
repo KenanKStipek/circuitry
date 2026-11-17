@@ -1630,7 +1630,7 @@ async fn a_defined_but_unused_litellm_alias_is_fine() {
     assert!(result.ok, "expected success, got: {:?}", result.error);
 }
 
-/// Issue #778 (S1): a document's own `runtime:` block can't inject any
+/// Issue #778: a document's own `runtime:` block can't inject any
 /// of the private keys `build_runtime_config` installs
 /// (`_orchestration_dir`, `_allowlists`, `_capability_allow`,
 /// `_capability_ceiling`) -- not even `_capability_ceiling`, the one

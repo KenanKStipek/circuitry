@@ -331,9 +331,9 @@ class DynamicRuntime:
         # *store*'s state the way the pre-#778 line did also leaked every
         # one of this dynamic's own siblings in as bare top-level names,
         # which outranks the new fallback below for any name this
-        # dynamic's own child happens to share with one of them: a
-        # nearest-wins case still disagreed between bare and dotted even
-        # after this fix until this was narrowed (#778 review). The dotted
+        # dynamic's own child happens to share with one of them, so a
+        # nearest-wins lookup would disagree between bare and dotted
+        # (#778). The dotted
         # `prime.*` path was never affected either way; it is the same
         # live `ctx["prime"]` regardless.
         ctx = (

@@ -134,7 +134,7 @@ def _key_order(obj: Any) -> Any:
 def test_whole_prime_render_is_byte_identical_across_pythonhashseed() -> None:
     """A whole ``{{{prime}}}`` render's own key order must not depend on
     ``PYTHONHASHSEED`` -- the regression a dict-subclass view whose
-    ``keys()`` returned a ``set`` would reintroduce (#778 review).
+    ``keys()`` returned a ``set`` would reintroduce (#778).
     """
     import os
 
