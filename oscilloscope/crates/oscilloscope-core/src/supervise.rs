@@ -80,7 +80,7 @@ impl SupervisedChild {
         stdout_path: &Path,
         stderr_path: &Path,
     ) -> io::Result<(Self, Receiver<String>)> {
-        // Both tee files are opened *before* `cmd.spawn()` (N1): if
+        // Both tee files are opened *before* `cmd.spawn()`: if
         // either `File::create` failed after the engine was already
         // spawned, the early `?` return would drop a plain
         // `std::process::Child` with no `SupervisedChild` ever built
@@ -230,7 +230,7 @@ pub fn exit_code(status: ExitStatus) -> i32 {
 /// `run_end` line's own `signal` field (DESIGN.md §3's format table)
 /// instead of a real `ExitStatus` — `osi watch` has no child process
 /// of its own to read a status from, so this is the only way it can
-/// report the same exit code `cof` itself used (P2-7) rather than just
+/// report the same exit code `cof` itself used rather than just
 /// ok-vs-failed.
 pub fn exit_code_for_signal_name(signal: &str) -> Option<i32> {
     match signal {
@@ -243,7 +243,7 @@ pub fn exit_code_for_signal_name(signal: &str) -> Option<i32> {
 
 /// Whether a process with this pid still exists, probed the
 /// conventional way (`kill(pid, 0)`, which sends no signal and only
-/// checks for `ESRCH`). Used by `osi watch` (F4), which has no `Child`
+/// checks for `ESRCH`). Used by `osi watch`, which has no `Child`
 /// handle of its own for a run it didn't start — the engine's pid, when
 /// an events stream names one (`run_start`, DESIGN.md §3), is the only
 /// way it can tell a genuine abort (no `run_end`, dead process) from a
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn exit_code_for_signal_name_matches_cofs_own_mapping() {
-        // P2-7/P2-10: the same 128+signum codes cof itself uses
+        // The same 128+signum codes cof itself uses
         // (DESIGN.md §4.1), from a run_end event's own signal name
         // rather than a real ExitStatus.
         assert_eq!(exit_code_for_signal_name("SIGINT"), Some(130));
@@ -397,12 +397,12 @@ mod tests {
 
     #[test]
     fn a_stdout_file_that_cannot_be_created_never_spawns_the_engine() {
-        // N1 probe: `stdout_path` is a directory, so `File::create`
-        // fails. Before the fix, `cmd.spawn()` ran first, so the
+        // `stdout_path` is a directory, so `File::create` fails. If
+        // `cmd.spawn()` ran before both tee files were opened, the
         // engine (a `sleep` whose argument is this test's own unique
-        // needle) was already running by the time `spawn` returned
-        // `Err` -- left behind forever, since no `SupervisedChild` was
-        // ever built to `Drop` it.
+        // needle) would already be running by the time `spawn`
+        // returned `Err` -- left behind forever, since no
+        // `SupervisedChild` was ever built to `Drop` it.
         let dir = tempfile::tempdir().unwrap();
         let stdout_as_dir = dir.path().join("stdout.txt");
         std::fs::create_dir(&stdout_as_dir).unwrap();
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn a_panic_while_a_child_is_alive_still_kills_it() {
         // osi must never leave the engine behind on *any* exit path,
-        // panics included (issue #424's lane decisions): a
+        // panics included (issue #424): a
         // `SupervisedChild` held across a panicking scope is dropped
         // during unwind the same way a normal early return drops it, so
         // this exercises the same `Drop` impl through a real unwind,

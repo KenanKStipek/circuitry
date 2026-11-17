@@ -153,7 +153,7 @@ fn draw_tape_header_band(
             ),
         }
     };
-    // Issue #677's settled §9 point 1: the animated trace takes the
+    // Issue #677, §9.1: the animated trace takes the
     // `osi` word's own cells while animation is on; the word returns
     // under `--no-animation`.
     let osi_text = if ctx.no_animation {
@@ -2537,7 +2537,7 @@ fn draw_tape_list(
                     ),
                 ));
                 kinds.push(TapeListLineKind::Normal);
-                // Epic #677's settled point 4: previews are on at
+                // Previews are on at
                 // 120 columns and up, off below -- `narrow` (60-79)
                 // already has no room for a second line at all, but
                 // 80-119 doesn't either, below the detail pane's own
@@ -10931,7 +10931,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
-/// Finding 19: `Clear` resets the popup's own area to the terminal's
+/// `Clear` resets the popup's own area to the terminal's
 /// bare default (no background, no foreground) — a named theme's own
 /// base fill (`draw`'s own `Block` at the top of this file) never
 /// reaches back over a popup drawn on top of it, so every overlay
@@ -13112,7 +13112,7 @@ fn draw_dialog_overlay(
             draw_overlay(frame, area, " confirm ", text, 36, 5, ctx);
         }
         Dialog::FullValue(field) => {
-            // Finding 5: reads straight from `raw_state`, bypassing
+            // Reads straight from `raw_state`, bypassing
             // `details`' own truncated preview entirely — that's the
             // whole point of asking to see it in full.
             // The node the details pane is showing (#610: a state-pane
@@ -13740,7 +13740,7 @@ fn flow_fork_folded(fork: &Fork, app: &App, area_width: u16) -> bool {
 }
 
 /// The at most three lanes an open fork actually draws at once
-/// (#677 §9.3's settled "`↑↓` scrolls them"): a decision's own two
+/// (#677 §9.3: "`↑↓` scrolls them"): a decision's own two
 /// lanes always draw in full -- a decision never folds at all, so it
 /// never needs a window either. Any other fork whose lanes run past
 /// three (a loop's passes, or a parallel `dynamic` with four or more
@@ -16378,8 +16378,8 @@ mod golden_tests {
     /// two branches `a`/`b`) -- unlike `sample_plan`'s own `each` loop
     /// (a data-dependent pass count the compiler can't enumerate
     /// ahead of time), both branches have a real path of their own in
-    /// the plan, so an unobserved one still gets its own row (review
-    /// finding 3 on #458's comment 3: a queued ◌ row).
+    /// the plan, so an unobserved one still gets its own row (a
+    /// queued ◌ row).
     fn tree_dynamic_plan() -> PlanTree {
         let root_path = EffectPath::root();
         let fan_path = root_path.clone().push_name("fan");
@@ -18505,7 +18505,7 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Review finding 6: with two passes of a known four-pass loop
+    /// With two passes of a known four-pass loop
     /// already done, "effects done out of planned" must multiply the
     /// loop body's own single leaf template by the loop's `progress.
     /// total` (6 planned: `a`, `b`, four `nap` passes) rather than
@@ -18541,7 +18541,7 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Review finding 3 on #458's comment 3: a queued ◌ row, with
+    /// A queued ◌ row, with
     /// `fan`'s own `max_concurrency 1` keeping `b` from running
     /// alongside `a`.
     #[test]
@@ -18564,7 +18564,7 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Review finding 3 on #458's comment 3: the log pane with real
+    /// The log pane with real
     /// lines, not left empty the way every other golden here leaves
     /// it.
     #[test]
@@ -19127,9 +19127,8 @@ mod golden_tests {
         )
     }
 
-    /// [`snapshot`], with the log pane given real lines (review
-    /// finding 3 on #458's comment 3: every golden here left it
-    /// empty) -- `snapshot` itself is just this with none.
+    /// [`snapshot`], with the log pane given real lines (every golden
+    /// here left it empty) -- `snapshot` itself is just this with none.
     #[allow(clippy::too_many_arguments)]
     fn snapshot_with_log(
         plan: &PlanTree,
@@ -19441,7 +19440,7 @@ mod highlight_tests {
         assert_eq!(buffer[(95, 21)].bg, theme.background.unwrap());
     }
 
-    /// Finding 7: the base fill set only `bg`, so a named theme's
+    /// The base fill set only `bg`, so a named theme's
     /// own `text` colour never actually painted anything -- a plain
     /// cell (nothing drawn over it but the base fill) must read the
     /// theme's `text`, not the terminal's own default foreground.
@@ -26619,7 +26618,7 @@ mod tape_frame_goldens {
     }
 
     /// Every row of every page, at every width this fails against
-    /// `ccac5c9` (#748's fix pass): a pair that overflowed its own
+    /// `ccac5c9` (#748): a pair that overflowed its own
     /// column shifted the row's right pair instead of getting a
     /// line of its own (`help_row` there only ever checked the
     /// overlay's own width, never the pair's own fit), so e.g. the

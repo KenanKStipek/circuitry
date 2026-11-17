@@ -59,7 +59,7 @@ pub enum Action {
     /// wait on cancelling at all (watch owns no engine to cancel —
     /// `q` there always just detaches, §6.3).
     Quit,
-    /// Ctrl-C (review finding K3), checked before any dialog and
+    /// Ctrl-C, checked before any dialog and
     /// never merely dismissing one: the main loop forwards SIGINT at
     /// once with no confirm while something's running (a second
     /// Ctrl-C starts the same 10s kill deadline a real repeated
@@ -249,7 +249,7 @@ pub struct App {
     /// same reason.
     pub flow_has_selection: bool,
     /// The Tape's own previews toggle (issue #678, §4's `p`): on by
-    /// default at 120 columns and up (§9's settled point 4).
+    /// default at 120 columns and up (§9.4).
     pub tape_previews_on: bool,
     /// The Tape's own token column toggle (§4's `t`): fixed-scale
     /// bars by default, the deviation-from-usual view once set.
@@ -770,7 +770,7 @@ impl App {
         has_prompt_sent: bool,
         store_rows: &[String],
     ) -> Action {
-        // Finding K3: raw mode turns a real Ctrl-C into `Char('c')`
+        // Raw mode turns a real Ctrl-C into `Char('c')`
         // with the CONTROL modifier, not a distinct key code — caught
         // here, before any dialog gets a look at it, so it's never
         // merely a dismiss (the `Dialog::Help`/`FullValue` arms below
@@ -827,7 +827,7 @@ impl App {
                 self.dialog = Dialog::None;
                 Action::None
             }
-            // Finding 5: `v` again, while this overlay is already
+            // `v` again, while this overlay is already
             // open, cycles between the prompt and the value instead
             // of closing it — any other key still closes it, same as
             // every other overlay.
@@ -1622,7 +1622,7 @@ pub fn visible_rows<'a>(rows: &'a [Row], app: &App) -> Vec<&'a Row> {
     };
 
     let mut out = Vec::new();
-    // Finding 10: a trailing `.` so collapsing `prime.fetch` doesn't
+    // A trailing `.` so collapsing `prime.fetch` doesn't
     // also hide an unrelated sibling that merely shares its prefix,
     // like `prime.fetch_all` — `starts_with` alone can't tell "is a
     // descendant of" from "happens to start with the same letters".
@@ -2252,7 +2252,7 @@ mod tests {
 
     #[test]
     fn collapsing_a_row_does_not_hide_an_unrelated_sibling_with_the_same_prefix() {
-        // Finding 10: `prime.fetch_all` merely starts with the same
+        // `prime.fetch_all` merely starts with the same
         // letters as `prime.fetch`, not a descendant of it.
         let rows = [
             row("prime.fetch", 1, StatusKind::Done),
@@ -2718,7 +2718,7 @@ mod tests {
 
     #[test]
     fn v_opens_prompt_sent_first_when_the_row_has_one() {
-        // Finding 5: a prompt leaf's own sent text is usually the
+        // A prompt leaf's own sent text is usually the
         // more useful of the two to read in full.
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
