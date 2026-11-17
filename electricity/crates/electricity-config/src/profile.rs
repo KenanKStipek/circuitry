@@ -12,8 +12,9 @@
 //! `electricity_bytecode::Program`.
 //!
 //! No run behaviour changes here: nothing in electricity's run wiring
-//! calls any function in this module yet (lane R wires `--profile`; lane
-//! J2 applies a loaded profile's settings onto a compiled program).
+//! calls any function in this module yet (preflight wires `--profile`;
+//! applying a loaded profile's settings onto a compiled program is
+//! separate work).
 
 use crate::complexity::RoutingSettings;
 use crate::util::is_truthy;

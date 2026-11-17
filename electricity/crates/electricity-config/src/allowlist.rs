@@ -79,7 +79,7 @@ pub(crate) fn format_list(items: &[String]) -> String {
 }
 
 /// `allowlist.py::_provider_token_to_adapter` -- also the per-effect
-/// read issue #518 (lane J2) uses to judge whether a profile
+/// read issue #518 uses to judge whether a profile
 /// `provider:` override on an enabled prompt names an adapter
 /// Circuitry knows but this build cannot build.
 pub fn provider_token_to_adapter(token: &str) -> Option<String> {
@@ -194,15 +194,15 @@ pub fn walk_orchestration_refs(
     (adapters, tools)
 }
 
-/// `allowlist.py::orchestration_denials`. Public (M1 lane I
-/// prerequisites, issue #448, item U4): *skip_templated* and
+/// `allowlist.py::orchestration_denials`. Public (issue #448, item
+/// U4): *skip_templated* and
 /// *include_document_adapter* are Python's own named keyword
 /// parameters -- `cli/allowlist.py::check_allowlist`'s own per-child
 /// loop passes `skip_templated=True, include_document_adapter=False`
 /// for each `use` child it walks (`iter_use_children`), never for the
 /// top-level document itself ([`check_allowlist`]'s own call below).
-/// Lane I's own runtime check (vm-lanes.md's `exec/use_.rs` row) calls
-/// this directly, per freshly-loaded child, the same way.
+/// The `use` effect's own runtime check (vm-lanes.md's `exec/use_.rs`
+/// row) calls this directly, per freshly-loaded child, the same way.
 ///
 /// *skip_templated* leaves a name with a Mustache tag in it (an
 /// unrendered `inline:` child's `provider: "{{input.tool}}"`) unjudged:
@@ -245,7 +245,7 @@ pub fn check_allowlist(document: &Value, config: &CircuitryConfig) -> Vec<String
 
 /// `allowlist_gate.py::require_adapter`: *name*, canonicalised the way
 /// `build_adapter` canonicalises it (`.strip().lower()`), must be in
-/// *allowed* (`None` is default-open) -- lane R's own run-default
+/// *allowed* (`None` is default-open) -- preflight's own run-default
 /// adapter resolution, right before the build (`cli/runtime_shim.py:917`).
 pub fn require_adapter(name: &str, allowed: Option<&[String]>) -> Result<(), String> {
     let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
@@ -281,7 +281,7 @@ pub fn profile_provider_denials(
 /// `allowlist_gate.py::ALLOWLISTS_KEY`'s own value shape
 /// (`{"adapters": [...] | None, "tools": [...] | None}`) --
 /// `install_allowlists`'s own run-time write, here as a typed pair
-/// issue #431's lane D (run wiring) installs into its own
+/// issue #431's run wiring installs into its own
 /// `runtime_config` bag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Allowlists {

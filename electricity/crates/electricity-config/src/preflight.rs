@@ -1,5 +1,5 @@
-//! The pure half of `cli/runtime_shim.py`'s preflight (issue #495,
-//! lane R): classification (`classify_preflight_results`, with
+//! The pure half of `cli/runtime_shim.py`'s preflight (issue #495):
+//! classification (`classify_preflight_results`, with
 //! Python's own hard/soft split) and the two formatters
 //! (`format_preflight_errors`/`format_preflight_warnings`). The driver
 //! itself -- building each referenced adapter/tool from the config's
@@ -360,7 +360,7 @@ pub fn preflight_refs(
 }
 
 /// `allowlist.py::_provider_token_to_adapter`, re-exported under this
-/// module for the same reason [`preflight_refs`] is -- lane R's own
+/// module for the same reason [`preflight_refs`] is -- preflight's own
 /// driver (`image_asset_warnings`) needs it too.
 pub fn provider_token_to_adapter(token: &str) -> Option<String> {
     crate::allowlist::provider_token_to_adapter(token)

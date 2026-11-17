@@ -1,5 +1,5 @@
 //! electricity-config: `config.json` -> effective settings for an
-//! electricity run (issue #431's Scope section, lane D1). Ports:
+//! electricity run (issue #431's Scope section). Ports:
 //!
 //! - [`resolve_config`]: `cli/config.py::resolve_config`'s explicit-path
 //!   branch -- `SANE_DEFAULTS` deep-merged with the named file, then the
