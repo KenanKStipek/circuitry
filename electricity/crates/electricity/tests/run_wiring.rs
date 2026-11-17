@@ -1629,3 +1629,82 @@ async fn a_defined_but_unused_litellm_alias_is_fine() {
 
     assert!(result.ok, "expected success, got: {:?}", result.error);
 }
+
+/// Issue #778 (S1): a document's own `runtime:` block can't inject any
+/// of the private keys `build_runtime_config` installs
+/// (`_orchestration_dir`, `_allowlists`, `_capability_allow`,
+/// `_capability_ceiling`) -- not even `_capability_ceiling`, the one
+/// key the old per-field-insert code left untouched whenever this run
+/// has no real ceiling to install at all (`if let Some(ceiling) =
+/// capability_ceiling` was the only write site, so a user-supplied
+/// entry under that same key, with no real one to overwrite it, used
+/// to survive into `effective_settings.runtime` verbatim).
+#[tokio::test]
+async fn a_documents_own_runtime_block_cannot_inject_any_private_runtime_key() {
+    let dir = temp_dir("internal-runtime-keys-reset");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "runtime:\n  _orchestration_dir: /nowhere\n  _allowlists: {adapters: [nope], tools: [nope]}\n  _capability_allow: [fake]\n  _capability_ceiling: [fake]\neffects: []\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+    let state = result.state.expect("a successful run writes state");
+    let dict = state.as_dict().unwrap();
+    let runtime = dict
+        .get(&electricity_value::Value::Str("runtime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let effective_settings = runtime
+        .get(&electricity_value::Value::Str(
+            "effective_settings".to_string(),
+        ))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let effective_runtime = effective_settings
+        .get(&electricity_value::Value::Str("runtime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+
+    assert_ne!(
+        effective_runtime.get(&electricity_value::Value::Str(
+            "_orchestration_dir".to_string()
+        )),
+        Some(&electricity_value::Value::Str("/nowhere".to_string())),
+    );
+    let allowlists = effective_runtime
+        .get(&electricity_value::Value::Str("_allowlists".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        allowlists.get(&electricity_value::Value::Str("adapters".to_string())),
+        Some(&electricity_value::Value::None),
+    );
+    assert_eq!(
+        allowlists.get(&electricity_value::Value::Str("tools".to_string())),
+        Some(&electricity_value::Value::None),
+    );
+    assert_eq!(
+        effective_runtime.get(&electricity_value::Value::Str(
+            "_capability_allow".to_string()
+        )),
+        Some(&electricity_value::Value::List(Vec::new())),
+    );
+    // No real ceiling installed on this run (it isn't running from
+    // inside the library cache directory), so the key must be absent
+    // entirely -- never the user-supplied `["fake"]`.
+    assert_eq!(
+        effective_runtime.get(&electricity_value::Value::Str(
+            "_capability_ceiling".to_string()
+        )),
+        None,
+    );
+}

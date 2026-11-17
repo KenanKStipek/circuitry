@@ -573,6 +573,16 @@ fn build_runtime_config(
         .and_then(Value::as_dict)
         .cloned()
         .unwrap_or_default();
+    // #778 (S1): drop every `_`-prefixed key the user-supplied runtime
+    // config carried (the config, the project config, a profile, a
+    // document's own `runtime:` block -- trusted documents included --
+    // and `-e`) in one step, before any internal value below is
+    // installed, matching cof's own one-step strip (`cli/runtime_shim.
+    // py::run`). Without this, a user-supplied `_capability_ceiling`
+    // would survive untouched whenever this run has no real ceiling to
+    // install (the `if let Some(ceiling) = capability_ceiling` arm
+    // below is skipped), and `effective_settings.runtime` would show it.
+    dict.retain(|k, _| !matches!(k, Value::Str(s) if s.starts_with('_')));
     dict.insert(
         Value::Str("_orchestration_dir".to_string()),
         Value::Str(orchestration_dir.to_string()),
