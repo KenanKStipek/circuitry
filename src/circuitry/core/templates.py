@@ -20,7 +20,14 @@ import chevron  # type: ignore[import-untyped]
 import chevron.renderer  # type: ignore[import-untyped]
 from chevron.tokenizer import ChevronError  # type: ignore[import-untyped]
 
-__all__ = ["TemplateError", "render_template", "splice_text", "template_syntax_error"]
+__all__ = [
+    "TemplateError",
+    "pop_bare_effect_scope",
+    "push_bare_effect_scope",
+    "render_template",
+    "splice_text",
+    "template_syntax_error",
+]
 
 #: Per-call, per-thread/task override for ``render_template(..., escape=False)``
 #: (#397) — read by :func:`_escape_aware`, which replaces
@@ -50,6 +57,64 @@ def _escape_aware(string: str) -> str:
 chevron.renderer._html_escape = _escape_aware
 
 
+#: One entry per enclosing effect container, nearest first: its dotted
+#: path (``"prime"`` for a document's own root, ``"prime.d"`` for a
+#: nested dynamic named ``d``, ...) and its own body-and-``finally:``
+#: effect names. Populated by :func:`push_bare_effect_scope`
+#: (``core.dynamic``, on every dynamic, use/reflector/decomposition child
+#: root included) so a bare reference at the document root, in a chain or
+#: tree dynamic, in a ``use`` child's root or in ``finally:`` resolves the
+#: same way a loop body's/``if`` branch's own sibling already does
+#: (#778). A ``ContextVar``, not a plain module global: tree-flow
+#: dispatches concurrent children onto real OS threads
+#: (``cancellation.submit_with_context``), and each one must see the
+#: chain as it stood at submission time without a sibling thread's own
+#: further nesting leaking across.
+_BARE_EFFECT_CHAIN: contextvars.ContextVar[tuple[tuple[str, frozenset[str]], ...]] = (
+    contextvars.ContextVar("circuitry_bare_effect_chain", default=())
+)
+
+
+def push_bare_effect_scope(
+    *, own_name: str, own_effect_names: frozenset[str], isolated: bool
+) -> contextvars.Token[tuple[tuple[str, frozenset[str]], ...]]:
+    """Push one more enclosing effect container onto the chain a bare
+    reference's own fallback walks (#778) — pair with
+    :func:`pop_bare_effect_scope` in a ``finally``.
+
+    *own_name* is this container's own name — ``self.defn.name`` in
+    ``core.dynamic``, always ``"prime"`` for a document's real root or a
+    ``use``/decomposition child's own isolated root (every orchestration
+    document compiles with that root name), ``"inner"`` for a reflector's
+    own inner dynamic, or a nested dynamic's own declared name. *own_effect_names*
+    is its own body-and-``finally:`` effect names — a bare head matching one
+    of them resolves to ``"<this container's own path>.<the rest of the
+    reference>"``, looked up the same way the canonical dotted spelling
+    already is.
+
+    *isolated* starts a brand new chain rooted at *own_name* alone, sharing
+    nothing with whatever chain is already running — a document executed
+    via ``use``, a reflector or a decomposition plan has its own isolated
+    state and its own effect names, unrelated to its caller's. Otherwise
+    this container nests under the nearest entry already on the chain —
+    a plain ``dynamic:`` block inside the same document.
+    """
+    if isolated:
+        new_chain = ((own_name, own_effect_names),)
+    else:
+        chain = _BARE_EFFECT_CHAIN.get()
+        parent_path = chain[0][0] if chain else own_name
+        new_chain = ((f"{parent_path}.{own_name}", own_effect_names), *chain)
+    return _BARE_EFFECT_CHAIN.set(new_chain)
+
+
+def pop_bare_effect_scope(
+    token: contextvars.Token[tuple[tuple[str, frozenset[str]], ...]],
+) -> None:
+    """Undo the matching :func:`push_bare_effect_scope` call."""
+    _BARE_EFFECT_CHAIN.reset(token)
+
+
 #: The only ``getattr`` fallback :func:`_get_key` resolves — a
 #: ``datetime.date``/``datetime.datetime``'s own data fields — keyed by
 #: the narrowest type each applies to. Everything else a ``getattr`` call
@@ -61,13 +126,18 @@ _DATE_ATTRS = frozenset({"year", "month", "day"})
 _DATETIME_ATTRS = _DATE_ATTRS | frozenset({"hour", "minute", "second", "microsecond"})
 
 
-def _get_key(key: str, scopes: list[Any], warn: bool = False) -> Any:
-    """chevron's own ``_get_key`` (``renderer.py``), with one change: a
+def _get_key(
+    key: str, scopes: list[Any], warn: bool = False, *, _bare_fallback: bool = True
+) -> Any:
+    """chevron's own ``_get_key`` (``renderer.py``), with two changes: a
     ``getattr`` hit resolves only a ``datetime.date``/``datetime.datetime``
     value's own ``year``/``month``/``day``/``hour``/``minute``/``second``/
     ``microsecond`` fields; every other attribute — a method, a dunder, any
     other type's own attributes — is treated as a miss, exactly like an
-    ``AttributeError`` would be, instead of being returned.
+    ``AttributeError`` would be, instead of being returned; and, once every
+    scope has missed, a bare reference whose first segment names an effect
+    of an enclosing container falls back to that container's own dotted
+    path (#778, see :func:`push_bare_effect_scope`) before giving up.
 
     Mustache has no concept of a method call; a tag whose name happens to
     match one of its scope's methods (``title`` inside ``{{#title}}``,
@@ -77,6 +147,13 @@ def _get_key(key: str, scopes: list[Any], warn: bool = False) -> Any:
     any other missing key does, and the one named exception — a date or
     datetime's own calendar fields, ``{{d.year}}`` — keeps resolving
     exactly as before.
+
+    *_bare_fallback* is ``False`` only for the recursive dotted-path lookup
+    the fallback itself performs — that lookup's own key already starts
+    with a container's own path (``"prime..."``), never another effect's
+    bare name, so it has nothing left to fall back to; without this the
+    fallback could in principle recurse (a document is free to name an
+    effect the same as a container's own path segment).
     """
     if key == ".":
         return _wrap_container(scopes[0])
@@ -112,6 +189,12 @@ def _get_key(key: str, scopes: list[Any], warn: bool = False) -> Any:
                 return current or ""
         except (AttributeError, KeyError, IndexError, ValueError):
             pass
+
+    if _bare_fallback:
+        head = key.split(".", 1)[0]
+        for path, names in _BARE_EFFECT_CHAIN.get():
+            if head in names:
+                return _get_key(f"{path}.{key}", scopes, warn, _bare_fallback=False)
 
     if warn:
         import sys

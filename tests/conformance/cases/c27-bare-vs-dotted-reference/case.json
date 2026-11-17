@@ -1,6 +1,6 @@
 {
   "spec_case": "C27",
-  "description": "Top-level plain effects: list, step2 reads step1 via bare {{step1.value}} and via dotted {{prime.step1.value}} — the bare form resolves to empty, the dotted form resolves (electricity/docs/spec/runtime-semantics.md §10 C27, Q1) — the single most important parity assertion in the spec's list.",
+  "description": "Top-level plain effects: list, step2 reads step1 via bare {{step1.value}} and via dotted {{prime.step1.value}} — both forms resolve the same way, live off the same state (#778): a bare reference whose head names a sibling effect resolves exactly as the dotted form would at that point — the single most important parity assertion in the spec's list.",
   "engines": ["python", "electricity"],
   "expect": "success"
 }
