@@ -858,11 +858,16 @@ def test_resume_last_resumes_the_same_state_regardless_of_which_engine_wrote_or_
 #: orchestration, python-only there (the harness's legacy positional
 #: form has no `--state` of its own, #752's precedent) -- covered here
 #: on both engines' own `run` subcommand instead. A `resume: restart`
-#: dynamic `d` drops its stale `x`/`reader` and reruns, so a bare
-#: `{{d.x.value}}` inside `d` reads the fresh node, same as
-#: `{{prime.d.x.value}}`; a plain dynamic `e`'s unfinished `first`
-#: reruns and reads its already-completed, saved sibling `second`
-#: bare, same as dotted.
+#: dynamic `d` drops its stale `x`/`reader`/`sibling_bare_reader` and
+#: reruns: `{{d.x.value}}` inside `d` reads the fresh node, same as
+#: `{{prime.d.x.value}}` -- an ordinary ancestor-context read, not the
+#: fallback, since `d` is already a live top-level key there, so this
+#: pair already resolved on main. `sibling_bare_reader`'s own
+#: `{{x.value}}` (no `d.` prefix) needs the actual bare-sibling-
+#: reference fallback to reach that same fresh `x` instead of nothing.
+#: A plain dynamic `e`'s unfinished `first` reruns and reads its
+#: already-completed, saved sibling `second` bare, same as dotted,
+#: needing that same fallback.
 BARE_RESTART_AND_SAVED_STATE_ORCHESTRATION = (
     "name: c778-bare-restart-and-saved-state\n"
     "effects:\n"
@@ -882,6 +887,14 @@ BARE_RESTART_AND_SAVED_STATE_ORCHESTRATION = (
     "          input:\n"
     "            bare: \"{{d.x.value}}\"\n"
     "            dotted: \"{{prime.d.x.value}}\"\n"
+    "      - type: tool\n"
+    "        name: sibling_bare_reader\n"
+    "        provider: json\n"
+    "        params:\n"
+    "          mode: stringify\n"
+    "          input:\n"
+    "            bare: \"{{x.value}}\"\n"
+    "            dotted: \"{{d.x.value}}\"\n"
     "  - type: dynamic\n"
     "    name: e\n"
     "    flow: chain\n"
@@ -960,6 +973,14 @@ def test_a_bare_restart_and_saved_state_reference_resolves_the_same_as_dotted_vi
     reader_value = json.loads(d["reader"]["value"])
     assert reader_value["bare"] == reader_value["dotted"]
     assert "new-x" in reader_value["bare"]
+
+    # `sibling_bare_reader`'s own `{{x.value}}`, with no `d.` prefix,
+    # needs the bare-sibling-reference fallback -- `reader`'s own
+    # `{{d.x.value}}` above is an ordinary ancestor-context read
+    # instead, since `d` is already a live top-level key there.
+    sibling_bare_reader_value = json.loads(d["sibling_bare_reader"]["value"])
+    assert sibling_bare_reader_value["bare"] == sibling_bare_reader_value["dotted"]
+    assert "new-x" in sibling_bare_reader_value["bare"]
 
     e = state["prime"]["e"]
     assert json.loads(e["second"]["value"]) == {"marker": "unused-this-run"}

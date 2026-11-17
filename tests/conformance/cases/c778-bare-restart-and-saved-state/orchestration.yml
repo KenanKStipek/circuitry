@@ -16,6 +16,14 @@ effects:
           input:
             bare: "{{d.x.value}}"
             dotted: "{{prime.d.x.value}}"
+      - type: tool
+        name: sibling_bare_reader
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{x.value}}"
+            dotted: "{{d.x.value}}"
   - type: dynamic
     name: e
     flow: chain
