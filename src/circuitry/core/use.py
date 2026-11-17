@@ -35,7 +35,7 @@ from .prompt_compose import (
     render_with_composition,
 )
 from .resume import ResumeMode
-from .saved_state import _canonical_key_order
+from .saved_state import canonical_key_order
 from .store import Store
 from .store.store import replace_node
 from .yaml_load import load_yaml
@@ -525,13 +525,13 @@ def _canonical_json_digest(doc: dict[str, Any]) -> str:
     """The sha256 a reflector-generated document's ``meta.orchestration_sha256``
     records: canonical JSON, not the document's own (nonexistent) YAML text.
 
-    Compact separators, and keys pre-sorted by :func:`_canonical_key_order`
+    Compact separators, and keys pre-sorted by :func:`canonical_key_order`
     (then written with ``sort_keys=False``, which only ever affects an
     unordered ``dict`` literal, never this one) so the digest never
     depends on the model's own key order, matching on both engines.
     """
     canonical = json.dumps(
-        _canonical_key_order(doc),
+        canonical_key_order(doc),
         sort_keys=False,
         separators=(",", ":"),
         ensure_ascii=False,

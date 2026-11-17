@@ -25,6 +25,7 @@ from circuitry.cli.runtime_shim import RunRequest, run
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.saved_state import (
+    canonical_key_order,
     compact_last_aliases,
     dumps_saved_state,
     link_last_refs,
@@ -345,6 +346,30 @@ def test_dumps_saved_state_still_raises_for_anything_else_unencodable() -> None:
     ``json.dumps`` with no ``default=`` at all."""
     with pytest.raises(TypeError, match="not JSON serializable"):
         dumps_saved_state({"s": {1, 2, 3}})
+
+
+def test_canonical_key_order_ranks_a_bool_before_a_string_of_the_same_text() -> None:
+    """Two keys with the same JSON text ("true") sort by type rank (bool
+    before str, #778's own digest-helper order), not by insertion order --
+    the string key is written first here, but the bool key must still sort
+    first.
+    """
+    mixed = {"true": "string-inserted-first", True: "bool-inserted-second"}
+    ordered = canonical_key_order(mixed)
+    assert list(ordered.keys()) == [True, "true"]
+
+
+def test_canonical_key_order_on_a_date_key_raises_typeerror_not_keyerror() -> None:
+    """A key of a type JSON can't write at all (a YAML 1.1 date) must fail
+    the same way the un-pre-sorted ``--out`` write already does --
+    ``TypeError`` -- not a ``KeyError`` from ranking its type before ever
+    computing its text (#778).
+    """
+    mixed = {datetime.date(2024, 1, 2): "v", "other": "w"}
+    with pytest.raises(TypeError, match="keys must be"):
+        canonical_key_order(mixed)
+    with pytest.raises(TypeError, match="keys must be"):
+        dumps_saved_state(mixed, pretty=True)
 
 
 def test_write_state_json_no_longer_crashes_on_a_date(tmp_path: Path) -> None:
