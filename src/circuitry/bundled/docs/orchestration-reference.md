@@ -727,6 +727,27 @@ Rules of the form:
   `state.<name>` reads in CEL, but only inside that loop's own body** — see
   [CEL Expressions](#cel-expressions).
 
+#### Bare sibling references everywhere, not just inside a loop/`if`
+
+The bare form above (`{{<step>.value}}` for `{{prime.<step>.value}}`) works
+the same way in *every* container, not only inside a loop body or an `if`
+branch: at the document root, inside a `dynamic` (`chain` or `tree`), inside
+a `use` effect's own child document, in a `finally:` block, and inside a
+reflector's or a decomposition plan's own generated effects. A bare head
+naming an effect of the nearest enclosing container resolves exactly as the
+dotted form at that point would — live, after `resume: restart`, with saved
+or resumed state, and inside a `flow: tree` branch's own snapshot — because
+it is the same lookup, consulted only once Mustache's own scope chain
+(the container's own effects, then each enclosing container's, nearest
+first) has missed on every other name: a loop binding, `iter`, `input`,
+`prime`, `runtime` and every other existing context key always win first,
+and a loop body's/`if` branch's own sibling still shadows an outer name
+exactly as above. Inside a Mustache section, the section's own items are
+checked first; only a name the items lack falls back to an outer
+effect's name. As with the loop-body form, the bare spelling is accepted,
+not preferred, for the same reason: it can collide with a user-supplied
+state key, and `prime.`-prefixed cannot.
+
 ---
 
 ### `reflector`
