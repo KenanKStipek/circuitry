@@ -109,7 +109,9 @@ async fn raw_url_is_redacted_the_same_way_every_other_surface_names_it() {
     .unwrap();
     assert!(result.ok);
     let url = dict_get(&result.raw, "url").unwrap();
-    let Value::Str(url) = url else { panic!("url must be a string") };
+    let Value::Str(url) = url else {
+        panic!("url must be a string")
+    };
     assert!(!url.contains(password));
     assert!(!url.contains("alice"));
     assert_eq!(url, &format!("http://{addr}/"));

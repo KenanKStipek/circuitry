@@ -475,8 +475,9 @@ mod tests {
     #[test]
     fn scrub_embedded_urls_redacts_a_url_found_inside_prose() {
         let password = "pw_value_pw_value";
-        let text =
-            format!("cannot connect to ws://alice:{password}@host:8000/rpc (ConnectionRefusedError)");
+        let text = format!(
+            "cannot connect to ws://alice:{password}@host:8000/rpc (ConnectionRefusedError)"
+        );
         let scrubbed = scrub_embedded_urls(&text);
         assert!(!scrubbed.contains(password));
         assert!(!scrubbed.contains("alice"));
@@ -488,7 +489,10 @@ mod tests {
 
     #[test]
     fn scrub_embedded_urls_leaves_text_with_no_url_unchanged() {
-        assert_eq!(scrub_embedded_urls("no url here at all"), "no url here at all");
+        assert_eq!(
+            scrub_embedded_urls("no url here at all"),
+            "no url here at all"
+        );
     }
 
     #[test]
