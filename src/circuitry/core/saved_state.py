@@ -229,15 +229,27 @@ def pretty_key_order(value: Any) -> Any:
     still fails the same way an un-pre-sorted ``--out`` write already does --
     the same ``TypeError`` :func:`canonical_key_order` itself raises for one).
 
+    A ``float`` ``NaN`` key takes the same fallback even though comparing
+    it never raises: ``nan < 1`` and ``1 < nan`` are both ``False``, so a
+    dict holding one isn't a total order either, just one plain ``sorted()``
+    tolerates without an exception -- in whatever order its own algorithm
+    happens to produce for an inconsistent comparator, which electricity's
+    own sort need not match. Checked for up front, so both engines land on
+    :func:`canonical_key_order`'s own order for this case too, the one
+    order they already agree on for every other incomparable mix.
+
     Used only by :func:`dumps_saved_state`'s ``--pretty`` write -- never by
     the reflector-plan digest, which must keep :func:`canonical_key_order`'s
     own order so an existing plan's digest never changes (#810).
     """
     if isinstance(value, dict):
-        try:
-            items = sorted(value.items(), key=lambda kv: kv[0])
-        except TypeError:
+        if any(isinstance(k, float) and k != k for k in value):
             items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
+        else:
+            try:
+                items = sorted(value.items(), key=lambda kv: kv[0])
+            except TypeError:
+                items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
         return {k: pretty_key_order(v) for k, v in items}
     if isinstance(value, list):
         return [pretty_key_order(v) for v in value]

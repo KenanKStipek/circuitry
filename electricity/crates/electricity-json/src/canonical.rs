@@ -179,6 +179,18 @@ pub fn pretty_key_order(value: &Value) -> Result<Value, WriteError> {
 }
 
 fn pretty_entries_sorted(entries: Vec<(Value, Value)>) -> Result<Vec<(Value, Value)>, WriteError> {
+    // A `Float` `NaN` key makes *entries* incomparable even though
+    // comparing it never panics -- `numeric_cmp` maps the unordered
+    // result to `Equal` -- so a dict holding one isn't a total order
+    // either, just one `sort_by` tolerates without panicking, in
+    // whatever order its own algorithm happens to produce for an
+    // inconsistent comparator, which `core/saved_state.py`'s own
+    // `sorted()` need not match. Checked for up front, so both engines
+    // land on `canonical_sort`'s own order for this case too, the one
+    // order they already agree on for every other incomparable mix.
+    if has_nan_key(&entries) {
+        return canonical_sort(entries);
+    }
     if all_str_keys(&entries) {
         return Ok(str_entries_sorted(entries));
     }
@@ -186,6 +198,15 @@ fn pretty_entries_sorted(entries: Vec<(Value, Value)>) -> Result<Vec<(Value, Val
         return Ok(numeric_entries_sorted(entries));
     }
     canonical_sort(entries)
+}
+
+/// `true` iff any key in *entries* is a `Float` `NaN` -- see
+/// [`pretty_entries_sorted`]'s own comment on why that routes through
+/// [`canonical_sort`] instead of [`numeric_entries_sorted`].
+fn has_nan_key(entries: &[(Value, Value)]) -> bool {
+    entries
+        .iter()
+        .any(|(k, _)| matches!(k, Value::Float(f) if f.is_nan()))
 }
 
 #[cfg(test)]

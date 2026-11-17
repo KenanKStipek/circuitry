@@ -346,6 +346,30 @@ mod tests {
     }
 
     #[test]
+    fn render_state_pretty_sorts_a_nan_keyed_dict_by_json_text_not_numeric_comparison() {
+        // Issue #778: a `Float` `NaN` key makes the dict's keys
+        // incomparable even though comparing it never panics --
+        // `nan < 1` and `1 < nan` are both `false` -- so `--pretty`
+        // must route it through `canonical_key_order`'s own order (by
+        // each key's own JSON text, `"1" < "2" < "NaN"`) rather than
+        // trust its own numeric-key fast path to tolerate it the same
+        // way cof's `sorted()` does. Pinned against cof's own
+        // `dumps_saved_state({"extra": {float("nan"): "nan-value", 1:
+        // "one", 2: "two"}}, pretty=True)`.
+        let mut inner = IndexMap::new();
+        inner.insert(Value::Float(f64::NAN), Value::Str("nan-value".to_string()));
+        inner.insert(Value::from(1i64), Value::Str("one".to_string()));
+        inner.insert(Value::from(2i64), Value::Str("two".to_string()));
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("extra".to_string()), Value::Dict(inner));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"extra\": {\n    \"1\": \"one\",\n    \"2\": \"two\",\n    \"NaN\": \"nan-value\"\n  }\n}\n"
+        );
+    }
+
+    #[test]
     fn render_state_pretty_sorts_non_ascii_string_keys_by_code_point() {
         // All-string keys sort by plain `sorted()` -- code-point order,
         // the same as `json.dumps(..., sort_keys=True)` -- not

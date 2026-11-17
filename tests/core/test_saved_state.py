@@ -402,6 +402,21 @@ def test_dumps_saved_state_pretty_writes_an_all_int_keyed_dict_in_numeric_order(
     )
 
 
+def test_dumps_saved_state_pretty_writes_a_nan_key_in_canonical_order() -> None:
+    """Pinned for both engines (#778): a ``float`` ``NaN`` key makes a
+    dict's keys incomparable even though comparing it never raises
+    ``TypeError`` -- ``nan < 1`` and ``1 < nan`` are both ``False`` --
+    so :func:`pretty_key_order` must route it through
+    :func:`canonical_key_order`'s own order (by each key's own JSON
+    text, ``"1" < "2" < "NaN"``) rather than trust ``sorted()`` to
+    tolerate it the same way on both engines.
+    """
+    state = {"extra": {float("nan"): "nan-value", 1: "one", 2: "two"}}
+    assert dumps_saved_state(state, pretty=True) == (
+        '{\n  "extra": {\n    "1": "one",\n    "2": "two",\n    "NaN": "nan-value"\n  }\n}'
+    )
+
+
 def test_canonical_key_order_sorts_non_ascii_string_keys_by_code_point() -> None:
     """An all-string dict sorts by raw ``sorted()``, the same code-point
     order a plain ``json.dumps(..., sort_keys=True)`` already used -- for

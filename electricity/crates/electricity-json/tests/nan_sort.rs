@@ -7,7 +7,7 @@
 //! `Ordering::Equal` to everything isn't one (`-1 == NaN == 0`, yet
 //! `-1 < 0`).
 
-use electricity_json::{WriteMode, dumps};
+use electricity_json::{WriteMode, dumps, pretty_key_order};
 use electricity_value::{Dict, Value};
 
 /// A fixed, deterministic 64-bit PRNG (SplitMix64), so these tests don't
@@ -81,6 +81,34 @@ fn large_nan_keyed_dicts_never_panic() {
             }
             let value = Value::Dict(dict);
             dumps(&value, WriteMode::PRETTY)
+                .expect("a random NaN-keyed dict of 64+ comparable keys must not panic or error");
+        }
+    }
+}
+
+/// `pretty_key_order`'s own `--pretty` sort rule (issue #778,
+/// `out.rs::pretty_sort_if_needed`) is a second, separate path a `NaN`
+/// float key reaches -- `numeric_entries_sorted`'s own `sort_by`, not
+/// this file's own `dumps(..., WriteMode::PRETTY)` fallback (`render_
+/// state` always writes with `sort_keys: false`, pre-sorted by this
+/// function instead). Checked here the same way: never panics, for the
+/// same seeded, shuffled, 64+-key dicts above.
+#[test]
+fn large_nan_keyed_dicts_never_panic_through_pretty_key_order_either() {
+    for seed in 0u64..20 {
+        for size in [64usize, 65, 100, 127, 128, 150, 199, 200] {
+            let mut rng = SplitMix64::new(seed * 1000 + size as u64);
+            let mut keys: Vec<f64> = (0..size).map(|i| i as f64 - (size as f64 / 2.0)).collect();
+            let nan_at = rng.below(keys.len());
+            keys[nan_at] = f64::NAN;
+            rng.shuffle(&mut keys);
+
+            let mut dict: Dict = Dict::new();
+            for k in keys {
+                dict.insert(Value::Float(k), Value::None);
+            }
+            let value = Value::Dict(dict);
+            pretty_key_order(&value)
                 .expect("a random NaN-keyed dict of 64+ comparable keys must not panic or error");
         }
     }
