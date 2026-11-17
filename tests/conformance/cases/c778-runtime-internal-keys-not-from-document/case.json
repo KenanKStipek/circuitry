@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A trusted (path-run) document's own `runtime:` block sets `_x` and the real internal key `_capability_ceiling` -- both must be dropped before anything internal installs its own value, so `runtime.effective_settings.runtime` carries neither (the one step `run()` now does, replacing a per-key pop list that could miss a future internal key).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

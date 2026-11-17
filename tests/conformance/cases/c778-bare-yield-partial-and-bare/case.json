@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A `yield`'s own template uses both the Mustache-partial splice `{{> a}}` and a bare sibling reference `{{a.value}}` to the same effect -- both resolve to `a`'s own value (\"A / A\"), not only the partial. Fails (renders \"A / \") on main, where `yield b`'s own template renders against the composition overlay directly, with no bare-reference fallback at all.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

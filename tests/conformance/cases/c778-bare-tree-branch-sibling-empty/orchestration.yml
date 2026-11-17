@@ -1,0 +1,15 @@
+name: c778-bare-tree-branch-sibling-empty
+flow: tree
+effects:
+  - type: tool
+    name: a
+    provider: json
+    params: {mode: stringify, input: {marker: "a-val"}}
+  - type: tool
+    name: bare_reader
+    provider: json
+    params: {mode: stringify, input: {v: "{{a.value}}"}}
+  - type: tool
+    name: dotted_reader
+    provider: json
+    params: {mode: stringify, input: {v: "{{prime.a.value}}"}}

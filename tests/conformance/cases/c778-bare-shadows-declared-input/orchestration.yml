@@ -1,0 +1,14 @@
+name: c778-bare-shadows-declared-input
+interface:
+  inputs:
+    x:
+      type: string
+effects:
+  - type: tool
+    name: x
+    provider: json
+    params: {mode: stringify, input: {marker: "effect-x"}}
+  - type: tool
+    name: reader
+    provider: json
+    params: {mode: stringify, input: {bare: "{{x.value}}"}}

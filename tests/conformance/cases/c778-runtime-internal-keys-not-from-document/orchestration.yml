@@ -1,0 +1,9 @@
+name: c778-runtime-internal-keys-not-from-document
+runtime:
+  _x: 1
+  _capability_ceiling: ["y"]
+effects:
+  - type: tool
+    name: noop
+    provider: json
+    params: {mode: stringify, input: {marker: "noop"}}

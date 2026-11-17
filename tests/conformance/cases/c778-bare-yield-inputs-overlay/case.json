@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A `yield` with a non-empty `inputs:` still falls back to a bare sibling reference once its own narrow `inputs:` overlay misses -- `{{x}}` reads the declared input, `{{a.value}}` still reaches sibling `a` (\"X / A\"). Fails (renders \"X / \") on main, where a `yield`'s own `inputs:` scope has no bare-reference fallback at all.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

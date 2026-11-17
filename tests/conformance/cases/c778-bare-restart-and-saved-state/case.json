@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #778",
+  "description": "A --state seed, --resume last --force: a resume: restart dynamic `d` drops its stale `x`/`reader` and reruns, so a bare {{d.x.value}} inside `d` reads the fresh node, same as {{prime.d.x.value}}; a plain dynamic `e`'s unfinished `first` reruns and reads its already-completed, saved sibling `second` bare, same as dotted -- fails (renders empty) on main, where a plain dynamic's own bare reference never resolved at all.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["--state", "__CASE_DIR__/seed.json", "--resume", "last", "--force"]
+}
