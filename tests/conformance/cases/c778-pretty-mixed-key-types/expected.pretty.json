@@ -1,0 +1,213 @@
+{
+  "_run_id": "c113b86f-41bc-4a47-aa8f-6f47dea1d26b",
+  "_timestamp": "20261117_013416",
+  "input": {},
+  "prime": {
+    "meta": {
+      "adapter": "scripted",
+      "completed_at": "2026-11-17T01:34:16.147648+00:00",
+      "created_at": "2026-11-17T01:34:16.143433+00:00",
+      "dry_run": false,
+      "error": null,
+      "flow": "chain",
+      "labels": null,
+      "model": "test",
+      "tokens_received": null,
+      "tokens_sent": null
+    },
+    "plan_it": {
+      "generated": {
+        "iter_0": {
+          "check": {
+            "meta": {
+              "completed_at": "2026-11-17T01:34:16.147615+00:00",
+              "created_at": "2026-11-17T01:34:16.147536+00:00",
+              "error": null,
+              "exit_code": null,
+              "params_rendered": {
+                "input": "{\"ok\": true}",
+                "mode": "parse",
+                "true": "push"
+              },
+              "provider": "json",
+              "raw": {
+                "mode": "parse"
+              },
+              "stderr": null,
+              "stdout": null,
+              "waiting_for": null
+            },
+            "value": {
+              "ok": true
+            }
+          },
+          "meta": {
+            "child_errors": null,
+            "completed_at": "2026-11-17T01:34:16.147634+00:00",
+            "created_at": "2026-11-17T01:34:16.146926+00:00",
+            "error": null,
+            "inline": true,
+            "inputs": {},
+            "orchestration": null,
+            "orchestration_sha256": "c80b535c295db206de8caf30811288cf044766a05b86956ac1e71be7600a1589",
+            "resolved_path": null,
+            "validation_errors": null
+          },
+          "value": null
+        }
+      },
+      "inner": {
+        "meta": {
+          "adapter": "scripted",
+          "completed_at": "2026-11-17T01:34:16.145960+00:00",
+          "created_at": "2026-11-17T01:34:16.143527+00:00",
+          "dry_run": false,
+          "error": null,
+          "flow": "chain",
+          "labels": null,
+          "model": "test",
+          "tokens_received": null,
+          "tokens_sent": null
+        },
+        "propose_steps": {
+          "meta": {
+            "adapter": "scripted",
+            "completed_at": "2026-11-17T01:34:16.145939+00:00",
+            "created_at": "2026-11-17T01:34:16.143569+00:00",
+            "dry_run": false,
+            "error": null,
+            "fallback_attempts": [
+              {
+                "adapter": "scripted",
+                "error": null,
+                "model": "test",
+                "status": "succeeded",
+                "tokens_received": 20,
+                "tokens_sent": 10
+              }
+            ],
+            "fallback_recovered": false,
+            "model": "test",
+            "model_reason": "default",
+            "prompt_chars": 360,
+            "prompt_sent": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nPlan it.\n\npropose steps",
+            "prompt_sent_sha256": "82b0011c2d93e0a6940b2f28edaf9feb3c02d9186905435a634e5ad8d36c5e04",
+            "prompt_type": "text",
+            "tokens_received": 20,
+            "tokens_received_total": 20,
+            "tokens_sent": 10,
+            "tokens_sent_total": 10,
+            "waiting_for": null
+          },
+          "value": "effects:\n  - type: tool\n    name: check\n    provider: json\n    params:\n      mode: parse\n      on: push\n      input: '{\"ok\": true}'\ndone: false"
+        },
+        "value": true
+      },
+      "meta": {
+        "completed_at": "2026-11-17T01:34:16.147644+00:00",
+        "error": null,
+        "iterations": [
+          {
+            "done": false,
+            "error": null,
+            "i": 0,
+            "parsed": {
+              "effects": [
+                {
+                  "name": "check",
+                  "params": {
+                    "input": "{\"ok\": true}",
+                    "mode": "parse",
+                    "true": "push"
+                  },
+                  "provider": "json",
+                  "type": "tool"
+                }
+              ]
+            },
+            "plan_from_step": "propose_steps",
+            "plan_text": "effects:\n  - type: tool\n    name: check\n    provider: json\n    params:\n      mode: parse\n      on: push\n      input: '{\"ok\": true}'\ndone: false",
+            "stop": false
+          }
+        ]
+      },
+      "value": true
+    },
+    "value": true
+  },
+  "runtime": {
+    "effective_settings": {
+      "adapter": "scripted",
+      "model": "test",
+      "out": "<out>",
+      "plugins": [],
+      "runtime": {
+        "_allowlists": {
+          "adapters": null,
+          "tools": null
+        },
+        "_capability_allow": [],
+        "_orchestration_dir": "<case>",
+        "adapters": {
+          "ollama": {
+            "base_url": "http://localhost:11434"
+          },
+          "scripted": {
+            "replies_file": "scripted-replies.yaml"
+          }
+        },
+        "plugins": {
+          "comfyui": {
+            "base_url": "http://localhost:8188"
+          }
+        }
+      },
+      "sources": {
+        "adapter": "orchestration",
+        "adapters.scripted.timeout_seconds": "default",
+        "complexity": "default",
+        "complexity.decomposition": "default",
+        "complexity.decomposition.max_depth": "default",
+        "complexity.decomposition.on_failure": "default",
+        "complexity.decomposition.threshold": "default",
+        "complexity.routing": "default",
+        "complexity.routing.bands": "default",
+        "complexity.scoring": "default",
+        "complexity.splitting": "default",
+        "complexity.splitting.max_concurrency": "default",
+        "complexity.splitting.max_depth": "default",
+        "complexity.splitting.max_input_tokens": "default",
+        "complexity.splitting.max_parts": "default",
+        "complexity.splitting.models": "default",
+        "complexity.splitting.on_failure": "default",
+        "model": "orchestration",
+        "out": "cli",
+        "plugins": "default",
+        "runtime": "config"
+      }
+    },
+    "last_run": {
+      "completed_at": "2026-11-17T01:34:16.147653+00:00",
+      "document_hash": "3ff79553e29f03a721e47d1e470565c1034c880ec13129c0c85953d05393b33a",
+      "dry_run": false,
+      "orchestration_path": "orchestration.yml",
+      "run_id": "c113b86f-41bc-4a47-aa8f-6f47dea1d26b",
+      "started_at": "2026-11-17T01:34:16.140741+00:00",
+      "totals": {
+        "cost_usd": null,
+        "effects_run": 6,
+        "tokens_received": 20,
+        "tokens_sent": 10,
+        "wall_time_s": 0.008829207858070731
+      },
+      "validate_only": false,
+      "verbose": false
+    },
+    "plugins": {
+      "configured": [],
+      "contract_version": "1",
+      "events": [],
+      "loaded": []
+    }
+  }
+}

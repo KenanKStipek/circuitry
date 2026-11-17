@@ -64,27 +64,102 @@ pub fn python_path_str(path: &Path) -> String {
 /// nonzero exit rather than writing a `{"error": ...}` placeholder and
 /// exiting 0.
 pub fn render_state(state: &Value, pretty: bool) -> Result<String, electricity_json::WriteError> {
-    let mode = if pretty {
-        electricity_json::WriteMode::PRETTY
+    let ordered = pretty_sort_if_needed(state, pretty)?;
+    electricity_json::dumps_default_str(ordered.as_ref(), pretty_write_mode(pretty))
+        .map(|body| format!("{body}\n"))
+}
+
+/// `--pretty`'s own sort rule (issue #778): by the JSON text each dict key
+/// would write (via [`electricity_json::stringify_key`]), not
+/// `sort_keys=True`'s native Python-value comparison -- `sort_keys=True`
+/// raises `TypeError` for a dict mixing key types `<` can't compare, which
+/// `core/saved_state.py::dumps_saved_state` no longer does (issue #778):
+/// it pre-sorts the tree itself (`_canonical_key_order`) and writes the
+/// result with `sort_keys=False`. Ported the same way here: reorder every
+/// `Dict`'s entries first, then write with `sort_keys` always `false` (see
+/// [`pretty_write_mode`]) -- `WriteMode::PRETTY`'s own `sort_keys: true` is
+/// deliberately never used here, since other callers of that constant
+/// (`service`'s own saved record, matching `plugins/service.py`'s
+/// independent `json.dumps(record, indent=2, sort_keys=True)`) still mean
+/// literal `sort_keys=True`, unchanged by this issue.
+///
+/// Not pretty: a borrow of *state* itself, no copy. A key that still can't
+/// be written at all (a `List`/`Dict`/`Bytes`/`Date`/`DateTime` key --
+/// never valid for `sort_keys=True` either) still raises, via the same
+/// [`electricity_json::stringify_key`] plain writing already calls.
+fn pretty_sort_if_needed(
+    state: &Value,
+    pretty: bool,
+) -> Result<std::borrow::Cow<'_, Value>, electricity_json::WriteError> {
+    if pretty {
+        Ok(std::borrow::Cow::Owned(canonical_key_order(state)?))
+    } else {
+        Ok(std::borrow::Cow::Borrowed(state))
+    }
+}
+
+/// *value* with every `Dict`'s entries reordered by the JSON text each key
+/// would write, recursively -- see [`pretty_sort_if_needed`]. A stable
+/// sort, so two keys whose text is the same (e.g. the bool `true` beside
+/// the string `"true"`) keep their original (insertion) order, matching
+/// `core/saved_state.py::_canonical_key_order` exactly.
+fn canonical_key_order(value: &Value) -> Result<Value, electricity_json::WriteError> {
+    match value {
+        Value::Dict(dict) => {
+            let mut entries: Vec<(String, &Value, &Value)> = Vec::with_capacity(dict.len());
+            for (key, v) in dict.iter() {
+                let text = electricity_json::stringify_key(key)?;
+                entries.push((text, key, v));
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut ordered = Dict::new();
+            for (_, key, v) in entries {
+                ordered.insert(key.clone(), canonical_key_order(v)?);
+            }
+            Ok(Value::Dict(ordered))
+        }
+        Value::List(items) => {
+            let mut ordered = Vec::with_capacity(items.len());
+            for item in items {
+                ordered.push(canonical_key_order(item)?);
+            }
+            Ok(Value::List(ordered))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
+/// [`render_state`]/[`render_state_for_stdout`]'s own write mode: `--pretty`
+/// always writes `indent=2`/`sort_keys=false` now -- the tree is already
+/// reordered by [`pretty_sort_if_needed`] when *pretty* is true, so the
+/// writer itself never needs to sort (see [`pretty_sort_if_needed`]'s own
+/// doc for why this must not be `WriteMode::PRETTY`).
+fn pretty_write_mode(pretty: bool) -> electricity_json::WriteMode {
+    if pretty {
+        electricity_json::WriteMode {
+            indent: Some(2),
+            sort_keys: false,
+            ensure_ascii: true,
+            separators: electricity_json::Separators::Default,
+        }
     } else {
         electricity_json::WriteMode::COMPACT
-    };
-    electricity_json::dumps_default_str(state, mode).map(|body| format!("{body}\n"))
+    }
 }
 
 /// The non-TTY stdout JSON summary's own serialization (issue #431's
-/// "CLI output" decision): `indent=2`, `ensure_ascii=False` always --
-/// Rich's `console.print_json` always re-dumps with its own defaults,
-/// regardless of how the string it's given was itself serialized
-/// (`cli/app.py:1406,1451`) -- `sort_keys` only when *sort_keys* is
-/// (the success-without-`--out` state print passes `--pretty` here;
-/// the failure payload always passes `false`, since `cli/app.py`'s own
+/// "CLI output" decision): `indent=2`, `ensure_ascii=False` always,
+/// never sorted by the writer itself -- `sort_keys` is handled by
+/// pre-reordering the tree instead (see [`pretty_sort_if_needed`]), the
+/// same way [`render_state`]'s own write mode is (issue #778): the
+/// success-without-`--out` state print pre-sorts exactly when `--pretty`
+/// was given; the failure payload never does, since `cli/app.py`'s own
 /// failure branch calls `console.print_json(json.dumps(payload))` with
-/// no `sort_keys` of its own, never governed by `--pretty`).
-fn stdout_json_mode(sort_keys: bool) -> electricity_json::WriteMode {
+/// no `sort_keys` of its own, never governed by `--pretty`.
+fn stdout_json_mode() -> electricity_json::WriteMode {
     electricity_json::WriteMode {
         indent: Some(2),
-        sort_keys,
+        sort_keys: false,
         ensure_ascii: false,
         separators: electricity_json::Separators::Default,
     }
@@ -108,7 +183,8 @@ pub fn render_state_for_stdout(
     state: &Value,
     pretty: bool,
 ) -> Result<String, electricity_json::WriteError> {
-    electricity_json::dumps_default_str(state, stdout_json_mode(pretty))
+    let ordered = pretty_sort_if_needed(state, pretty)?;
+    electricity_json::dumps_default_str(ordered.as_ref(), stdout_json_mode())
 }
 
 /// Writes *state*'s saved form to *path*, creating its parent directory
@@ -150,7 +226,7 @@ pub fn failure_payload(error: &str, warnings: &[String], state_out: Option<&Path
             None => Value::None,
         },
     );
-    let body = electricity_json::dumps(&Value::Dict(payload), stdout_json_mode(false))
+    let body = electricity_json::dumps(&Value::Dict(payload), stdout_json_mode())
         .unwrap_or_else(|_| "{\n  \"ok\": false\n}".to_string());
     format!("{body}\n")
 }
@@ -177,6 +253,41 @@ mod tests {
         dict.insert(Value::Str("a".to_string()), Value::from(2i64));
         let rendered = render_state(&Value::Dict(dict), true).unwrap();
         assert_eq!(rendered, "{\n  \"a\": 2,\n  \"b\": 1\n}\n");
+    }
+
+    #[test]
+    fn render_state_pretty_sorts_a_dict_mixing_key_types_by_json_text() {
+        // Issue #778: `sort_keys=True`'s own native-value sort raises
+        // `TypeError` comparing a bool key to a string key (CPython's
+        // `sorted(dct.items())`, confirmed directly) -- `--pretty` sorts
+        // by each key's own JSON text instead, so this must succeed, and
+        // in the same order `core/saved_state.py::_canonical_key_order`
+        // produces: "input" < "mode" < "true" lexicographically.
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Bool(true), Value::Str("push".to_string()));
+        dict.insert(
+            Value::Str("mode".to_string()),
+            Value::Str("parse".to_string()),
+        );
+        dict.insert(Value::Str("input".to_string()), Value::from(1i64));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"input\": 1,\n  \"mode\": \"parse\",\n  \"true\": \"push\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn render_state_pretty_keeps_insertion_order_for_keys_with_equal_json_text() {
+        // Two distinct, Python-unequal keys with the same JSON text --
+        // the bool `True` and the string `"true"` are never equal in
+        // Python, so both survive as separate dict entries. A stable
+        // sort keeps them in their original order (issue #778).
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Bool(true), Value::from(1i64));
+        dict.insert(Value::Str("true".to_string()), Value::from(2i64));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(rendered, "{\n  \"true\": 1,\n  \"true\": 2\n}\n");
     }
 
     #[test]

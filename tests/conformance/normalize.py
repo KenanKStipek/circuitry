@@ -1188,7 +1188,14 @@ def assert_out_serialization(raw_text: str, *, pretty: bool) -> None:
     """Re-derive `--out`'s exact byte layout from its own parsed content and
     assert it round-trips (C23, §3.4.1): plain is insertion-order, no
     indent; `--pretty` is alphabetically sorted, 2-space indent. Both always
-    `ensure_ascii=True` and end with exactly one trailing newline."""
+    `ensure_ascii=True` and end with exactly one trailing newline.
+
+    `sort_keys=True` is safe here even for a case whose *live* state mixed
+    dict key types (#778): `data` comes from `json.loads`, which only ever
+    produces string keys, so the mixed-type dict that could make a plain
+    `sort_keys=True` raise never survives the round trip to reach this
+    sort -- it already turned into an all-string-keyed dict sorted the same
+    way either rule would sort it."""
     data = json.loads(raw_text)
     if pretty:
         expected_text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n"

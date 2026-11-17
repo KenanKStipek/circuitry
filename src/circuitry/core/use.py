@@ -35,6 +35,7 @@ from .prompt_compose import (
     render_with_composition,
 )
 from .resume import ResumeMode
+from .saved_state import _canonical_key_order
 from .store import Store
 from .store.store import replace_node
 from .yaml_load import load_yaml
@@ -518,62 +519,6 @@ class _SavedChildRun:
             return False
         saved = _saved_form(self.inputs)
         return saved is not _UNSAVEABLE and saved == _saved_form(inputs)
-
-
-#: The tiebreak order :func:`_json_key_sort_key` uses when two keys of
-#: different types write the same JSON text (e.g. the string ``"true"``
-#: beside the bool ``True``) -- arbitrary but fixed, so the order is total
-#: and the same on both engines.
-_KEY_TYPE_RANK = {bool: 0, int: 1, float: 2, type(None): 3, str: 4}
-
-
-def _json_key_text(key: Any) -> str:
-    """The JSON string ``json.dumps`` would write for a dict *key* --
-    ``"true"``/``"false"``/``"null"`` for a bool/``None``, decimal text
-    for an int or float, or the string itself.
-    """
-    if isinstance(key, str):
-        return key
-    if key is True:
-        return "true"
-    if key is False:
-        return "false"
-    if key is None:
-        return "null"
-    if isinstance(key, int):
-        return str(key)
-    if isinstance(key, float):
-        return json.dumps(key)
-    raise TypeError(f"keys must be str, int, float, bool or None, not {type(key).__name__}")
-
-
-def _json_key_sort_key(key: Any) -> tuple[str, int]:
-    """*key*'s own sort key for :func:`_canonical_key_order`: the JSON
-    text it would write, then its type's rank in :data:`_KEY_TYPE_RANK`
-    as a tiebreak for two keys whose JSON text is the same.
-    """
-    rank = _KEY_TYPE_RANK[bool if isinstance(key, bool) else type(key)]
-    return (_json_key_text(key), rank)
-
-
-def _canonical_key_order(value: Any) -> Any:
-    """*value* with every dict's keys reordered into the order
-    :func:`_canonical_json_digest` hashes: by the JSON text each key
-    would write, not by the keys themselves -- so a dict mixing key
-    types that ``<`` can't compare (e.g. a YAML 1.1 ``on:`` key read as
-    the bool ``True`` beside a string key) still sorts, deterministically,
-    instead of ``json.dumps(..., sort_keys=True)``'s own ``TypeError`` for
-    that case (#778; ``yaml.dump``, which this replaced, tolerated it).
-    For a dict whose keys are all the same type and all strings -- the
-    realistic shape of a reflector's plan -- the JSON text of a key is the
-    key itself, so this sorts exactly as ``sort_keys=True`` always did.
-    """
-    if isinstance(value, dict):
-        items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
-        return {k: _canonical_key_order(v) for k, v in items}
-    if isinstance(value, list):
-        return [_canonical_key_order(v) for v in value]
-    return value
 
 
 def _canonical_json_digest(doc: dict[str, Any]) -> str:

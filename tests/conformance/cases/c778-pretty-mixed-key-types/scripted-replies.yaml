@@ -1,0 +1,13 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      effects:
+        - type: tool
+          name: check
+          provider: json
+          params:
+            mode: parse
+            on: push
+            input: '{"ok": true}'
+      done: false
+    tokens_sent: 10
+    tokens_received: 20
