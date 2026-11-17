@@ -38,10 +38,10 @@ CASE_DIRS = harness.list_case_dirs()
 #: (issue #476), matched in lockstep by `electricity_bytecode::
 #: PREVIEW_MARKER` and osi's own e2e test -- only a case that opts in
 #: with `case.json`'s own `electricity_preview_ok: true` may legitimately
-#: get refused this way, success or failure case alike (issue #511's own
-#: review: letting every failure case through unconditionally would mask
-#: a regression that brings a refusal back for content this build is
-#: actually supposed to run and fail on its own terms). Any other case
+#: get refused this way, success or failure case alike (issue #511):
+#: letting every failure case through unconditionally would mask a
+#: regression that brings a refusal back for content this build is
+#: actually supposed to run and fail on its own terms. Any other case
 #: that hits this marker fails loudly, never skips (PR #441: a
 #: case electricity wrongly refuses this way is a real
 #: regression).
@@ -302,10 +302,10 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
             "support yet, declared by case.json's own electricity_preview_ok"
         )
     # Skipping through the preview marker is opt-in, on every case
-    # regardless of `expect` (issue #511's own review: letting any preview
+    # regardless of `expect` (issue #511): letting any preview
     # text through unconditionally would silently mask a regression that
     # brings the refusal back for content this build is actually supposed
-    # to run and fail on its own terms). The one way a case opts in is
+    # to run and fail on its own terms. The one way a case opts in is
     # `case.json`'s own `electricity_preview_ok: true` (issue #450): a
     # sample case whose document uses content the preview genuinely
     # doesn't support yet (`prompt`/`shell`/`http`/a document-level
@@ -441,7 +441,7 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
 def test_a_date_as_a_dict_key_exits_nonzero_on_both_engines_with_no_out(
     tmp_path: Path, electricity_binary: Path | None
 ) -> None:
-    """Issue #512's review: `default=`/`dumps_default_str` is never
+    """Issue #512: `default=`/`dumps_default_str` is never
     consulted for a dict *key* (`json.dumps` doesn't either), so an
     unquoted YAML 1.1 date used as one still fails state serialization --
     with no `--out` to redirect to, `cof run --json` crashes uncaught

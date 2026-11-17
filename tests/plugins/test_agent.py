@@ -1023,7 +1023,7 @@ def test_live_tracker_construction_failure_still_removes_scratch_dir(
     tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``LiveTracker`` is constructed inside the same try/finally that
-    removes ``scratch_dir`` (#636 review) -- its constructor starting a
+    removes ``scratch_dir`` (issue #636) -- its constructor starting a
     background thread (``LivePublisher``) failing must not leak that
     directory the way it would if ``LiveTracker`` were built before ever
     entering that scope.

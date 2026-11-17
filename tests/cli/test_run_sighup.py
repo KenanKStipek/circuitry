@@ -46,7 +46,7 @@ _BRANCH_SLEEP_SECONDS = 60
 #: How long a cancelled run may take to actually exit — loose on purpose,
 #: what matters is "nowhere near _BRANCH_SLEEP_SECONDS", not a tight bound
 #: (#356's own rationale), derived from it rather than a literal so the
-#: two can't quietly drift apart (#385 review). #385 first widened this to
+#: two can't quietly drift apart (issue #385). #385 first widened this to
 #: 30s to tolerate what looked like scheduling starvation under heavy
 #: machine load; investigating the one real CI failure found a genuine
 #: bug instead — a signal landing on a tree-flow/parallel-loop *worker*
@@ -67,9 +67,9 @@ _STOP_BOUND_SECONDS = _BRANCH_SLEEP_SECONDS / 3
 #: `_BRANCH_SLEEP_SECONDS` (asserted below) so a run that was genuinely
 #: never cancelled still fails here rather than quietly waiting it out.
 #: `core.cancellation.wait_for_cancelled_branches` itself now waits with
-#: no total time limit of its own (#385 follow-up — an earlier revision's
-#: fixed grace period there let a branch outlive `token.reset()` and
-#: start a further effect uncancelled), so the only thing the headroom
+#: no total time limit of its own (issue #385: a fixed grace period
+#: there let a branch outlive `token.reset()` and start a further
+#: effect uncancelled), so the only thing the headroom
 #: above `_STOP_BOUND_SECONDS` still covers is a killed branch's worker
 #: thread actually being scheduled and noticed, ordinarily near-instant.
 _COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 10.0

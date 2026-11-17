@@ -75,7 +75,7 @@ CASE_DIR_PLACEHOLDER = "__CASE_DIR__"
 #:
 #: Grown in issue #503 to cover every real provider's own
 #: credential variable (the issue's own "Environment variables" table) —
-#: before that lane, only `openai`/`anthropic` were real adapters, so a
+#: before issue #503, only `openai`/`anthropic` were real adapters, so a
 #: contributor's own exported `GROQ_API_KEY` (say) could never have
 #: reached a case; now that the whole family is buildable, it could.
 CREDENTIAL_ENV_VARS = (

@@ -76,8 +76,8 @@ def test_run_id_and_timestamp_fresh_across_state_carryover(tmp_path: Path) -> No
         first.state["runtime"]["last_run"]["run_id"]
     )
     # Both differ from the carried-over run's id/timestamp — not just from
-    # each other's `runtime.last_run.run_id` (the one key #253 already made
-    # fresh on its own).
+    # each other's `runtime.last_run.run_id` (the one key that was already
+    # fresh before #253).
     assert second.state["prime"]["stamp"]["value"] != first.state["prime"]["stamp"]["value"]
 
 

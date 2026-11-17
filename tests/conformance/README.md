@@ -571,7 +571,7 @@ name predates the item it turned out to cover).
 | C15 | `c15-expect-cel-missing-key` |
 | C19 | `tree-stop-on-error`. The running-branch variant (a tree `stop_on_error` that must let an already-dispatched, still-running branch finish rather than cancelling it) was not added: a `shell` `sleep` branch's actual start can't be made to race the fast branch's failure deterministically -- CI scheduling has no guarantee the slow branch has actually started (not merely been queued) before the fast one fails, so the case cannot be made deterministic without changing what it exercises (making the "fast" branch artificially slow defeats the point). Left out rather than committed flaky. |
 | C20 | `concurrency-group`, `prompt-tree-group`; `c20-group-in-tree-loop` |
-| C25 | `electricity-cli/tests/signals.rs`, `signals_loop.rs` and `process_tool_signals.rs` (the prompt re-run and `signals_prompt.rs` land later) |
+| C25 | `electricity-cli/tests/signals.rs`, `signals_loop.rs`, `signals_prompt.rs` (the prompt re-run) and `process_tool_signals.rs` |
 | C26 | `complexity-scoring-off`, `complexity-scoring-on-routing-off`; `c26-scoring-absent`, `c26-scoring-enabled` |
 | §7 case 1 | `c-shell-pin-denial` |
 | §7 case 2 | `c-shell-templated-allowed-commands` |

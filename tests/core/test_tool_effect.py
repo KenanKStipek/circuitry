@@ -922,7 +922,7 @@ def test_tool_runtime_rejects_from_reference_as_whole_allowed_commands_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#234's {from: <path>} must not become a back door around the
-    'literal list only' guard on a security-sensitive param (#329 review)."""
+    'literal list only' guard on a security-sensitive param (issue #329)."""
 
     def _fail_if_called(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("shell plugin must not run when allowed_commands is rejected")
@@ -1170,7 +1170,7 @@ def test_has_prompt_effects_returns_false_for_cel_mode_if() -> None:
 
 def test_has_prompt_effects_returns_true_for_tool_expect_model_mode() -> None:
     """A tool's own expect: {mode: model} calls adapter.generate() the same
-    way a model-mode `if` does (#273 review) — a tool-only document with
+    way a model-mode `if` does (issue #273) — a tool-only document with
     one still needs a real adapter, not the no-op."""
     from circuitry.cli.runtime_shim import _has_prompt_effects
 

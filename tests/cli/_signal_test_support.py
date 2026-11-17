@@ -1,5 +1,5 @@
-"""Shared helpers for the signal-cancellation CLI test suite (#385 review
-P2): a sandboxed `cof run` child env, a poll-until-exists wait, and the
+"""Shared helpers for the signal-cancellation CLI test suite (issue #385):
+a sandboxed `cof run` child env, a poll-until-exists wait, and the
 dump-every-thread's-stack timeout diagnostics every one of those test
 modules otherwise defined (word for word) on its own.
 """
@@ -61,7 +61,7 @@ def _sandboxed_env(tmp_path: Path) -> dict[str, str]:
     crash, not anything this suite sends) dump every thread's Python
     stack to stderr before the child dies, instead of a bare
     `TimeoutExpired`/`TimeoutError` with nothing to debug a future CI
-    failure from (#385 review).
+    failure from (issue #385).
 
     Putting ``_SITECUSTOMIZE_DIR`` first on ``PYTHONPATH`` additionally
     registers that same dump on SIGUSR1 (#558): a stuck child can then be
@@ -111,10 +111,10 @@ def _diagnosis_header(
     *, label: str, timeout: float, elapsed: float | None, pid: int | None
 ) -> str:
     """The part of a timeout failure that's the same whether or not
-    stdout/stderr could be read back (#385 review: every timeout failure
+    stdout/stderr could be read back (issue #385): every timeout failure
     here states how long it actually waited and whether a branch's own
     subprocess is still alive, not just that something eventually gave
-    up)."""
+    up."""
     bits = [f"after {timeout:.0f}s"]
     if elapsed is not None:
         bits.append(f"elapsed={elapsed:.1f}s")

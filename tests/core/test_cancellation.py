@@ -534,13 +534,13 @@ def _deliver_sigusr1_after(tid_holder: dict[str, int], *, delay: float = 0.3) ->
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_wait_for_cancelled_branches_notices_a_signal_delivered_to_a_worker_thread() -> None:
-    """#385: an earlier revision bounded this wait to a fixed
-    grace period, so a branch still running once it elapsed could outlive
+    """This wait must have no total time limit (issue #385): a fixed
+    grace period would let a branch still running once it elapsed outlive
     `cli.interrupts.sigterm_as_interrupt`'s own `token.reset()` and start
-    a further effect with nothing left to track or kill it. The real fix
-    is no total time limit at all -- only `as_completed_promptly`'s own
-    polled wait, which this proves still notices a signal delivered to a
-    worker thread within about one poll interval, not the whole branch.
+    a further effect with nothing left to track or kill it. Only
+    `as_completed_promptly`'s own polled wait bounds it, which this proves
+    still notices a signal delivered to a worker thread within about one
+    poll interval, not the whole branch.
     """
     worker_tid: dict[str, int] = {}
     worker_ready = threading.Event()
@@ -1018,7 +1018,7 @@ def test_run_tracked_decode_error_mid_stream_drains_to_eof_then_fails(
     `ValueError`) must fail this call loudly, the same as a plain
     `communicate()` always has for the same bytes -- not end the reader
     silently, close stdout while the child is still writing to it, and
-    return truncated output with no error at all (#636 review). The child
+    return truncated output with no error at all (issue #636). The child
     here writes several megabytes after the bad bytes -- more than any
     pipe buffer holds -- so if the reader stopped draining instead of
     falling back to the raw byte stream underneath, the child would block
@@ -1102,7 +1102,7 @@ def test_run_tracked_reader_thread_start_failure_does_not_leave_a_zombie(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The reader thread is started inside `with proc, token.track(proc):`'s
-    own `try:` (#636 review), not before it -- so a failed `Thread.start()`
+    own `try:` (issue #636), not before it -- so a failed `Thread.start()`
     there still reaches this `with` block's own cleanup (`Popen.__exit__`
     calls `self.wait()`), reaping the child instead of leaving it a zombie
     nothing ever waits on.

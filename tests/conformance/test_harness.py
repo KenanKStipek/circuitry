@@ -513,9 +513,9 @@ def test_load_case_rejects_non_bool_sort_http_requests(tmp_path: Path) -> None:
 
 
 def test_load_case_rejects_also_pretty_with_mock_http_fixture(tmp_path: Path) -> None:
-    """PR #455's review: the --pretty re-run gets neither a
-    fresh mock server nor a fresh leftover-replies path, and runs after the
-    server has already stopped."""
+    """The --pretty re-run gets neither a fresh mock server nor a fresh
+    leftover-replies path, and runs after the server has already stopped
+    (PR #455)."""
     case_dir = _write_case(
         tmp_path,
         {
@@ -529,8 +529,8 @@ def test_load_case_rejects_also_pretty_with_mock_http_fixture(tmp_path: Path) ->
 
 
 def test_load_case_rejects_known_divergence_with_also_pretty(tmp_path: Path) -> None:
-    """PR #455's review: the --pretty comparison never applies
-    the known_divergence override."""
+    """The --pretty comparison never applies the known_divergence override
+    (PR #455)."""
     case_dir = _write_case(
         tmp_path,
         {
@@ -545,7 +545,7 @@ def test_load_case_rejects_known_divergence_with_also_pretty(tmp_path: Path) -> 
 
 
 def test_load_case_accepts_electricity_preview_ok_on_a_failure_case(tmp_path: Path) -> None:
-    """Issue #511's own review: a failure case may also declare
+    """Issue #511: a failure case may also declare
     `electricity_preview_ok` -- a document whose real failure electricity
     can't reach yet because the preview refuses it first (e.g. a
     Circuitry-known adapter with no Rust builder), the same way a success
@@ -578,10 +578,10 @@ def test_load_case_rejects_electricity_preview_ok_without_electricity_in_engines
 
 
 def test_case_redaction_replacements_only_redacts_host_port_forms(tmp_path: Path) -> None:
-    """PR #455's review: a bare port-number replacement could
-    also corrupt a run id/UUID or a compact timestamp that happens to
-    contain the same digits as a substring. `case_redaction_replacements`
-    only ever redacts the port inside an actual `host:port` form."""
+    """A bare port-number replacement could also corrupt a run id/UUID or
+    a compact timestamp that happens to contain the same digits as a
+    substring (PR #455). `case_redaction_replacements` only ever redacts
+    the port inside an actual `host:port` form."""
     case_dir = tmp_path / "case"
     case_dir.mkdir()
     port = 54321
@@ -744,13 +744,12 @@ def test_unused_scripted_reply_fails_the_case(tmp_path: Path) -> None:
 
 
 def test_a_prompt_under_a_false_if_still_reports_its_unused_reply(tmp_path: Path) -> None:
-    """PR #455's review, "missed failures" case: a `provider:
-    scripted` prompt sitting under an `if` that never takes that branch at
-    run time is still walked statically by preflight (`cli.runtime_shim.
-    preflight` checks every adapter reference in the document, regardless
-    of any conditional around it), so its instance still registers and
-    reports the reply nothing ever consumed -- the run itself never
-    dispatches the prompt at all."""
+    """A `provider: scripted` prompt sitting under an `if` that never
+    takes that branch at run time is still walked statically by preflight
+    (`cli.runtime_shim.preflight` checks every adapter reference in the
+    document, regardless of any conditional around it), so its instance
+    still registers and reports the reply nothing ever consumed -- the
+    run itself never dispatches the prompt at all (PR #455)."""
     case_dir = tmp_path / "case"
     case_dir.mkdir()
     (case_dir / "orchestration.yml").write_text(

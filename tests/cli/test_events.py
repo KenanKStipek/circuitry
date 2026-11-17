@@ -194,7 +194,7 @@ def test_complete_without_a_matching_start_gets_a_null_id_and_no_crash(
 ) -> None:
     """A completion this instance never saw the start of -- e.g. a
     composed observer upstream raised and the runtime's own `finally:`
-    fired `on_complete` again for the same instance (#419 review) -- is
+    fired `on_complete` again for the same instance (issue #419) -- is
     not an error: it writes `end` with `id: null` and no `ms`, and the
     stream keeps going."""
     log = EventLog(tmp_path / "events.jsonl")
@@ -321,7 +321,7 @@ def test_an_unexpected_non_oserror_also_disables_further_writes(
 ) -> None:
     """Not just an `OSError` writing the file -- any unexpected exception
     anywhere in a method's body must not escape and must not re-fail on
-    every subsequent call (#419 review)."""
+    every subsequent call (issue #419)."""
     log = EventLog(tmp_path / "events.jsonl")
     log.run_start(run_id="r1", orchestration="o.yml", config=None)
 
