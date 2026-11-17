@@ -3,7 +3,7 @@
 //! same `regex: invalid pattern: ` prefix as Python's own invalid-
 //! pattern error (the caller, [`crate::regex`], adds that prefix;
 //! every error text here is compared by *location*, never byte for
-//! byte, per issue #479's ruling 3 -- `fancy-regex`'s own parser
+//! byte (issue #479) -- `fancy-regex`'s own parser
 //! raises most genuinely malformed syntax itself once the translated
 //! text reaches it).
 //!
@@ -256,7 +256,7 @@ fn engine_flag_letters(flags: ResolvedFlags) -> String {
     letters
 }
 
-/// Python's own VERBOSE whitespace set (F8): `_parser.py`'s own
+/// Python's own VERBOSE whitespace set: `_parser.py`'s own
 /// `WHITESPACE` frozenset, `" \t\n\r\v\f"` -- not Rust's broader
 /// Unicode `char::is_whitespace()` (confirmed directly: U+00A0 NO-BREAK
 /// SPACE stays a literal match target under `(?x)` in CPython).
@@ -292,10 +292,10 @@ fn escape_in_class(c: char) -> String {
 /// One token of a parsed character class body, before IGNORECASE
 /// expansion ([`expand_case_in_class`]) and rendering -- kept apart
 /// from raw text so a `lo-hi` range ([`Translator::parse_class`]'s own
-/// `-` detection, F1) and an escape-shortcut's own class text (`\w`,
-/// or `[^...]` for a negated `\W`/`\S`/`\D`, F2) can each be told
+/// `-` detection) and an escape-shortcut's own class text (`\w`,
+/// or `[^...]` for a negated `\W`/`\S`/`\D`) can each be told
 /// apart from a single literal character that might still need an
-/// ASCII or Turkish-I case variant added (F3/F6).
+/// ASCII or Turkish-I case variant added.
 enum ClassToken {
     Char(char),
     Range(char, char),
@@ -303,7 +303,7 @@ enum ClassToken {
 }
 
 /// Rejects `hi < lo` the way CPython's own `_parser.py::_class_escape`
-/// does (`bad character range`, F1) before recording *lo*-*hi*.
+/// does (`bad character range`) before recording *lo*-*hi*.
 fn push_range(tokens: &mut Vec<ClassToken>, lo: char, hi: char, pos: usize) -> PResult<()> {
     if (hi as u32) < (lo as u32) {
         return Err(format!("bad character range {lo}-{hi} at position {pos}"));
@@ -313,7 +313,8 @@ fn push_range(tokens: &mut Vec<ClassToken>, lo: char, hi: char, pos: usize) -> P
 }
 
 /// `c`'s ASCII-only ignorecase counterpart (`a`<->`A`, else `None`) --
-/// the ASCII half of F3/F6's shared expansion mechanism: under the
+/// the ASCII half of the shared ASCII/Turkish-I case-variant expansion
+/// mechanism: under the
 /// `ASCII` flag, a literal or class member gets this variant added
 /// explicitly instead of relying on `fancy-regex`'s own `i` flag
 /// (which folds every Unicode case pair, not just ASCII ones).
@@ -358,8 +359,8 @@ fn ascii_swap_range(lo: char, hi: char) -> Vec<(char, char)> {
 /// `i`/`I`/`ı`(U+0131)/`İ`(U+0130) all fold together under CPython,
 /// where `fancy-regex`'s own Unicode folding keeps the Turkish pair
 /// apart from plain `i`/`I` (the one documented divergence this
-/// module's own doc comment used to list -- F6 turns it into a parity
-/// case by expanding explicitly here instead).
+/// module's own doc comment used to list -- expanding it explicitly
+/// here instead turns it into a parity case).
 fn turkish_i_variants(c: char) -> Option<[char; 3]> {
     match c {
         'i' => Some(['I', 'ı', 'İ']),
@@ -371,7 +372,7 @@ fn turkish_i_variants(c: char) -> Option<[char; 3]> {
 }
 
 /// A literal character's own translated text *outside* a class, under
-/// the current scope's IGNORECASE/ASCII state (F3/F6) -- ASCII mode
+/// the current scope's IGNORECASE/ASCII state -- ASCII mode
 /// expands to an explicit `[cC]` class (since `fancy-regex`'s engine
 /// `i` flag is never emitted there, [`engine_flag_letters`]'s own doc
 /// comment); non-ASCII mode leaves everything to the engine's own `i`
@@ -396,7 +397,7 @@ fn literal_outside_class(c: char, scope: Scope) -> String {
 }
 
 /// `\w`/`\s`/`\d` (or their negated forms) *outside* a class, as
-/// `fancy-regex` text -- guarded with a local `(?-i:...)` (F8) when
+/// `fancy-regex` text -- guarded with a local `(?-i:...)` when
 /// IGNORECASE is on and ASCII isn't, so the engine's own global `i`
 /// flag can't additionally case-fold this already-exhaustive Unicode
 /// range (confirmed directly: without the guard, `\w` under
@@ -420,7 +421,7 @@ fn unicode_class_text(body: &str, negate: bool, scope: Scope) -> String {
 }
 
 /// Adds each token's own ASCII or Turkish-I case variant(s) in place
-/// (F3/F6) -- called once per class, after the whole body is parsed,
+/// -- called once per class, after the whole body is parsed,
 /// so a variant added for one token never gets *re*-expanded as if it
 /// were itself part of the original class text.
 fn expand_case_in_class(tokens: &mut Vec<ClassToken>, ascii: bool) {
@@ -579,7 +580,7 @@ impl Translator {
                     pieces.push(atom(".".to_string(), Width::fixed(1)));
                 }
                 Some('(') => {
-                    // `(?#...)` (F8) is fully transparent to the
+                    // `(?#...)` is fully transparent to the
                     // surrounding pattern -- Python's own parser never
                     // leaves a node behind for it, so `a(?#c)*` means
                     // `a*`, not "nothing to repeat" against the
@@ -741,7 +742,7 @@ impl Translator {
             return Ok(None);
         }
         // `{}` (no comma, no digits at all) isn't a quantifier in
-        // Python either; `{,}` (a bare comma, F8) is -- CPython's own
+        // Python either; `{,}` (a bare comma) is -- CPython's own
         // tokenizer accepts it as `{0,}` (`a*`).
         if !has_comma && lo_text.is_empty() {
             return Ok(None);
@@ -761,7 +762,7 @@ impl Translator {
                 None => return Ok(None),
             }
         };
-        // `a{3,2}` (F8): CPython rejects a backwards range outright,
+        // `a{3,2}`: CPython rejects a backwards range outright,
         // rather than falling back to literal `{3,2}` text.
         if let Some(h) = hi {
             if h < lo {
@@ -852,13 +853,13 @@ impl Translator {
 
     /// True when the char immediately ahead is a range dash: a `-`
     /// that is neither the class's own closing `]` nor past the end
-    /// of the pattern (F1) -- Python treats a `-` right before `]`,
+    /// of the pattern -- Python treats a `-` right before `]`,
     /// or at the very end of input, as a literal hyphen instead.
     fn at_range_dash(&self) -> bool {
         self.peek() == Some('-') && self.peek_at(1).is_some() && self.peek_at(1) != Some(']')
     }
 
-    /// The upper bound of a `lo-hi` class range (F1), right after the
+    /// The upper bound of a `lo-hi` class range, right after the
     /// `-` has been consumed -- a shortcut escape (`\w` and friends)
     /// can't be a range endpoint in Python either (`bad character
     /// range`), so only [`ClassToken::Char`] is accepted here.
@@ -881,12 +882,12 @@ impl Translator {
 
     /// `\w`/`\s`/`\d`/`\W`/`\S`/`\D`, `\b` (a literal backspace
     /// *inside* a class, unlike the word-boundary assertion outside
-    /// one, F8), an octal escape (F8: any digit 0-7 starts one inside
+    /// one), an octal escape (any digit 0-7 starts one inside
     /// a class -- there's no backreference reading here, unlike
     /// outside one) and every other literal escape *inside* a class --
     /// the shortcut classes expand to the same explicit Unicode ranges
     /// [`Translator::parse_escape`] uses outside one; a negated
-    /// shortcut (`\W`/`\S`/`\D`, F2) is wrapped as its own nested
+    /// shortcut (`\W`/`\S`/`\D`) is wrapped as its own nested
     /// `[^...]` class via `fancy-regex`'s class-union support, rather
     /// than the un-negated `[...]` this translator used to emit.
     fn read_class_escape(&mut self) -> PResult<ClassToken> {
@@ -923,7 +924,7 @@ impl Translator {
         }
     }
 
-    /// `\0`-`\7` followed by up to two more octal digits (F8) --
+    /// `\0`-`\7` followed by up to two more octal digits --
     /// shared by the outside-class `\0` reading
     /// ([`Translator::parse_escape`]) and every class digit escape
     /// ([`Translator::read_class_escape`]), since both follow the same
@@ -1046,8 +1047,8 @@ impl Translator {
                     "bad character in group name at position {name_start}"
                 ));
             }
-            // F8: Python rejects a repeated group name outright,
-            // rather than silently overwriting the earlier mapping.
+            // Python rejects a repeated group name outright, rather
+            // than silently overwriting the earlier mapping.
             if let Some(&existing) = self.group_names.get(&name) {
                 return Err(format!(
                     "redefinition of group name '{name}' as group {}; was group {existing} at position {name_start}",
@@ -1217,9 +1218,9 @@ impl Translator {
                 if remove.contains('i') {
                     scope.ignorecase = false;
                 }
-                // F3's own "Related" bug: forwarding a scoped `i`
-                // to the engine under ASCII brings back full-Unicode
-                // folding for this sub-expression; ASCII-mode case
+                // Forwarding a scoped `i` to the engine under ASCII
+                // brings back full-Unicode folding for this
+                // sub-expression; ASCII-mode case
                 // handling is this translator's own job
                 // ([`literal_outside_class`]/[`expand_case_in_class`]),
                 // never the engine's `i` flag.
@@ -1306,7 +1307,7 @@ impl Translator {
         }
     }
 
-    /// `\b`/`\B` (F8: `\B` never matches an empty *input*, confirmed
+    /// `\b`/`\B` (`\B` never matches an empty *input*, confirmed
     /// directly against CPython 3.11 -- this translator used to add
     /// an `\A\z` alternative specifically to make it match there,
     /// which was backwards).
@@ -1474,7 +1475,7 @@ fn apply_global_letters(letters: &str, flags: &mut ResolvedFlags, pos: usize) ->
 /// the literal `a-zA-Z0-9_`; the default mode is Python's own Unicode
 /// membership, read from [`regex_unicode`]'s own generated
 /// (CPython-3.11-sourced) range tables rather than scanning all 1.1
-/// million code points per translation (F9) -- rendered once into a
+/// million code points per translation -- rendered once into a
 /// cached class-body string behind a [`OnceLock`], since `\w`/`\s`/
 /// `\d` already come as `&'static` range tables and a compile has no
 /// reason to re-render the same text on every call.
@@ -1612,7 +1613,7 @@ mod tests {
     fn forward_backreference_is_rejected() {
         let err = translate(r"\1(a)", flags()).unwrap_err();
         // CPython: "invalid group reference 1 at position 1" -- the
-        // digit's own position, not the backslash's (R9).
+        // digit's own position, not the backslash's.
         assert_eq!(err, "invalid group reference 1 at position 1");
     }
 
@@ -1641,7 +1642,7 @@ mod tests {
     #[test]
     fn look_behind_fixed_width_error_has_no_position_suffix() {
         // CPython's own `sre_compile` raises this with no position at
-        // all, unlike every other `sre_parse` error (R9).
+        // all, unlike every other `sre_parse` error.
         let err = translate("(?<=a+)b", flags()).unwrap_err();
         assert_eq!(err, "look-behind requires fixed-width pattern");
     }
@@ -1874,7 +1875,7 @@ mod tests {
         // CPython 3.11 accepts `(ab)(?<=\1)` (group 1 is fixed-width
         // 2) -- this translator's own [`Width`] check agrees (reads
         // `\1`'s width from `group_widths` rather than always
-        // widening to `Width::unknown`, F8), so `translate` itself no
+        // widening to `Width::unknown`), so `translate` itself no
         // longer rejects it as variable-width. `fancy-regex` still
         // does, downstream: `Expr::Backref` never reports
         // `const_size: true` regardless of the referenced group's own
