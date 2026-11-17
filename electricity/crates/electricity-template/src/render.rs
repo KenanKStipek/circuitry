@@ -303,13 +303,15 @@ pub trait ScopeRoot {
     /// key that just missed every scope, including this root. `Some(
     /// path)` means *head* names an effect of an enclosing container at
     /// *path* -- [`crate::render::get_key`] retries the *whole* key
-    /// (head and every segment after it) dotted under *path*, through
-    /// [`ScopeRoot::lookup`] alone, never through this method again (the
-    /// retried key already starts with a container's own path, which is
-    /// never itself one of that container's own effect names in an
-    /// ordinary document, and even if it were, the retry goes straight
-    /// to [`ScopeRoot::lookup`], not back through [`get_key`]'s own
-    /// scope walk, so it cannot recurse).
+    /// (head and every segment after it) dotted under *path*, walking
+    /// every scope again from the nearest pushed overlay (a section's
+    /// own item) down to this root, the same single walk the original
+    /// key already took, just never through this method a second time
+    /// (the retried key already starts with a container's own path,
+    /// which is never itself one of that container's own effect names
+    /// in an ordinary document, and even if it were, the retry never
+    /// consults [`ScopeRoot::bare_fallback`] again, so it cannot
+    /// recurse).
     ///
     /// The default (used by a plain [`Value`] root, and by every
     /// [`ScopeRoot`] impl outside `electricity-vm`'s own live, store-
@@ -387,38 +389,55 @@ pub(crate) fn get_key<R: ScopeRoot>(key: &str, scope: &Scope<R>) -> Result<Value
     if key == "." {
         return Ok(scope.nearest_whole());
     }
-    let mut current = scope;
-    loop {
-        match current {
-            Scope::Pushed(value, parent) => {
-                if let Some(found) = walk_dotted(value, key)? {
-                    return Ok(found);
-                }
-                current = parent;
-            }
-            Scope::Root(root) => {
-                if let Some(found) = root.lookup(key)? {
-                    return Ok(found);
-                }
-                // #778: every normal scope (every pushed overlay, and
-                // now the root itself) has missed -- try the
-                // bare-sibling-reference fallback once, against
-                // *root* alone (never re-walking the pushed overlay
-                // scopes a second time: see `bare_fallback`'s own doc
-                // comment on why that's safe). The resolved dotted key
-                // already starts with a container's own path (e.g.
-                // `"prime..."`), so this is a single, non-recursive
-                // retry -- never another `bare_fallback` lookup.
-                let head = key.split('.').next().unwrap_or(key);
-                if let Some(path) = root.bare_fallback(head) {
-                    let dotted = format!("{path}.{key}");
-                    return Ok(root
-                        .lookup(&dotted)?
-                        .unwrap_or_else(|| Value::Str(String::new())));
-                }
-                return Ok(Value::Str(String::new()));
-            }
+    if let Some(found) = resolve_without_bare_fallback(key, scope)? {
+        return Ok(found);
+    }
+    // #778: every normal scope (every pushed overlay, and the root
+    // itself) has missed -- try the bare-sibling-reference fallback
+    // once, against the root this chain bottoms out at. The resolved
+    // dotted key already starts with a container's own path (e.g.
+    // `"prime..."`), so this retries it the same way an ordinary
+    // dotted reference would: every scope again, pushed overlays
+    // (section items) first, nearest first -- `core/templates.py::
+    // _get_key`'s own recursive `_get_key(f"{path}.{key}", scopes,
+    // warn, _bare_fallback=False)` call, ported -- never a second
+    // `bare_fallback` lookup (`resolve_without_bare_fallback` never
+    // consults it).
+    let head = key.split('.').next().unwrap_or(key);
+    if let Some(path) = scope_root(scope).bare_fallback(head) {
+        let dotted = format!("{path}.{key}");
+        if let Some(found) = resolve_without_bare_fallback(&dotted, scope)? {
+            return Ok(found);
         }
+    }
+    Ok(Value::Str(String::new()))
+}
+
+/// [`get_key`]'s own single walk of *scope*, nearest pushed overlay
+/// first, down to the root -- never consulting [`ScopeRoot::
+/// bare_fallback`] itself, so a caller already inside the fallback's
+/// own retry can reuse this without risking a second, recursive
+/// fallback lookup.
+fn resolve_without_bare_fallback<R: ScopeRoot>(
+    key: &str,
+    scope: &Scope<R>,
+) -> Result<Option<Value>, String> {
+    match scope {
+        Scope::Pushed(value, parent) => match walk_dotted(value, key)? {
+            Some(found) => Ok(Some(found)),
+            None => resolve_without_bare_fallback(key, parent),
+        },
+        Scope::Root(root) => root.lookup(key),
+    }
+}
+
+/// The [`ScopeRoot`] *scope*'s own chain bottoms out at -- every
+/// [`Scope::Pushed`] overlay's own parent, down to the one [`Scope::
+/// Root`].
+fn scope_root<'a, R: ScopeRoot>(scope: &'a Scope<'a, R>) -> &'a R {
+    match scope {
+        Scope::Pushed(_, parent) => scope_root(parent),
+        Scope::Root(root) => root,
     }
 }
 
@@ -566,4 +585,125 @@ fn render_with_pushed_scope<'a, R: ScopeRoot>(
 ) -> Result<String, String> {
     let pushed = Scope::Pushed(new_scope, scope);
     render_nodes(body, &pushed, escape)
+}
+
+#[cfg(test)]
+mod bare_fallback_retry_tests {
+    use super::*;
+
+    /// A [`ScopeRoot`] whose [`ScopeRoot::bare_fallback`] always answers
+    /// *fallback_path*, for a key missing a `.`-less *head* -- enough to
+    /// exercise [`get_key`]'s own retry without needing a real
+    /// `electricity_vm::Frame`/`Store`.
+    struct FakeBareRoot {
+        root: Value,
+        head: &'static str,
+        fallback_path: &'static str,
+    }
+
+    impl ScopeRoot for FakeBareRoot {
+        fn lookup(&self, key: &str) -> Result<Option<Value>, String> {
+            walk_dotted(&self.root, key)
+        }
+
+        fn whole(&self) -> Value {
+            self.root.clone()
+        }
+
+        fn bare_fallback(&self, head: &str) -> Option<String> {
+            if head == self.head {
+                Some(self.fallback_path.to_string())
+            } else {
+                None
+            }
+        }
+    }
+
+    fn dict(pairs: Vec<(&str, Value)>) -> Value {
+        let mut map = electricity_value::Dict::new();
+        for (k, v) in pairs {
+            map.insert(Value::Str(k.to_string()), v);
+        }
+        Value::Dict(map)
+    }
+
+    #[test]
+    fn the_retry_checks_a_pushed_section_items_own_match_before_the_root() {
+        // Finding 6/#778: the dotted retry must walk every scope again,
+        // section items first -- not just the root, as electricity once
+        // did. Here the fallback path `"container"` names a key both a
+        // pushed section item and the root carry; the section item's
+        // own value must win, since it is nearer.
+        let root_root = dict(vec![(
+            "container",
+            dict(vec![("x", Value::Str("root-value".to_string()))]),
+        )]);
+        let fake_root = FakeBareRoot {
+            root: root_root,
+            head: "x",
+            fallback_path: "container",
+        };
+        let section_item = dict(vec![(
+            "container",
+            dict(vec![("x", Value::Str("section-item-value".to_string()))]),
+        )]);
+        let scope = Scope::Root(&fake_root);
+        let pushed = Scope::Pushed(section_item, &scope);
+        let result = get_key("x", &pushed).unwrap();
+        assert_eq!(result, Value::Str("section-item-value".to_string()));
+    }
+
+    #[test]
+    fn the_retry_falls_through_to_the_root_when_no_pushed_scope_matches() {
+        let root_root = dict(vec![(
+            "container",
+            dict(vec![("x", Value::Str("root-value".to_string()))]),
+        )]);
+        let fake_root = FakeBareRoot {
+            root: root_root,
+            head: "x",
+            fallback_path: "container",
+        };
+        let section_item = dict(vec![("unrelated", Value::Str("irrelevant".to_string()))]);
+        let scope = Scope::Root(&fake_root);
+        let pushed = Scope::Pushed(section_item, &scope);
+        let result = get_key("x", &pushed).unwrap();
+        assert_eq!(result, Value::Str("root-value".to_string()));
+    }
+
+    #[test]
+    fn the_fallback_is_never_consulted_a_second_time_during_the_retry() {
+        // A pathological root whose own `bare_fallback` would panic if
+        // the retry ever called it again -- `resolve_without_bare_
+        // fallback` must never do that.
+        struct PanicsOnSecondBareFallback {
+            root: Value,
+            calls: std::cell::Cell<u32>,
+        }
+        impl ScopeRoot for PanicsOnSecondBareFallback {
+            fn lookup(&self, key: &str) -> Result<Option<Value>, String> {
+                walk_dotted(&self.root, key)
+            }
+            fn whole(&self) -> Value {
+                self.root.clone()
+            }
+            fn bare_fallback(&self, _head: &str) -> Option<String> {
+                let n = self.calls.get();
+                self.calls.set(n + 1);
+                assert!(n == 0, "bare_fallback must be consulted at most once");
+                Some("container".to_string())
+            }
+        }
+        let fake_root = PanicsOnSecondBareFallback {
+            root: dict(vec![(
+                "container",
+                dict(vec![("x", Value::Str("v".to_string()))]),
+            )]),
+            calls: std::cell::Cell::new(0),
+        };
+        let scope = Scope::Root(&fake_root);
+        let result = get_key("x", &scope).unwrap();
+        assert_eq!(result, Value::Str("v".to_string()));
+        assert_eq!(fake_root.calls.get(), 1);
+    }
 }
