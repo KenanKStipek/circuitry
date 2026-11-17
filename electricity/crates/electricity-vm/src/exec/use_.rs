@@ -1825,7 +1825,7 @@ pub(crate) async fn execute_use(
     token: &CancellationToken,
     resume_active: bool,
 ) -> Result<(), VmError> {
-    let live_root = LiveRoot::new(ctx_chain, store);
+    let live_root = LiveRoot::new(ctx_chain, store, frame);
     execute_use_with_ctx(
         op,
         use_op,
@@ -2405,6 +2405,7 @@ async fn run_isolated_inner(
         &wrapped,
         token,
         resume_active,
+        true,
     )
     .await;
     observer.clear_graft(&root_path, &child_store.root);
@@ -3331,7 +3332,8 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         input.insert(Value::from("x"), Value::from("<i>hi</i>"));
         store.set_leaf(&store.root, Value::from("input"), Value::Dict(input));
         let chain: CtxChain = vec![CtxSource::Live(Rc::clone(&store.root))];
-        let ctx = LiveRoot::new(&chain, &store);
+        let frame = Frame::root();
+        let ctx = LiveRoot::new(&chain, &store, &frame);
 
         let mut inputs = indexmap::IndexMap::new();
         inputs.insert(

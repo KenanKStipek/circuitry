@@ -523,7 +523,7 @@ pub(crate) fn execute_op<'a>(
                         };
                         let use_inputs_changed = match use_op {
                             Some(use_op) => {
-                                let live_root = live_scope::LiveRoot::new(ctx_chain, store);
+                                let live_root = live_scope::LiveRoot::new(ctx_chain, store, frame);
                                 use_::use_rerun_for_changed_inputs(
                                     use_op, name, &existing, store, &live_root, run_ctx,
                                 )
@@ -547,7 +547,7 @@ pub(crate) fn execute_op<'a>(
                     // LiveRoot` lazily, the same way every other leaf
                     // kind below already receives `ctx_chain`
                     // unresolved.
-                    let live_root = live_scope::LiveRoot::new(ctx_chain, store);
+                    let live_root = live_scope::LiveRoot::new(ctx_chain, store, frame);
                     tool::execute_tool(
                         op, tool_op, store, parent, &live_root, frame, run_ctx, observer, token,
                     )
@@ -641,6 +641,7 @@ pub(crate) fn execute_op<'a>(
                         observer,
                         token,
                         resume_active,
+                        false,
                     )
                     .await
                     .map(|()| ExecOutcome::Ran)

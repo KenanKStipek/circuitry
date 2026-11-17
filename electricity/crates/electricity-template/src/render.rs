@@ -297,6 +297,29 @@ pub trait ScopeRoot {
     fn contains(&self, key: &str) -> bool {
         matches!(self.lookup(key), Ok(Some(_)))
     }
+
+    /// `core/templates.py::_get_key`'s own bare-sibling-reference
+    /// fallback (issue #778): *head* is the first dotted segment of a
+    /// key that just missed every scope, including this root. `Some(
+    /// path)` means *head* names an effect of an enclosing container at
+    /// *path* -- [`crate::render::get_key`] retries the *whole* key
+    /// (head and every segment after it) dotted under *path*, through
+    /// [`ScopeRoot::lookup`] alone, never through this method again (the
+    /// retried key already starts with a container's own path, which is
+    /// never itself one of that container's own effect names in an
+    /// ordinary document, and even if it were, the retry goes straight
+    /// to [`ScopeRoot::lookup`], not back through [`get_key`]'s own
+    /// scope walk, so it cannot recurse).
+    ///
+    /// The default (used by a plain [`Value`] root, and by every
+    /// [`ScopeRoot`] impl outside `electricity-vm`'s own live, store-
+    /// backed one) is `None` -- no enclosing-container chain, so a bare
+    /// reference just misses, same as before #778. `electricity_vm`'s
+    /// own `exec::live_scope::LiveRoot` is the one real override,
+    /// reading whatever chain its `Frame::bare_effect_chain` carries.
+    fn bare_fallback(&self, _head: &str) -> Option<String> {
+        None
+    }
 }
 
 impl ScopeRoot for Value {
@@ -374,9 +397,26 @@ pub(crate) fn get_key<R: ScopeRoot>(key: &str, scope: &Scope<R>) -> Result<Value
                 current = parent;
             }
             Scope::Root(root) => {
-                return Ok(root
-                    .lookup(key)?
-                    .unwrap_or_else(|| Value::Str(String::new())));
+                if let Some(found) = root.lookup(key)? {
+                    return Ok(found);
+                }
+                // #778: every normal scope (every pushed overlay, and
+                // now the root itself) has missed -- try the
+                // bare-sibling-reference fallback once, against
+                // *root* alone (never re-walking the pushed overlay
+                // scopes a second time: see `bare_fallback`'s own doc
+                // comment on why that's safe). The resolved dotted key
+                // already starts with a container's own path (e.g.
+                // `"prime..."`), so this is a single, non-recursive
+                // retry -- never another `bare_fallback` lookup.
+                let head = key.split('.').next().unwrap_or(key);
+                if let Some(path) = root.bare_fallback(head) {
+                    let dotted = format!("{path}.{key}");
+                    return Ok(root
+                        .lookup(&dotted)?
+                        .unwrap_or_else(|| Value::Str(String::new())));
+                }
+                return Ok(Value::Str(String::new()));
             }
         }
     }

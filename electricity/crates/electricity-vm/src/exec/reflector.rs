@@ -272,6 +272,7 @@ async fn run_iteration(
         observer,
         token,
         false,
+        true,
     )
     .await;
     match inner_result {
@@ -406,7 +407,7 @@ async fn run_iteration(
     // whatever the containing scope has written since, matching
     // Python's own live dict reference.
     let gen_ctx_chain: CtxChain = vec![CtxSource::Live(parent.clone())];
-    let live_root = LiveRoot::new(&gen_ctx_chain, store);
+    let live_root = LiveRoot::new(&gen_ctx_chain, store, frame);
     // Same reset as the inner `dynamic` above -- the generated `use`
     // (`UseRuntime` built with no `depth=` either) runs at display
     // depth 0, so its own child root `dynamic` ([`Frame::nested`]'s own

@@ -940,7 +940,8 @@ mod tests {
             store.set_leaf(&pass, Value::from("padding"), Value::from("x".repeat(64)));
         }
         let chain: crate::exec::CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
-        let live_root = LiveRoot::new(&chain, &store);
+        let frame = crate::Frame::root();
+        let live_root = LiveRoot::new(&chain, &store, &frame);
 
         let mut hidden = IndexMap::new();
         hidden.insert("__circuitry_partial_0__".to_string(), "x".to_string());
@@ -1273,7 +1274,8 @@ mod golden_corpus_live_root {
             let store = Store::new();
             seed_store_from_ctx(&store, &store.root, &eager_root);
             let chain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
-            let lazy_root = LiveRoot::new(&chain, &store);
+            let frame = crate::Frame::root();
+            let lazy_root = LiveRoot::new(&chain, &store, &frame);
             let lazy = run_case(case, &lazy_root, &known);
 
             assert_eq!(

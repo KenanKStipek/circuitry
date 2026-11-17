@@ -1160,7 +1160,7 @@ pub(crate) async fn execute_prompt(
     if let Some(inputs) = raw_dict(&prompt.inputs) {
         render_chain.push(CtxSource::Frozen(Value::Dict(inputs.clone())));
     }
-    let render_root = live_scope::LiveRoot::new(&render_chain, store);
+    let render_root = live_scope::LiveRoot::new(&render_chain, store, frame);
 
     // Validated before the run starts (`pre_input_checks`); a bad value that
     // got here anyway fails the run rather than recording the text in full.

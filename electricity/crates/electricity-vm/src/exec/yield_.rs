@@ -111,7 +111,7 @@ pub(crate) async fn execute_yield(
     observer: &dyn RunObserver,
     token: &CancellationToken,
 ) -> Result<(), VmError> {
-    let live_root = LiveRoot::new(ctx_chain, store);
+    let live_root = LiveRoot::new(ctx_chain, store, frame);
     execute_yield_with_ctx(
         op, yield_op, store, parent, &live_root, frame, run_ctx, observer, token,
     )
@@ -596,7 +596,8 @@ mod tests {
             store.set_leaf(&pass, Value::from("padding"), Value::from("x".repeat(64)));
         }
         let chain: CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
-        let live_root = LiveRoot::new(&chain, &store);
+        let frame = Frame::root();
+        let live_root = LiveRoot::new(&chain, &store, &frame);
         let mut inputs = Dict::new();
         inputs.insert(Value::from("extra"), Value::from("v"));
         let overlay = InputsOverlay {

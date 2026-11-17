@@ -442,6 +442,7 @@ pub async fn execute_root(
         observer,
         token,
         resume_active,
+        true,
     )
     .await
 }
