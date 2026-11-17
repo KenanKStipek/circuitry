@@ -65,8 +65,11 @@ Decisions" instead of citing an external project file repeatedly:
   **intersection** of the document's own list and a host-configured pin, never their union;
   `allowed_commands` is literal-only; no secrets are ever placed on a subprocess's argv; state is
   redacted before it is written anywhere.
-- Mustache partials are removed from the orchestration language itself, in both engines — not an
-  electricity-only omission.
+- Chevron's own file-based `{{> name}}` partial loading (an arbitrary file read by name from the
+  process CWD) is removed from the orchestration language itself, in both engines — not an
+  electricity-only omission. `{{> name}}` itself is supported through prompt composition (issues
+  #396/#487): it splices in a declared `prompts:` entry or an effect's own rendered text, never a
+  file.
 - Error-message parity is explicitly two-tier: text Circuitry's own code writes (the dynamic-wrapped
   `"<path>: <message>"` format, `expect failed: ...`, `use` cycle messages, loop-bounds errors, and
   every other message quoted verbatim in the specification this design implements) must match
@@ -148,7 +151,7 @@ flag for refuses the replay outright, rather than dropping it; the surrounding s
 | REST trigger / scheduler | Deployment-time concern layered over a runner, not the runner itself; nothing here precludes a caller from wrapping the CLI or library in one later. |
 | The step cache (`cache:`, `cof cache`, `--no-cache`) | Removed from Circuitry itself (#353); electricity never had it to begin with. |
 | Document discovery / untrusted-document `runtime:` filtering | The orchestration file is always operator-chosen on the command line = trusted (Decisions, above, now narrowed to the document only — `--config` gained discovery in issue #728). Every document `runtime:` key electricity reads is honored as-is; there is no notion of an untrusted document to filter against (runtime-semantics §8.6's `ORCHESTRATION_RUNTIME_KEYS` trust split collapses to "always trusted"). |
-| Mustache partials (`{{> name}}`) | Removed from both Circuitry and electricity (Decisions, above); chevron's partial loading reads an arbitrary file from the process CWD by name, which is both a parity-fragile feature (no production document uses it) and a minor file-disclosure surface for no real benefit. |
+| Chevron's own file-based `{{> name}}` partial loading | Removed from both Circuitry and electricity (Decisions, above); it reads an arbitrary file from the process CWD by name, which is both a parity-fragile feature (no production document uses it) and a minor file-disclosure surface for no real benefit. `{{> name}}` itself is not removed — it is built, through prompt composition (issues #396/#487, §3.6 above), splicing in a declared `prompts:` entry or an effect's own rendered text instead of a file. |
 
 **Production-only surface.** electricity's only way to trust an orchestration file is for an
 operator to name it on the command line or in the embedding API; there is no API-key discovery
@@ -771,12 +774,15 @@ reference's `ThreadPoolExecutor` shutdown semantics, runtime-semantics §5.5).
 
 ### 6.3 Scope overlays
 
-Reproduces runtime-semantics §2.4 exactly, including Quirk Q1:
+Reproduces runtime-semantics §2.4 exactly:
 
 - the document root (a `dynamic` with no name) and an ordinary named `dynamic` never build a
   scope overlay — a child op's `ctx` is `store.state` **by reference**, so the fully-qualified
-  `prime.<sibling>.value` form resolves (reading the same live dict) but the **bare**
-  `<sibling>.value` form does not, because nothing ever pushes `<sibling>` to the top of `ctx`;
+  `prime.<sibling>.value` form resolves (reading the same live dict). A **bare**
+  `<sibling>.value` form resolves too, but not through this overlay: it is the template
+  renderer's own bare-sibling-reference fallback (issue #778, `electricity_template::
+  ScopeRoot::bare_fallback`/`Frame::bare_effect_chain`, §2.4's own closing paragraph) —
+  consulted only once every scope below (this overlay included) has already missed;
 - a loop body / `if` branch **does** build an overlay (`scope_ctx`): a shallow merge exposing
   each prior sibling in the same body/branch under both the bare top-level spelling and the
   `prime`-nested spelling, rebuilt from the original `ctx` after every sibling (never layered on
@@ -2875,7 +2881,6 @@ divergence.
 
 | # | Quirk / risk | Recommendation | Owner decision needed? |
 |---|---|---|---|
-| Q1 | Bare sibling references (`{{first.value}}`) resolve inside a loop body/`if` branch but **not** at plain top level or inside a plain `dynamic` — only the `prime.`-prefixed form works there. | **Copy.** This is the single most load-bearing parity assertion in the whole suite (conformance case C27) — silently "fixing" it would change which existing documents even compile the same way. | **No — settled 2026-10-06**: confirmed no production document relies on the bare-form failing silently in a way a fix would surface as a new error; copied exactly, no owner question remains. |
 | Q3 | `use.inline`'s template renders once, against the **parent's** context, before the child orchestration exists — `use.inputs` has no effect on what the inline template text itself can reference. | **Copy.** "Fixing" this (rendering `inline` twice, once per scope) would be a new, undocumented behavior change, not a bugfix — out of scope for electricity to invent unilaterally. | **No — moot**: no document in the first production document sets uses `use: {inline: ...}` at all, so this quirk's behavior has nothing to apply to yet. |
 | Q4 | `while`'s condition sees `iter.index = count - 1` (post-pass, −1 before any pass); the body sees `iter.index = count` (uncompensated) — a deliberate one-line asymmetry. | **Copy**, with an explicit conformance case asserting both sides (C10). | No — documented as deliberate in the reference's own source commentary. |
 | Q5 | `allowed_commands`'s literal-only rule is enforced **twice** (compile time and dispatch time) by two separate checks. | **Copy both checks** — the duplication is intentional defense-in-depth (dispatch time catches a `use`-/reflector-generated document the static compile pass never statically checked). | No. |
