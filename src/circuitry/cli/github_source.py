@@ -35,6 +35,7 @@ convention set by `plugins/http.py` (no `requests` dependency).
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import shutil
@@ -353,6 +354,17 @@ class GitHubSource:
                 f"{http_conventions.redact_request_url(url)} ({exc.reason}). "
                 "The cache is still usable offline; only `cof library refresh` "
                 "needs the network."
+            ) from exc
+        except http.client.HTTPException as exc:
+            # Neither a URLError nor an OSError (InvalidURL's own base
+            # class): userinfo stripping above should keep this from
+            # ever firing on a credential, but a surprising port/host
+            # shape could still raise one, so its own text is scrubbed
+            # too, defensively (issue #819).
+            raise LibraryFetchError(
+                f"Library source {self.name!r}: could not reach "
+                f"{http_conventions.redact_request_url(url)} "
+                f"({http_conventions.scrub_embedded_urls(str(exc))})."
             ) from exc
 
         try:

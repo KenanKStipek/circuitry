@@ -25,6 +25,7 @@ error.
 
 from __future__ import annotations
 
+import http.client
 import importlib.util
 import urllib.error
 import urllib.request
@@ -81,7 +82,12 @@ class RssPlugin:
                     source: Any = resp.read()
                     response_headers = dict(resp.headers)
                     response_headers["content-location"] = resp.geturl()
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                OSError,
+                http.client.HTTPException,
+            ) as exc:
                 raise RuntimeError(
                     f"rss: failed to fetch {http_conventions.redact_request_url(stripped)!r}: "
                     f"{http_conventions.scrub_embedded_urls(str(exc))}"

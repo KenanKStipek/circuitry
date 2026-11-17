@@ -535,6 +535,65 @@ def test_rss_fetch_failure_never_names_a_password_in_the_url(
     assert "feed.example.test" in str(excinfo.value)
 
 
+def test_rss_raw_url_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#819: `raw['url']` must never carry a configured feed URL's
+    userinfo."""
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+    password = "pw_value_pw_value"
+
+    class FakeResponse:
+        headers: ClassVar[dict[str, str]] = {}
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"<rss></rss>"
+
+        def geturl(self) -> str:
+            return "https://feed.example.test/rss"
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=0: FakeResponse())
+
+    r = RssPlugin().execute(
+        params={"url": f"https://alice:{password}@feed.example.test/rss"}
+    )
+    assert password not in r.raw["url"]
+    assert "alice" not in r.raw["url"]
+
+
+def test_rss_fetch_against_a_real_closed_port_never_leaks_the_password_via_invalidurl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: a userinfo with no port reaches `http.client`'s own
+    host/port split unstripped and raises its own credential-bearing
+    `InvalidURL("nonnumeric port: ...")` -- unlike the mocked test
+    above, this drives the real `urllib.request` code path against a
+    closed port on 127.0.0.1, with `urlopen` never mocked, so it would
+    catch a regression the mock can't.
+    """
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+    password = "pw_value_pw_value"
+
+    with pytest.raises(RuntimeError) as excinfo:
+        RssPlugin().execute(
+            params={"url": f"http://alice:{password}@127.0.0.1"}, timeout_seconds=2
+        )
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
 def test_webhook_posts_json_with_mocked_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
