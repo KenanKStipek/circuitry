@@ -4196,6 +4196,186 @@
     }
   },
   {
+    "name": "bare_input_ref_shadowed_by_effect_in_scope",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string}\neffects:\n  - type: tool\n    name: x\n    provider: shell\n    params: {cmd: 'echo hi'}\n  - type: tool\n    name: reader\n    provider: shell\n    params:\n      cmd: 'echo {{x.value}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "provider": "shell",
+          "params": {
+            "cmd": "echo hi"
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": null
+        },
+        {
+          "name": "reader",
+          "provider": "shell",
+          "params": {
+            "cmd": "echo {{x.value}}"
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "reader",
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "47ef1bad6f0ff8bb246a37e45384aec6868a5a3eae9e754b807b669c6bf3fb2f",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "bare_input_ref_shadowed_by_effect_in_unnamed_if",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string}\neffects:\n  - type: if\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: tool\n        name: x\n        provider: shell\n        params: {cmd: 'echo hi'}\n  - type: tool\n    name: reader\n    provider: shell\n    params:\n      cmd: 'echo {{x.value}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": null,
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "x",
+              "provider": "shell",
+              "params": {
+                "cmd": "echo hi"
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null,
+              "limited": false,
+              "confine_to": null,
+              "prompt_file": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        },
+        {
+          "name": "reader",
+          "provider": "shell",
+          "params": {
+            "cmd": "echo {{x.value}}"
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "reader",
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f67fc6392ffe43ffe0f752293f1e7af10b0f0962bf053b1087c4369b04f53d6d",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "unknown_flow_value",
     "files": {
       "doc.yml": "effects: []\nflow: bogus\n"
