@@ -1674,12 +1674,12 @@ above, and the `except BaseException` around `finally:` in `core/dynamic.py`
 §6.4) handles SIGTERM identically to SIGINT with zero additional branching —
 only the **exit code** differs (§8.4).
 
-**electricity-only: mid-run refusal (M1 lane I, no Python equivalent).**
+**electricity-only: mid-run refusal (issue #448, no Python equivalent).**
 Circuitry never refuses content — every effect type above either runs or
 raises a real error. electricity's own `use` (§5.3) compiles its child
 document only once the run actually reaches it, so the up-front refusal
-walker can never see that child's content ahead of time. M1 lane I
-prerequisites (issue #448, item U4(a)) narrow that gap for one case only:
+walker can never see that child's content ahead of time. Issue #448's own
+prerequisites narrow that gap for one case only:
 `electricity`'s own run wiring also walks every literal `use: {path:}`
 child statically reachable from the document, compiles each one the same
 way the parent document was compiled, and runs the same up-front refusal
@@ -1687,11 +1687,11 @@ check against it (`electricity_compiler::use_children::
 first_refused_child`) — a static *prediction*, inert under M0 (`use` is
 refused outright, first, while its own flag is off). An inline `use`'s own
 rendered YAML is explicitly out of scope for that prediction: its final
-content doesn't exist until its own Mustache tags render, so only lane I's
-own per-child runtime check (below) can ever see it, the same gap that
+content doesn't exist until its own Mustache tags render, so only the
+per-child runtime check (below) can ever see it, the same gap that
 also applies to a reflector's generated effects and a decomposition plan,
-wherever a later lane compiles one of those into something it then
-executes. `electricity_vm::VmError::Refused` is
+wherever one of those is compiled into something that's then
+executed. `electricity_vm::VmError::Refused` is
 electricity's own answer: the VM checks a freshly compiled child the same
 way the top-level document was already checked, and refuses it the same
 way if it finds something unsupported, but only once execution actually
@@ -1699,7 +1699,7 @@ reaches it, not before the run starts. It carries the `Refusal` found plus
 the child document's own label.
 
 **Fatal for control, like a cancellation; recorded like an ordinary
-failure, unlike one (ruling R1 on PR #462).** Every
+failure, unlike one.** Every
 container on the path to a `VmError::Refused` — a named `if`, a `dynamic`
 chain or tree — bypasses `on_error`/retries entirely for it and never
 wraps it with an effect-path prefix, exactly the same as `VmError::
@@ -1718,8 +1718,8 @@ own exit code/text is an ordinary failure (exit 1, `--out`/`--events`/
 `--live-state` written as for any other failed run), never the
 signal-only wording this section and §8.4 reserve for `VmError::
 Cancelled`. `electricity_vm::VmError::is_fatal()`'s own doc comment is the
-normative statement of this split; lane H's loop containers and lane I's
-`use` both copy it rather than re-deriving it per effect type.
+normative statement of this split; loop containers and `use`
+both copy it rather than re-deriving it per effect type.
 
 ---
 
@@ -1839,7 +1839,7 @@ blocks a run; printed to **stderr** (`cli/app.py` `_print_run_warnings`) —
 deliberately, so `--json`/`--tail`/a piped stdout stay machine-readable and
 `--quiet` does not silence a warning that might matter.
 
-electricity runs preflight for real (lane R, #495, merged in #497):
+electricity runs preflight for real (#495, merged in #497):
 `electricity::preflight::run_preflight` builds each adapter/tool a raw
 document references from the config's own `runtime:` block and awaits/calls
 its `check()`, the same way `cof run` does. The one adapter still refused
