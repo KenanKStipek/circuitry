@@ -250,10 +250,18 @@ snapshot embedded in run state (and surfaced via `--out`, `--json`,
 goes through a centralized redaction helper before being written. The
 helper deny-lists keys matching `api_key`, `token`, `password`, `secret`,
 `bearer`, and `authorization` (case-insensitive, with snake/kebab/dot
-suffixes), and rewrites any URL containing userinfo
-(`https://user:pass@host`) to strip the userinfo segment. JWTs and common
-vendor key shapes (`sk-…`, `ghp_…`, `xox?-…`) in any string position are
-also redacted. Implementation:
+suffixes). A string value shaped like one whole URL (no whitespace, and
+either a `scheme://` or a schemeless `user:pass@host`) has its
+credential cut the same way a request-URL refusal does: at the last `@`
+in the whole value when there is no parseable authority or a password
+hides behind the path, at the authority's own userinfo otherwise, with
+any credential-like query parameter (`api_key`, `token`, ...) masked
+too — the cut marked with `***REDACTED***@` rather than removed
+outright, so a reader can see a credential was there. Prose, an email
+address, or a value that merely contains an `@` or a link somewhere
+inside it is left untouched. JWTs and common vendor key shapes (`sk-…`,
+`ghp_…`, `xox?-…`) in any string position are also redacted.
+Implementation:
 [`src/circuitry/cli/redaction.py`](../src/circuitry/cli/redaction.py).
 
 **Mitigation — `--last` env-var stash.** The `cof run -e KEY=VALUE` list is
