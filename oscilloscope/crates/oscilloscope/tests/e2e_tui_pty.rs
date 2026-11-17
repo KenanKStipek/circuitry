@@ -22,11 +22,11 @@ use std::time::{Duration, Instant};
 
 use support::{
     AutoKill, ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome,
-    assert_no_leftover_process, drain_continuously, e2e_electricity_enabled, e2e_enabled,
-    engine_pid_for_doc, open_pty, osi_command, registry_json_entries, screen_grid, screen_grid_fg,
-    scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env, wait_for_screen,
-    wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start,
-    wait_with_timeout, write_doc,
+    assert_no_leftover_process, diagnose_stalled_wait, drain_continuously, e2e_electricity_enabled,
+    e2e_enabled, engine_pid_for_doc, open_pty, osi_command, registry_json_entries, screen_grid,
+    screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
+    wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts,
+    wait_for_step_start, wait_with_timeout, write_doc,
 };
 
 /// The `(row, col)` of the first `glyph` character on whichever grid
@@ -70,8 +70,9 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
         }
         if Instant::now() >= deadline {
             let screen = screen_grid(&whole, 200, 60).join("\n");
+            let diagnostics = diagnose_stalled_wait();
             panic!(
-                "{:?} never appeared within {timeout:?}; screen:\n{screen}",
+                "{:?} never appeared within {timeout:?}; screen:\n{screen}\n{diagnostics}",
                 String::from_utf8_lossy(pattern)
             );
         }
@@ -106,8 +107,9 @@ fn wait_for_pattern_since(
         }
         if Instant::now() >= deadline {
             let screen = screen_grid(&whole, 200, 60).join("\n");
+            let diagnostics = diagnose_stalled_wait();
             panic!(
-                "{:?} never appeared within {timeout:?}; screen:\n{screen}",
+                "{:?} never appeared within {timeout:?}; screen:\n{screen}\n{diagnostics}",
                 String::from_utf8_lossy(pattern)
             );
         }
@@ -195,7 +197,10 @@ fn wait_for_pattern_on_master(
         }
     }
     let screen = screen_grid(carry, 200, 60).join("\n");
-    panic!("pattern {pattern:?} never appeared within {timeout:?}; screen:\n{screen}");
+    let diagnostics = diagnose_stalled_wait();
+    panic!(
+        "pattern {pattern:?} never appeared within {timeout:?}; screen:\n{screen}\n{diagnostics}"
+    );
 }
 
 #[test]

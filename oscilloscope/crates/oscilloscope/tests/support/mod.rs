@@ -165,12 +165,79 @@ pub fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::process::E
             return status;
         }
         if start.elapsed() > timeout {
+            // Collected before the kill below: once `osi` and its
+            // children are dead there is nothing left for `ps` or
+            // `/proc` to report (issue #825's "a failure should
+            // explain itself").
+            let diagnostics = diagnose_stalled_wait();
             let _ = child.kill();
             let _ = child.wait();
-            panic!("e2e test exceeded its {timeout:?} hard timeout; osi was killed");
+            panic!("e2e test exceeded its {timeout:?} hard timeout; osi was killed\n{diagnostics}");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// What every `osi`, `cof` and `electricity` process on this machine
+/// is doing right now (issue #825): each one's pid, parent, state,
+/// elapsed time and full command line from `ps`, plus, on Linux, its
+/// own `/proc/<pid>/wchan` (the kernel function it's blocked in, if
+/// any) and its per-thread state from `/proc/<pid>/task/*/stat` --
+/// called from a `wait_for_pattern*`/`wait_with_timeout` panic
+/// instead of letting it report only the missing pattern or the bare
+/// fact of a timeout. None of this repository's own tests ever runs
+/// anything else named `osi`, `cof` or `electricity`, so every match
+/// is the run under test (or one of its own children) and never a
+/// coincidence from something unrelated sharing the machine.
+pub fn diagnose_stalled_wait() -> String {
+    let mut out = String::new();
+    match Command::new("ps")
+        .args(["-ww", "-o", "pid,ppid,stat,etime,args"])
+        .output()
+    {
+        Ok(result) => {
+            let text = String::from_utf8_lossy(&result.stdout);
+            let mut pids: Vec<u32> = Vec::new();
+            for line in text.lines() {
+                let is_header = line.trim_start().starts_with("PID");
+                let is_relevant = ["osi", "cof", "electricity"]
+                    .iter()
+                    .any(|n| line.contains(n));
+                if is_header || is_relevant {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                if is_relevant && !is_header {
+                    if let Some(pid) = line
+                        .split_whitespace()
+                        .next()
+                        .and_then(|p| p.parse::<u32>().ok())
+                    {
+                        pids.push(pid);
+                    }
+                }
+            }
+            if pids.is_empty() {
+                out.push_str("<no osi/cof/electricity process found alive>\n");
+            }
+            #[cfg(target_os = "linux")]
+            for pid in pids {
+                if let Ok(wchan) = std::fs::read_to_string(format!("/proc/{pid}/wchan")) {
+                    out.push_str(&format!("pid {pid} wchan: {wchan}\n"));
+                }
+                if let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/task")) {
+                    for entry in entries.flatten() {
+                        let tid = entry.file_name();
+                        if let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) {
+                            out.push_str(&format!("pid {pid} task {tid:?} stat: {stat}\n"));
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => out.push_str(&format!("<ps failed: {e}>\n")),
+    }
+    out
 }
 
 /// `wait_with_timeout`, with `child`'s own stdout read on its own
