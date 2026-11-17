@@ -1584,8 +1584,7 @@ fn arm_signals(token: CancellationToken) -> SignalGuard {
     // a signal arriving in that window would still hit the OS's
     // default (process-killing) disposition even though this function
     // had already returned, telling its caller the run was safe to
-    // start. Confirmed by a real race on a loaded machine during this
-    // function's own review (PR #441): a SIGINT sent as little as a
+    // start. Confirmed by a real race on a loaded machine (PR #441): a SIGINT sent as little as a
     // few hundred milliseconds after a plain, unguarded `spawn` could
     // still arrive before the handler was installed.
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
@@ -2571,9 +2570,8 @@ mod unit_tests {
     }
 
     /// Ties `USAGE`'s own "runs ... documents only" / "refused" lists
-    /// to `Supported::current()`'s own flags, so the next lane that
-    /// flips one (`loop_`/`use_` already did, this PR's own
-    /// addition) can't leave this text stale the way it found it --
+    /// to `Supported::current()`'s own flags, so flipping one
+    /// (`loop_`/`use_` already did) can't leave this text stale --
     /// each name in the mapping below must appear in exactly one of the
     /// two lists, matching whichever side its own flag says.
     #[test]
@@ -2647,7 +2645,7 @@ mod unit_tests {
 
     #[test]
     fn unknown_flag_after_the_positionals_is_also_a_usage_error() {
-        // Issue #431's gate lane tightens this from the pre-#431 preview
+        // Issue #431 tightens this from the pre-#431 preview
         // CLI, which let a trailing unknown flag fall through to the
         // (always-refusing) run path instead.
         assert!(matches!(
@@ -3101,8 +3099,8 @@ mod unit_tests {
     }
 
     /// `cof run` has no `-V`/`--version`/`-h` of its own at all --
-    /// each is itself an unrecognized option there (issue #728's own
-    /// review), unlike the legacy form and the top-level group, where
+    /// each is itself an unrecognized option there (issue #728),
+    /// unlike the legacy form and the top-level group, where
     /// `-V`/`-h` still win over everything ([`version_flag_wins_over_
     /// everything`]/[`help_flag_is_recognized`] above, unchanged).
     /// `--help` (long form) still works under `run`.

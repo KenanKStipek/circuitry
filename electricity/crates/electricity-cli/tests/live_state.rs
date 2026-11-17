@@ -96,7 +96,7 @@ effects:
 /// Kills *child* (its whole process group) on drop, including when a
 /// panicking assertion unwinds through it, so a hung/sleeping child is
 /// never left running after the test that started it ends
-/// (`LANE-CONTRACT.md`'s own rule; same approach as `signals.rs`'s
+/// (the same approach as `signals.rs`'s
 /// `TestChild`).
 struct TestChild {
     child: std::process::Child,
@@ -318,7 +318,7 @@ fn mid_run_live_state_shows_a_finished_branch_before_its_tree_merges() {
         observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
     );
 
-    // PR #549's review: electricity's own overlay shows a
+    // PR #549: electricity's own overlay shows a
     // branch's *in-progress* node too, as soon as it starts -- unlike
     // cof's own publisher, which republishes a branch only once that
     // branch itself has called `on_write` at least once (a `prompt`/
@@ -327,7 +327,7 @@ fn mid_run_live_state_shows_a_finished_branch_before_its_tree_merges() {
     // documented difference (`electricity/DESIGN.md` §13, Q11), not a
     // bug to hide: copying cof's staler view would mean taking a
     // branch snapshot on every write instead of lazily at publish
-    // time, which issue #465's own performance ruling forbids. Assert
+    // time, which issue #465 forbids for performance reasons. Assert
     // it directly, on the real mid-run shape, rather than merely
     // asserting the shape isn't broken.
     let saw_slow_started_but_not_done_while_lp_still_running =
@@ -621,10 +621,10 @@ fn sigint_during_a_running_tool_clears_its_meta_live() {
 const USE_CHILD_TOP_LEVEL_TREE_DOC: &str = "\
 effects:\n  - type: use\n    name: step\n    inline: |\n      flow: tree\n      effects:\n        - name: fast\n          type: tool\n          provider: sleep\n          params: {seconds: 0.1}\n        - name: slow\n          type: tool\n          provider: sleep\n          params: {seconds: 1.5}\n";
 
-/// PR #549's review: a `use` child whose own document has a
+/// PR #549: a `use` child whose own document has a
 /// top-level `flow: tree` collides its own tree overlay with its own
-/// `ChildObserver` graft at the exact same path. Before this fix,
-/// a single `BTreeMap<String, GraftEntry>` meant whichever of the
+/// `ChildObserver` graft at the exact same path. A single
+/// `BTreeMap<String, GraftEntry>` used to mean whichever of the
 /// two registered *second* at that path silently destroyed the first
 /// -- once the child wrote anything after its own tree had already
 /// registered its branches, the tree overlay vanished for the rest of
