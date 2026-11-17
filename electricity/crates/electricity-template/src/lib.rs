@@ -411,7 +411,7 @@ impl std::fmt::Display for RawTokensError {
 impl std::error::Error for RawTokensError {}
 
 /// [`tokens`], with [`RawTokensError`]'s own un-collapsed message on
-/// failure instead of [`TokensError`]'s -- lane P (#487): a declared
+/// failure instead of [`TokensError`]'s (#487): a declared
 /// prompt's own run-time `{{> name}}` rewrite (`electricity_vm::compose`)
 /// reports a tokenize failure with chevron's exact exception text
 /// (`core/prompt_compose.py::_unescape_variable_tags`'s own `f"...{exc}"`,
@@ -457,7 +457,7 @@ pub fn render_template_with_root<R: ScopeRoot>(
 }
 
 /// [render_template_with_root], with *escape* as an additive option
-/// (#397/#406, lane P): escape = false swaps out chevron's own
+/// (#397/#406): escape = false swaps out chevron's own
 /// HTML-escaper for the duration of this one render and nothing else
 /// -- every other rule in the variable branch, including the dot-
 /// plus-True quirk, keeps applying exactly as it does when escape is

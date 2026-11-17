@@ -1,8 +1,8 @@
 //! `yaml.dump(value, default_flow_style=False)` -- a port of PyYAML's
 //! `Emitter`/`Serializer`/`Representer` for the values [`Value`] can
-//! hold. Originally issue #506's lane L1 (a reflector's generated plan,
-//! re-dumped before `use(inline)` parsed it again) and M1-L2's own
-//! `safe_dump(sort_keys=False)`; issue #778 dropped the reflector's own
+//! hold. Originally issue #506 (a reflector's generated plan,
+//! re-dumped before `use(inline)` parsed it again) and decomposition's
+//! own `safe_dump(sort_keys=False)`; issue #778 dropped the reflector's own
 //! dump-and-reparse round trip, so decomposition's own plan-dumping is
 //! this module's only caller left.
 //!
@@ -319,7 +319,7 @@ fn sorted_keys(dict: &electricity_value::Dict, sort_keys: bool) -> Vec<Value> {
 /// [`emit_sequence`]'s own doc comment) with no flag to tell those
 /// apart.
 /// **Known gap, documented in DESIGN.md's own divergence table (issue
-/// #506's lane L1, PR #510's first review; narrowed to decomposition by
+/// #506, PR #510; narrowed to decomposition by
 /// issue #778, which dropped the reflector's own use of this emitter):**
 /// PyYAML's own `check_simple_key` switches a block-mapping key to the
 /// explicit `? key\n: value` form once that key's own emitted length
