@@ -2,8 +2,8 @@
 //! enforcement, and the two `runtime_config` entries `cli/runtime_shim.
 //! py::run` installs from a resolved [`CircuitryConfig`]
 //! (`allowlist_gate.py::install_allowlists`, and the run's own
-//! `_capability_allow`) -- the seam issue #431's lane table leaves for
-//! this lane to shape, documented in `electricity/docs/spec/
+//! `_capability_allow`) -- the seam issue #431 leaves for
+//! this module to shape, documented in `electricity/docs/spec/
 //! vm-lanes.md`.
 //!
 //! **The shape picked (M0-H).** [`check_allowlist`] walks *only* the
@@ -14,8 +14,8 @@
 //! refused outright once the structural/compile checks ran; a `use`
 //! child's own adapter/tool references were therefore never reachable
 //! through *any* M0-H run, so walking them here checked text no run
-//! could ever act on. [`check_allowlist`] itself is unchanged by M1 lane
-//! I prerequisites (issue #448, item U4(b)): it still walks only the
+//! could ever act on. [`check_allowlist`] itself is unchanged by
+//! issue #448, item U4(b): it still walks only the
 //! top-level document, since this crate (`electricity-config`) cannot
 //! depend back on `electricity-compiler`, which is where the walk that
 //! finds `use` children now lives (`electricity_compiler::use_children::

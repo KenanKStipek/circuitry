@@ -347,8 +347,8 @@ fn non_empty_message(message: &Option<String>) -> Option<&str> {
     message.as_deref().filter(|m| !m.is_empty())
 }
 
-/// `walk_orchestration_refs`, re-exported under this module so lane
-/// R's own driver (`electricity` lib's `src/preflight.rs`) can build
+/// `walk_orchestration_refs`, re-exported under this module so the
+/// preflight driver (`electricity` lib's `src/preflight.rs`) can build
 /// preflight's own `(adapter_refs, tool_refs)` pair without a second
 /// public path into [`crate::allowlist`].
 pub fn preflight_refs(
