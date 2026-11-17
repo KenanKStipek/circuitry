@@ -1,5 +1,5 @@
 //! End-to-end tests against a real `electricity`, built with
-//! `--features test-tools` (issue #431's lane E2 acceptance
+//! `--features test-tools` (issue #431's acceptance
 //! criterion: "osi's ElectricityEngine ... end-to-end tests run
 //! against electricity behind a feature flag"). Mirrors
 //! `e2e_cof.rs`'s own shape: success, failure, an

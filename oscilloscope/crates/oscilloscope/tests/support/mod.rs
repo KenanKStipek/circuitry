@@ -28,7 +28,7 @@ pub fn e2e_enabled() -> bool {
     if std::env::var_os("OSI_E2E_COF").is_none() {
         return false;
     }
-    // P2-3: `OSI_E2E_COF=1` with no `cof` on `PATH` is a broken CI
+    // `OSI_E2E_COF=1` with no `cof` on `PATH` is a broken CI
     // job, not a reason to run zero tests and report green — every
     // test below used to read this the same as the env var simply
     // being unset at all and quietly skip.
@@ -38,7 +38,7 @@ pub fn e2e_enabled() -> bool {
     true
 }
 
-/// The same shape as [`e2e_enabled`], for issue #431's lane E2: these
+/// The same shape as [`e2e_enabled`], for issue #431: these
 /// tests need an `electricity` built with `--features test-tools`
 /// (`cargo build -p electricity-cli --features test-tools` from
 /// `electricity/`) on `PATH`, since the `sleep`/`fail` providers below
@@ -144,7 +144,7 @@ pub fn osi_command(home: &TestHome) -> Command {
 }
 
 /// [`osi_command`], with `--engine electricity` already appended
-/// (issue #431's lane E2) -- every one of this crate's electricity
+/// (issue #431) -- every one of this crate's electricity
 /// e2e tests opts into it the same way, so each one doesn't repeat
 /// the same two-argument tail.
 pub fn osi_electricity_command(home: &TestHome) -> Command {
@@ -174,7 +174,7 @@ pub fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::process::E
 }
 
 /// `wait_with_timeout`, with `child`'s own stdout read on its own
-/// thread rather than in this one (P2-3): reading concurrently with
+/// thread rather than in this one: reading concurrently with
 /// the wait means a kill on timeout closes the pipe (EOF) and
 /// unblocks the read too, instead of hanging on it with no timeout of
 /// its own at all.
@@ -213,7 +213,7 @@ pub fn wait_with_timeout_capturing_stdout(
 
 /// [`wait_with_timeout_capturing_stdout`], with `child`'s stderr
 /// captured the same way alongside it -- the electricity e2e tests
-/// (issue #431's lane E2, scope item 1) need stderr to assert the
+/// (issue #431, scope item 1) need stderr to assert the
 /// "this electricity has no --events" notice did *not* print, which
 /// `wait_with_timeout_capturing_stdout` alone can't see (it leaves
 /// stderr piped but never read).
@@ -332,7 +332,7 @@ pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
 /// needle: it is only ever set as an environment variable, which
 /// never appears in a process's own argv, so a `pgrep -f` against it
 /// can never match anything regardless of whether a process actually
-/// survived (#424 review finding F10).
+/// survived (#424).
 /// Every `osi-<pid>-<nanos>` entry directly under the real temp
 /// directory right now (`unique_run_dir`'s own default-`--out-dir`
 /// naming) -- a before/after diff around one test's own osi spawn(s)
@@ -726,7 +726,7 @@ pub fn open_pty() -> (File, PathBuf) {
         // fd for the rest of the test binary's own short life keeps
         // the slave's own open count never reaching zero in between.
         //
-        // Review finding 5 on PR #496: the cost of that is paid by
+        // The cost of that is paid by
         // every test that calls this helper, not just the first one --
         // this leaked fd stays open for the whole binary's life, so
         // the real slave fds `spawn_osi_on_pty` opens next are never

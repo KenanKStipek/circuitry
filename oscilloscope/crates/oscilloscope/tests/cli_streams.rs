@@ -1,5 +1,5 @@
-//! Which stream `osi`'s own CLI-parsing errors land on (#422 review
-//! note): a usage error (exit 2) must print to stderr, same as every
+//! Which stream `osi`'s own CLI-parsing errors land on (#422): a
+//! usage error (exit 2) must print to stderr, same as every
 //! other error osi reports; `--help`/`--version` (exit 0) still print
 //! to stdout, like any other successful output. Needs no `cof`.
 
@@ -96,7 +96,7 @@ fn a_dash_e_input_reaches_the_plan_compile() {
     // compile before the later launch failure, so this needs no real
     // engine at all. PATH is pointed at an empty directory rather than
     // relying on `electricity` simply not being installed on whatever
-    // machine runs this (a review finding): with it on PATH, this
+    // machine runs this: with it on PATH, this
     // would spawn a real engine under a real HOME instead.
     let work = tempfile::tempdir().unwrap();
     let empty_path = work.path().join("empty-path");
@@ -166,11 +166,11 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
     // change) -- it only warns on stderr. `--engine electricity` with
     // a config but with the `electricity` binary itself not on PATH
     // reaches the launch-failure path (exit 1) only *after*
-    // `create_run_dir` has already run (P2-1 moved it to immediately
+    // `create_run_dir` has already run (moved to immediately
     // before the spawn) -- with no `cof` needed at all, so this never
-    // touches the owner's own real `cof`/HOME either (F11). PATH is
+    // touches the owner's own real `cof`/HOME either. PATH is
     // pointed at an empty directory and HOME at a scratch one rather
-    // than relying on the ambient environment (a review finding).
+    // than relying on the ambient environment.
     let work = tempfile::tempdir().unwrap();
     let empty_path = work.path().join("empty-path");
     std::fs::create_dir(&empty_path).unwrap();
@@ -211,7 +211,7 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
 
 #[test]
 fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
-    // P2-4: an existing but still-empty run directory (a run that
+    // An existing but still-empty run directory (a run that
     // hasn't started writing yet, or never will) looks identical to a
     // silent hang without this.
     let dir = tempfile::tempdir().unwrap();
