@@ -1895,7 +1895,7 @@ mod tests {
     fn lookbehind_containing_only_a_fixed_text_backreference_is_still_rejected_at_translate_time() {
         // A backreference to a group whose width genuinely isn't
         // fixed (`(a|bb)`) still fails the *translator's* own check,
-        // same as before this lane.
+        // same as before.
         let err = translate(r"(a|bb)(?<=\1)", flags()).unwrap_err();
         assert!(err.contains("fixed-width"));
     }
