@@ -370,6 +370,26 @@ def test_canonical_key_order_sorts_all_int_keys_numerically() -> None:
     assert list(ordered.keys()) == [1, 2, 10]
 
 
+def test_dumps_saved_state_pretty_writes_an_all_int_keyed_dict_in_numeric_order() -> None:
+    """Pinned for both engines (#778): a ``--pretty`` write of an all-int-
+    keyed dict lays its keys out in numeric order (1, 2, 10) in the
+    written JSON text -- the order the *live* dict sorts in, not the
+    lexicographic order ``"1", "10", "2"`` its keys' own JSON text would
+    give (that order is only ever a fallback, for a dict ``<`` can't
+    compare directly). Not a conformance case: once this text is written,
+    JSON's own string-only keys make the original ints unrecoverable by
+    re-parsing, so the suite's generic ``--pretty`` round-trip self-check
+    (``tests/conformance/normalize.py::assert_out_serialization``, which
+    re-derives its own expectation from the re-parsed, now-all-string-
+    keyed file) can never confirm numeric order was ever used -- only this
+    direct, pre-serialization check can.
+    """
+    state = {"extra": {10: "ten", 1: "one", 2: "two"}}
+    assert dumps_saved_state(state, pretty=True) == (
+        '{\n  "extra": {\n    "1": "one",\n    "2": "two",\n    "10": "ten"\n  }\n}'
+    )
+
+
 def test_canonical_key_order_sorts_non_ascii_string_keys_by_code_point() -> None:
     """An all-string dict sorts by raw ``sorted()``, the same code-point
     order a plain ``json.dumps(..., sort_keys=True)`` already used.
