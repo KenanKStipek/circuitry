@@ -117,7 +117,7 @@ pub fn disambiguated_names(runs: &[(Option<&str>, Option<&str>)]) -> Vec<Option<
             })
         })
         .collect();
-    // Finding on #752's own collision rule: a shared label's own
+    // A shared label's own
     // generated-name suffix (`run_name(id)`, same ~40,000-way spread
     // as the bare generated name itself) can collide too, for two
     // different ids -- counted only among `suffixed`'s own `Some`s,

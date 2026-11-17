@@ -1939,7 +1939,7 @@ fn tape_row_content(
                             let tokens = tape_running_prompt_tokens(&live);
                             (what, preview, tokens)
                         }
-                        // No live figures at all (R4: malformed or
+                        // No live figures at all (malformed or
                         // missing `meta.live`, never a crash) -- the
                         // elapsed time alone, the same shape a
                         // non-streaming tool's own running row reads.
@@ -3397,7 +3397,7 @@ pub fn build_tape(
         }
     }
 
-    // §9's own §2, settled: the unit is derived from the usual
+    // §9's own §2: the unit is derived from the usual
     // largest step across every plan-known step history has a
     // figure for, `50` with none -- the design's own `hist/run-h1..3`
     // give `prime.summary` a usual 402 t, which still draws (and so

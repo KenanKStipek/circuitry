@@ -162,7 +162,7 @@ pub fn build_transcript_view(lines: &[Value], truncated: bool) -> TranscriptView
                 let Some(id) = line.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                // Issue #637 review: a retried attempt's own ids start
+                // A retried attempt's own ids start
                 // over at 1, so an id no greater than the highest
                 // seen so far means the previous attempt is gone --
                 // whatever it left unmatched is never getting a
