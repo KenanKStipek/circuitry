@@ -186,6 +186,34 @@ def _json_key_sort_key(key: Any) -> tuple[str, int]:
 
 
 def canonical_key_order(value: Any) -> Any:
+    """*value* with every dict's keys reordered by the JSON text each key
+    would write, not by the keys themselves -- so a dict mixing key types
+    that ``<`` can't compare (e.g. a YAML 1.1 ``on:`` key read as the bool
+    ``True`` beside a string key) still sorts, deterministically, instead
+    of ``json.dumps(..., sort_keys=True)``'s own ``TypeError`` for that
+    case (#810; ``yaml.dump``, which this replaced in one caller, tolerated
+    it). For a dict whose keys are all the same type and all strings --
+    the common case -- the JSON text of a key is the key itself, so this
+    sorts exactly as ``sort_keys=True`` always did. The sort is stable, so
+    two keys with the same JSON text (and the same type) keep their
+    relative order.
+
+    This is the order the reflector-plan digest (``core/use.py::
+    _canonical_json_digest``, #810) hashes: an all-int-keyed plan must
+    keep hashing the same way it always has, so this never changes for
+    that shape, even though an all-int dict's keys compare, and sort
+    numerically, with plain ``sorted()`` -- see :func:`pretty_key_order`
+    for the ``--pretty``-only order that prefers that numeric sort.
+    """
+    if isinstance(value, dict):
+        items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
+        return {k: canonical_key_order(v) for k, v in items}
+    if isinstance(value, list):
+        return [canonical_key_order(v) for v in value]
+    return value
+
+
+def pretty_key_order(value: Any) -> Any:
     """*value* with every dict's keys sorted by the keys themselves --
     ``sorted(d.items())``, exactly what ``json.dumps(..., sort_keys=True)``
     already did, so an all-string dict sorts by text and an all-int (or
@@ -195,25 +223,24 @@ def canonical_key_order(value: Any) -> Any:
 
     Only when that raises ``TypeError`` -- a dict mixing key types ``<``
     can't compare, e.g. a YAML 1.1 ``on:`` key read as the bool ``True``
-    beside a string key -- does this fall back to the JSON text each key
-    would write, then its type's rank, as a deterministic order ``<``
-    itself has no opinion on (#778; ``yaml.dump``, which this replaced in
-    one caller, tolerated the mix; ``json.dumps(..., sort_keys=True)``
-    raised ``TypeError`` for it, same as the fallback itself does for a
-    key, such as a YAML 1.1 date, that JSON has no text for at all --
-    the same ``TypeError`` an un-pre-sorted ``--out`` write already
-    raises on one). Both sorts are stable, so two keys that tie (the
-    fallback's own JSON text, when their types also tie) keep their
-    relative order.
+    beside a string key -- does this fall back to :func:`canonical_key_order`'s
+    own order: the JSON text each key would write, then its type's rank, as
+    a deterministic order ``<`` itself has no opinion on (#778; a date key
+    still fails the same way an un-pre-sorted ``--out`` write already does --
+    the same ``TypeError`` :func:`canonical_key_order` itself raises for one).
+
+    Used only by :func:`dumps_saved_state`'s ``--pretty`` write -- never by
+    the reflector-plan digest, which must keep :func:`canonical_key_order`'s
+    own order so an existing plan's digest never changes (#810).
     """
     if isinstance(value, dict):
         try:
             items = sorted(value.items(), key=lambda kv: kv[0])
         except TypeError:
             items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
-        return {k: canonical_key_order(v) for k, v in items}
+        return {k: pretty_key_order(v) for k, v in items}
     if isinstance(value, list):
-        return [canonical_key_order(v) for v in value]
+        return [pretty_key_order(v) for v in value]
     return value
 
 
@@ -221,12 +248,12 @@ def dumps_saved_state(state: Any, *, pretty: bool = False) -> str:
     """Serialise run state in its saved form (see the module docstring)."""
     saved = compact_last_aliases(state)
     if pretty:
-        # Pre-sorted by `canonical_key_order`, then written with
+        # Pre-sorted by `pretty_key_order`, then written with
         # `sort_keys=False`: `json.dumps(..., sort_keys=True)` raises
         # `TypeError` on a dict whose keys aren't all mutually orderable
         # (e.g. a YAML 1.1 bool key beside a string key) -- state can
         # carry exactly that shape (#778).
-        ordered = canonical_key_order(saved)
+        ordered = pretty_key_order(saved)
         return json.dumps(
             ordered, indent=2, sort_keys=False, default=json_safe_default
         )

@@ -405,14 +405,16 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// `core/use.py::_canonical_json_digest` -- a reflector-generated
-/// document's own `meta.orchestration_sha256` (#778): sha256 of its
+/// document's own `meta.orchestration_sha256` (#810): sha256 of its
 /// canonical JSON text. Compact separators, and keys pre-sorted by
 /// [`electricity_json::canonical_key_order`] (then written with
 /// `sort_keys: false`, which only ever affects an unordered `Dict`,
 /// never this one) so the digest never depends on the model's own key
 /// order, matching on both engines. The ordering helper itself lives in
-/// `electricity-json` (#778), shared with `electricity`'s own `out.rs`
-/// `--pretty` sort, rather than a private copy here.
+/// `electricity-json`, rather than a private copy here -- always this
+/// JSON-text-then-type order, never `electricity`'s own `out.rs`
+/// `--pretty`-only `pretty_key_order` (#778), so an existing plan's
+/// digest never changes because of that issue.
 pub fn canonical_json_digest(value: &Value) -> Result<String, String> {
     let ordered = electricity_json::canonical_key_order(value).map_err(|e| e.to_string())?;
     let mode = electricity_json::WriteMode {

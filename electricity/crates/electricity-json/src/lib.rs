@@ -69,7 +69,7 @@ mod canonical;
 mod reader;
 mod writer;
 
-pub use canonical::{canonical_key_order, key_type_rank};
+pub use canonical::{canonical_key_order, key_type_rank, pretty_key_order};
 pub use reader::{ReadError, load_json, loads};
 pub use writer::{Separators, WriteError, WriteMode, dumps, dumps_default_str, stringify_key};
 

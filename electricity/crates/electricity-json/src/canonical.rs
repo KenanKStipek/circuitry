@@ -15,6 +15,7 @@
 
 use crate::{WriteError, stringify_key};
 use electricity_value::{Dict, Value};
+use std::cmp::Ordering;
 
 /// `core/use.py::_KEY_TYPE_RANK` -- the tiebreak order [`canonical_key_order`]
 /// uses when two keys of different types write the same JSON text (e.g. the
@@ -56,15 +57,8 @@ pub fn canonical_key_order(value: &Value) -> Result<Value, WriteError> {
             for (k, v) in dict.iter() {
                 entries.push((k.clone(), canonical_key_order(v)?));
             }
-            let mut keyed = Vec::with_capacity(entries.len());
-            for (k, v) in entries {
-                let text = stringify_key(&k)?;
-                let rank = key_type_rank(&k);
-                keyed.push(((text, rank), (k, v)));
-            }
-            keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
             let mut out = Dict::new();
-            for (_, (k, v)) in keyed {
+            for (k, v) in canonical_sort(entries)? {
                 out.insert(k, v);
             }
             Ok(Value::Dict(out))
@@ -78,6 +72,114 @@ pub fn canonical_key_order(value: &Value) -> Result<Value, WriteError> {
         }
         other => Ok(other.clone()),
     }
+}
+
+/// `true` iff every key in *entries* is a `Str` -- Python's `sorted()`
+/// compares a dict's string keys directly (code-point order), with no
+/// `TypeError` possible.
+fn all_str_keys(entries: &[(Value, Value)]) -> bool {
+    entries.iter().all(|(k, _)| matches!(k, Value::Str(_)))
+}
+
+/// `true` iff every key in *entries* is part of Python's numeric tower
+/// (`bool`/`int`/`float`) -- `sorted()` compares these directly too,
+/// numerically, `bool` counting as `0`/`1`.
+fn all_numeric_keys(entries: &[(Value, Value)]) -> bool {
+    entries
+        .iter()
+        .all(|(k, _)| matches!(k, Value::Bool(_) | Value::Int(_) | Value::Float(_)))
+}
+
+fn str_entries_sorted(mut entries: Vec<(Value, Value)>) -> Vec<(Value, Value)> {
+    entries.sort_by(|(a, _), (b, _)| str_key(a).cmp(str_key(b)));
+    entries
+}
+
+fn str_key(value: &Value) -> &str {
+    match value {
+        Value::Str(s) => s.as_str(),
+        _ => unreachable!("all_str_keys guarantees Str keys"),
+    }
+}
+
+fn numeric_entries_sorted(mut entries: Vec<(Value, Value)>) -> Vec<(Value, Value)> {
+    entries.sort_by(|(a, _), (b, _)| numeric_cmp(a, b));
+    entries
+}
+
+fn numeric_cmp(a: &Value, b: &Value) -> Ordering {
+    a.py_partial_cmp(b)
+        .ok()
+        .flatten()
+        .unwrap_or(Ordering::Equal)
+}
+
+/// [`canonical_key_order`]'s own entry sort, factored out so
+/// [`pretty_key_order`] can fall back to it without re-deriving a
+/// `Value::Dict` first.
+fn canonical_sort(entries: Vec<(Value, Value)>) -> Result<Vec<(Value, Value)>, WriteError> {
+    let mut keyed = Vec::with_capacity(entries.len());
+    for (k, v) in entries {
+        let text = stringify_key(&k)?;
+        let rank = key_type_rank(&k);
+        keyed.push(((text, rank), (k, v)));
+    }
+    keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+    Ok(keyed.into_iter().map(|(_, kv)| kv).collect())
+}
+
+/// `core/saved_state.py::pretty_key_order` -- *value* with every dict's
+/// keys sorted by the keys themselves, exactly as plain
+/// `sorted(d.items())`/`json.dumps(..., sort_keys=True)` already did: an
+/// all-string dict sorts by code point, and an all-numeric dict (`bool`
+/// counting as `0`/`1`) sorts by value, never by each key's own decimal
+/// text (`"1"`, `"10"`, `"2"`).
+///
+/// Only when the keys are a mix [`canonical_key_order`]'s own types can
+/// compare but Python's native `<` can't (e.g. a bool key beside a
+/// string key) does this fall back to [`canonical_key_order`]'s order:
+/// the JSON text each key would write, then [`key_type_rank`] as a
+/// tiebreak. A key of a type JSON can't write at all (`Date`, say) still
+/// fails the same way [`canonical_key_order`] does, via the same
+/// [`stringify_key`] call.
+///
+/// Used only by `--pretty`'s own write (`out.rs::pretty_sort_if_needed`)
+/// -- never by `electricity-vm`'s reflector-plan digest, which must keep
+/// [`canonical_key_order`]'s own order so an existing plan's digest never
+/// changes (#810).
+pub fn pretty_key_order(value: &Value) -> Result<Value, WriteError> {
+    match value {
+        Value::Dict(dict) => {
+            let mut entries: Vec<(Value, Value)> = Vec::with_capacity(dict.len());
+            for (k, v) in dict.iter() {
+                entries.push((k.clone(), pretty_key_order(v)?));
+            }
+            let ordered = pretty_entries_sorted(entries)?;
+            let mut out = Dict::new();
+            for (k, v) in ordered {
+                out.insert(k, v);
+            }
+            Ok(Value::Dict(out))
+        }
+        Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(pretty_key_order(item)?);
+            }
+            Ok(Value::List(out))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
+fn pretty_entries_sorted(entries: Vec<(Value, Value)>) -> Result<Vec<(Value, Value)>, WriteError> {
+    if all_str_keys(&entries) {
+        return Ok(str_entries_sorted(entries));
+    }
+    if all_numeric_keys(&entries) {
+        return Ok(numeric_entries_sorted(entries));
+    }
+    canonical_sort(entries)
 }
 
 #[cfg(test)]

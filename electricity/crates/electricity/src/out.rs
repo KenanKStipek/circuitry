@@ -69,17 +69,20 @@ pub fn render_state(state: &Value, pretty: bool) -> Result<String, electricity_j
         .map(|body| format!("{body}\n"))
 }
 
-/// `--pretty`'s own sort rule (issue #778): by the JSON text each dict key
-/// would write, then by [`electricity_json::key_type_rank`] as a tiebreak
-/// for two keys whose text is the same (e.g. the bool `true` beside the
-/// string `"true"`) -- never `sort_keys=True`'s native Python-value
-/// comparison, which raises `TypeError` for a dict mixing key types `<`
-/// can't compare, and never insertion order either. This is
-/// [`electricity_json::canonical_key_order`], the same helper
-/// `electricity-vm`'s reflector-plan digest uses and cof's own
-/// `core/saved_state.py::_canonical_key_order`/`_KEY_TYPE_RANK` matches --
-/// moved to `electricity-json` (issue #778) so this crate and
-/// `electricity-vm` share one copy rather than each keeping its own.
+/// `--pretty`'s own sort rule (issue #778): Python's own `sorted()` order
+/// when the keys compare directly -- all strings (code-point order) or
+/// all numbers (`bool` counting as `0`/`1`) -- the same order plain
+/// `json.dumps(..., sort_keys=True)` already gave for either shape.
+/// Only when `sorted()` can't compare the keys at all (a mix of types,
+/// e.g. the bool `true` beside the string `"true"`) does this fall back
+/// to [`electricity_json::canonical_key_order`]'s own order: the JSON
+/// text each key would write, then [`electricity_json::key_type_rank`]
+/// as a tiebreak -- never insertion order. This is
+/// [`electricity_json::pretty_key_order`], the same rule cof's own
+/// `core/saved_state.py::pretty_key_order` uses; [`canonical_key_order`]
+/// itself stays reserved for `electricity-vm`'s reflector-plan digest,
+/// which must keep hashing a plan the same way regardless of this issue
+/// (#810; see [`electricity_json::canonical_key_order`]'s own doc).
 /// `core/saved_state.py::dumps_saved_state` pre-sorts the tree itself this
 /// same way and writes the result with `sort_keys=False`; ported the same
 /// way here: reorder every `Dict`'s entries first, then write with
@@ -100,9 +103,9 @@ fn pretty_sort_if_needed(
     pretty: bool,
 ) -> Result<std::borrow::Cow<'_, Value>, electricity_json::WriteError> {
     if pretty {
-        Ok(std::borrow::Cow::Owned(
-            electricity_json::canonical_key_order(state)?,
-        ))
+        Ok(std::borrow::Cow::Owned(electricity_json::pretty_key_order(
+            state,
+        )?))
     } else {
         Ok(std::borrow::Cow::Borrowed(state))
     }
@@ -285,10 +288,11 @@ mod tests {
     fn render_state_pretty_sorts_a_dict_mixing_key_types_by_json_text() {
         // Issue #778: `sort_keys=True`'s own native-value sort raises
         // `TypeError` comparing a bool key to a string key (CPython's
-        // `sorted(dct.items())`, confirmed directly) -- `--pretty` sorts
-        // by each key's own JSON text instead, so this must succeed, and
-        // in the same order `core/saved_state.py::_canonical_key_order`
-        // produces: "input" < "mode" < "true" lexicographically.
+        // `sorted(dct.items())`, confirmed directly) -- `--pretty` falls
+        // back to each key's own JSON text instead, so this must
+        // succeed, and in the same order `core/saved_state.py::
+        // pretty_key_order` produces: "input" < "mode" < "true"
+        // lexicographically.
         let mut dict = IndexMap::new();
         dict.insert(Value::Bool(true), Value::Str("push".to_string()));
         dict.insert(
@@ -317,6 +321,51 @@ mod tests {
         dict.insert(Value::Bool(true), Value::from(1i64));
         let rendered = render_state(&Value::Dict(dict), true).unwrap();
         assert_eq!(rendered, "{\n  \"true\": 1,\n  \"true\": 2\n}\n");
+    }
+
+    #[test]
+    fn render_state_pretty_sorts_an_all_int_keyed_dict_numerically() {
+        // Issue #778's own regression: `--pretty` must sort an all-int
+        // dict by the int itself (1, 2, 10), not by each key's own
+        // decimal text ("1", "10", "2") -- `pretty_key_order` tries
+        // Python's native `sorted()` order before ever falling back to
+        // `canonical_key_order`'s JSON-text order. Pinned against cof's
+        // own `dumps_saved_state({"extra": {10: "ten", 1: "one", 2:
+        // "two"}}, pretty=True)`.
+        let mut inner = IndexMap::new();
+        inner.insert(Value::from(10i64), Value::Str("ten".to_string()));
+        inner.insert(Value::from(1i64), Value::Str("one".to_string()));
+        inner.insert(Value::from(2i64), Value::Str("two".to_string()));
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("extra".to_string()), Value::Dict(inner));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"extra\": {\n    \"1\": \"one\",\n    \"2\": \"two\",\n    \"10\": \"ten\"\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn render_state_pretty_sorts_non_ascii_string_keys_by_code_point() {
+        // All-string keys sort by plain `sorted()` -- code-point order,
+        // the same as `json.dumps(..., sort_keys=True)` -- not
+        // `canonical_key_order`'s JSON-text fallback (though for an
+        // all-string dict the two happen to agree, since a string key's
+        // JSON text is the key itself). Expected bytes taken from cof's
+        // own `dumps_saved_state({"\u00f1": 1, "z": 2, "a": 3, "\u00e9":
+        // 4}, pretty=True)`; `render_state`'s own `ensure_ascii: true`
+        // (see `pretty_write_mode`) escapes both non-ASCII keys the same
+        // way cof's default `ensure_ascii=True` does.
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("\u{f1}".to_string()), Value::from(1i64));
+        dict.insert(Value::Str("z".to_string()), Value::from(2i64));
+        dict.insert(Value::Str("a".to_string()), Value::from(3i64));
+        dict.insert(Value::Str("\u{e9}".to_string()), Value::from(4i64));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"a\": 3,\n  \"z\": 2,\n  \"\\u00e9\": 4,\n  \"\\u00f1\": 1\n}\n"
+        );
     }
 
     #[test]

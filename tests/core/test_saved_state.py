@@ -29,6 +29,7 @@ from circuitry.core.saved_state import (
     compact_last_aliases,
     dumps_saved_state,
     link_last_refs,
+    pretty_key_order,
 )
 from circuitry.core.store import Store
 from circuitry.tui.inspector import load_state_file
@@ -350,7 +351,7 @@ def test_dumps_saved_state_still_raises_for_anything_else_unencodable() -> None:
 
 def test_canonical_key_order_ranks_a_bool_before_a_string_of_the_same_text() -> None:
     """Two keys with the same JSON text ("true") sort by type rank (bool
-    before str, #778's own digest-helper order), not by insertion order --
+    before str, #810's own digest-helper order), not by insertion order --
     the string key is written first here, but the bool key must still sort
     first.
     """
@@ -359,14 +360,25 @@ def test_canonical_key_order_ranks_a_bool_before_a_string_of_the_same_text() -> 
     assert list(ordered.keys()) == [True, "true"]
 
 
-def test_canonical_key_order_sorts_all_int_keys_numerically() -> None:
+def test_canonical_key_order_sorts_all_int_keys_by_json_text_not_numerically() -> None:
+    """The digest order (#810) always sorts by each key's own JSON text
+    ("1", "10", "2"), never by the int itself -- unlike :func:`pretty_key_order`,
+    this must never change for an existing plan, so an all-int dict's keys
+    are never given plain ``sorted()``'s numeric order here.
+    """
+    mixed = {10: "ten", 1: "one", 2: "two"}
+    ordered = canonical_key_order(mixed)
+    assert list(ordered.keys()) == [1, 10, 2]
+
+
+def test_pretty_key_order_sorts_all_int_keys_numerically() -> None:
     """An all-int-keyed dict sorts by the int itself (1, 2, 10), not by
     each key's own decimal text ("1", "10", "2") -- the regression #778
     introduced and this fixes: raw ``sorted()`` compares ints numerically
     before the JSON-text fallback is ever consulted.
     """
     mixed = {10: "ten", 1: "one", 2: "two"}
-    ordered = canonical_key_order(mixed)
+    ordered = pretty_key_order(mixed)
     assert list(ordered.keys()) == [1, 2, 10]
 
 
@@ -392,11 +404,14 @@ def test_dumps_saved_state_pretty_writes_an_all_int_keyed_dict_in_numeric_order(
 
 def test_canonical_key_order_sorts_non_ascii_string_keys_by_code_point() -> None:
     """An all-string dict sorts by raw ``sorted()``, the same code-point
-    order a plain ``json.dumps(..., sort_keys=True)`` already used.
+    order a plain ``json.dumps(..., sort_keys=True)`` already used -- for
+    an all-string dict the JSON text of a key is the key itself, so this
+    holds for both :func:`canonical_key_order` and :func:`pretty_key_order`.
     """
     mixed = {"ñ": 1, "z": 2, "a": 3, "é": 4}
     ordered = canonical_key_order(mixed)
     assert list(ordered.keys()) == ["a", "z", "é", "ñ"]
+    assert list(pretty_key_order(mixed).keys()) == ["a", "z", "é", "ñ"]
 
 
 def test_canonical_key_order_sorts_a_mix_of_int_and_string_keys_by_text_then_type() -> None:
@@ -418,6 +433,8 @@ def test_canonical_key_order_on_a_date_key_raises_typeerror_not_keyerror() -> No
     mixed = {datetime.date(2024, 1, 2): "v", "other": "w"}
     with pytest.raises(TypeError, match="keys must be"):
         canonical_key_order(mixed)
+    with pytest.raises(TypeError, match="keys must be"):
+        pretty_key_order(mixed)
     with pytest.raises(TypeError, match="keys must be"):
         dumps_saved_state(mixed, pretty=True)
 
