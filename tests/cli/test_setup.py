@@ -349,7 +349,14 @@ def test_pick_adapter_and_model_multiple_backends_prompts_for_backend(
 
 def test_build_config_uses_detected_ollama_url() -> None:
     result = DetectionResult(
-        backends=[BackendStatus(name="ollama", available=True, detail="http://detected:11434")]
+        backends=[
+            BackendStatus(
+                name="ollama",
+                available=True,
+                detail="http://detected:11434 (0 models)",
+                url="http://detected:11434",
+            )
+        ]
     )
 
     config = cli_setup._build_config("ollama", "llama3", result)
@@ -373,8 +380,18 @@ def test_build_config_prompts_for_ollama_url_when_not_detected(
 def test_build_config_includes_comfyui_plugin_when_available() -> None:
     result = DetectionResult(
         backends=[
-            BackendStatus(name="ollama", available=True, detail="http://localhost:11434"),
-            BackendStatus(name="comfyui", available=True, detail="http://localhost:8188"),
+            BackendStatus(
+                name="ollama",
+                available=True,
+                detail="http://localhost:11434 (0 models)",
+                url="http://localhost:11434",
+            ),
+            BackendStatus(
+                name="comfyui",
+                available=True,
+                detail="http://localhost:8188",
+                url="http://localhost:8188",
+            ),
         ]
     )
 

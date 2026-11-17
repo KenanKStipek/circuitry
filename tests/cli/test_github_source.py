@@ -550,6 +550,23 @@ def test_refresh_offline_is_an_actionable_error(
     assert "could not reach" in str(excinfo.value)
 
 
+def test_refresh_offline_never_names_a_password_in_a_custom_api_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#819: `_get_json`'s `could not reach {url}` named `api_base` +
+    the endpoint raw -- a custom `api_base` carrying a password must
+    never reach that message."""
+    password = "pw_value_pw_value"
+    _fail_urlopen(monkeypatch)
+    with pytest.raises(LibraryFetchError) as excinfo:
+        _source(
+            tmp_path, api_base=f"https://alice:{password}@git.example.test/api/v3"
+        ).refresh()
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "git.example.test" in str(excinfo.value)
+
+
 def test_unfetched_source_is_empty_and_carries_a_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

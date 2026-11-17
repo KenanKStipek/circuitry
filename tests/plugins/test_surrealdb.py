@@ -828,6 +828,40 @@ def test_connect_timeout_is_reported_as_a_timeout_not_a_connection_failure(
     assert "cannot connect" not in str(excinfo.value)
 
 
+def test_connection_refused_scrubs_a_url_embedded_in_the_sdks_own_exception_text(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    """#819: the SDK's own exception text can echo a URL back --
+    scrubbed the same as every other surface that names a request URL."""
+    password = "pw_value_pw_value"
+    fake_sdk.connect_error = ConnectionRefusedError(
+        f"[Errno 111] Connection refused: ws://alice:{password}@localhost:8000/rpc"
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _plugin().execute(params={"mode": "select", "target": "person"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "ws://localhost:8000/rpc" in str(excinfo.value)
+
+
+def test_operation_failure_scrubs_a_url_embedded_in_the_sdks_own_exception_text(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    """#819: the `surrealdb {mode} failed: {exc}` path also names the
+    SDK's own exception text raw."""
+    password = "pw_value_pw_value"
+    fake_sdk.op_error = Exception(
+        f"query rejected, redirected to ws://alice:{password}@localhost:8000/rpc"
+    )
+
+    with pytest.raises(RuntimeError, match="select failed") as excinfo:
+        _plugin().execute(params={"mode": "select", "target": "person"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "ws://localhost:8000/rpc" in str(excinfo.value)
+
+
 def test_surrealql_error_raised_from_operation(fake_sdk: type[FakeSurreal]) -> None:
     fake_sdk.op_error = Exception("Parse error: Failed to parse query at line 1")
 

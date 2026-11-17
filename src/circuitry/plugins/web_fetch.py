@@ -39,6 +39,7 @@ import importlib.util
 from dataclasses import dataclass
 from typing import Any
 
+from .. import http_conventions
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool, http_error_excerpt
 
@@ -87,7 +88,11 @@ class WebFetchPlugin:
                 timeout=max(0.1, timeout_ms / 1000.0),
             )
         except requests.exceptions.RequestException as exc:
-            raise RuntimeError(f"web_fetch request failed: {exc}") from exc
+            # requests' own exception text commonly echoes the full
+            # request URL, userinfo included (issue #819).
+            raise RuntimeError(
+                f"web_fetch request failed: {http_conventions.scrub_embedded_urls(str(exc))}"
+            ) from exc
 
         status = int(resp.status_code)
         text = resp.text

@@ -9,14 +9,23 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
+from .. import http_conventions
+
 
 @dataclass
 class BackendStatus:
-    """Result of probing a single backend."""
+    """Result of probing a single backend.
+
+    ``detail`` is always safe to print (``cof doctor``/``cof setup``'s
+    table, issue #819) -- a configured URL in it is redacted. ``url``
+    keeps the raw, unredacted value a caller (``setup.py``'s own
+    ``_build_config``) needs to write into config.json.
+    """
 
     name: str
     available: bool
     detail: str = ""
+    url: str = ""
     models: list[str] = field(default_factory=list)
 
 
@@ -56,11 +65,16 @@ def detect_ollama(base_url: str = "http://localhost:11434") -> BackendStatus:
         return BackendStatus(
             name="ollama",
             available=True,
-            detail=f"{base_url} ({len(names)} models)",
+            detail=f"{http_conventions.redact_request_url(base_url)} ({len(names)} models)",
+            url=base_url,
             models=names,
         )
     except Exception as e:
-        return BackendStatus(name="ollama", available=False, detail=str(e))
+        # urllib's own exception text (e.g. `InvalidURL`) may echo the
+        # configured URL back, userinfo included (issue #819).
+        return BackendStatus(
+            name="ollama", available=False, detail=http_conventions.scrub_embedded_urls(str(e))
+        )
 
 
 def detect_openai() -> BackendStatus:
@@ -102,10 +116,15 @@ def detect_comfyui(base_url: str = "http://localhost:8188") -> BackendStatus:
         return BackendStatus(
             name="comfyui",
             available=True,
-            detail=base_url,
+            detail=http_conventions.redact_request_url(base_url),
+            url=base_url,
         )
     except Exception as e:
-        return BackendStatus(name="comfyui", available=False, detail=str(e))
+        # urllib's own exception text (e.g. `InvalidURL`) may echo the
+        # configured URL back, userinfo included (issue #819).
+        return BackendStatus(
+            name="comfyui", available=False, detail=http_conventions.scrub_embedded_urls(str(e))
+        )
 
 
 def detect_ffmpeg() -> BackendStatus:

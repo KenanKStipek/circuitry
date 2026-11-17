@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 from circuitry.cli.detect import (
@@ -60,6 +61,39 @@ def test_detect_ollama_failure() -> None:
 
     assert status.available is False
     assert "refused" in status.detail
+
+
+def test_detect_ollama_keeps_the_raw_url_separate_from_the_redacted_detail() -> None:
+    """#819: `cof setup` reads the raw URL back from `.url`, never from
+    `.detail`, which is redacted for display."""
+    password = "pw_value_pw_value"
+    base_url = f"http://alice:{password}@localhost:11434"
+    mock_data = {"models": []}
+
+    with patch("circuitry.cli.detect._curl_json_get", return_value=mock_data):
+        status = detect_ollama(base_url)
+
+    assert status.available is True
+    assert status.url == base_url
+    assert password not in status.detail
+    assert "alice" not in status.detail
+
+
+def test_detect_ollama_scrubs_a_url_from_urllibs_own_exception_text() -> None:
+    """#819: urllib's own exception text (e.g. InvalidURL) may echo the
+    configured URL back, userinfo included."""
+    password = "pw_value_pw_value"
+    base_url = f"http://alice:{password}@localhost:11434"
+
+    def _raise(url: str, timeout: int = 5) -> Any:
+        raise ValueError(f"nonnumeric port: '{url}'")
+
+    with patch("circuitry.cli.detect._curl_json_get", side_effect=_raise):
+        status = detect_ollama(base_url)
+
+    assert status.available is False
+    assert password not in status.detail
+    assert "alice" not in status.detail
 
 
 # --- OpenAI ---

@@ -14,6 +14,7 @@ import importlib.util
 import json as _json
 import sys
 import types
+import urllib.error
 from typing import Any, ClassVar
 
 import pytest
@@ -508,6 +509,32 @@ def test_rss_local_path_skips_network_fetch(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured["source"] == "/tmp/feed.xml"
 
 
+def test_rss_fetch_failure_never_names_a_password_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: the rss tool's fetch error named its URL raw."""
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+
+    password = "pw_value_pw_value"
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        raise urllib.error.URLError("Name or service not known")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        RssPlugin().execute(
+            params={"url": f"https://alice:{password}@feed.example.test/rss"}
+        )
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "feed.example.test" in str(excinfo.value)
+
+
 def test_webhook_posts_json_with_mocked_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -665,6 +692,34 @@ def test_webhook_fail_on_error_false_keeps_ok_true_on_4xx(
     assert r.raw["status"] == 404
 
 
+def test_webhook_connection_failure_scrubs_a_url_in_the_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: requests' own exception text commonly echoes the full
+    request URL (e.g. a redirect target), userinfo included."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    password = "pw_value_pw_value"
+
+    def fake_request(**kwargs: Any) -> Any:
+        raise fake_exc_mod.RequestException(
+            f"Connection refused: ws://alice:{password}@callback.example.test/hook"
+        )
+
+    fake_mod.request = fake_request
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        WebhookPlugin().execute(params={"url": "https://x.test"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "ws://callback.example.test/hook" in str(excinfo.value)
+
+
 def test_web_fetch_html_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_mod = types.ModuleType("requests")
     fake_exc_mod = types.ModuleType("requests.exceptions")
@@ -714,6 +769,34 @@ def test_web_fetch_4xx_sets_ok_false_by_default(
         params={"url": "https://x.test", "mode": "html", "fail_on_error": "False"}
     )
     assert r2.ok is True
+
+
+def test_web_fetch_connection_failure_scrubs_a_url_in_the_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: requests' own exception text commonly echoes the full
+    request URL (e.g. a redirect target), userinfo included."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    password = "pw_value_pw_value"
+
+    def fake_get(*a: Any, **k: Any) -> Any:
+        raise fake_exc_mod.RequestException(
+            f"Connection refused: ws://alice:{password}@callback.example.test/hook"
+        )
+
+    fake_mod.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        WebFetchPlugin().execute(params={"url": "https://x.test"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "ws://callback.example.test/hook" in str(excinfo.value)
 
 
 def test_web_fetch_4xx_stderr_includes_reason_but_not_a_canary_secret(

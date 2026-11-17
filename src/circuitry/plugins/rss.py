@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from .. import http_conventions
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -71,7 +72,10 @@ class RssPlugin:
                     response_headers = dict(resp.headers)
                     response_headers["content-location"] = resp.geturl()
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                raise RuntimeError(f"rss: failed to fetch {stripped!r}: {exc}") from exc
+                raise RuntimeError(
+                    f"rss: failed to fetch {http_conventions.redact_request_url(stripped)!r}: "
+                    f"{http_conventions.scrub_embedded_urls(str(exc))}"
+                ) from exc
         else:
             source = stripped
 

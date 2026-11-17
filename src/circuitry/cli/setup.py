@@ -154,10 +154,12 @@ def _build_config(
         },
     }
 
-    # Adapter URL
+    # Adapter URL -- the raw, unredacted value lives in `.url` (issue
+    # #819: `.detail` is redacted for display, and no longer the URL
+    # to write into config).
     ollama = result.get("ollama")
     if adapter == "ollama" and ollama and ollama.available:
-        url = ollama.detail.split(" ")[0] if ollama.detail else "http://localhost:11434"
+        url = ollama.url or "http://localhost:11434"
         config["runtime"]["adapters"]["ollama"] = {
             "base_url": url,
             "timeout_seconds": 6000,
@@ -174,7 +176,7 @@ def _build_config(
     if comfyui and comfyui.available:
         config["runtime"]["plugins"] = {
             "comfyui": {
-                "base_url": comfyui.detail,
+                "base_url": comfyui.url,
                 "default_image_output": "path",
                 "image_dir": "./output/images",
             }

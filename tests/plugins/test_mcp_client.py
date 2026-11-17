@@ -377,6 +377,30 @@ def test_timeout_raises_actionable_runtime_error(
         )
 
 
+def test_connection_failure_scrubs_a_url_in_the_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: the MCP SDK's own transport exception text (an http/sse
+    connection failure, say) may echo the server's configured URL back,
+    userinfo included."""
+    password = "pw_value_pw_value"
+
+    @asynccontextmanager
+    async def fake_open(self: McpPlugin, cfg: dict[str, Any]) -> AsyncIterator[Any]:
+        raise ConnectionError(
+            f"Connection refused: https://alice:{password}@mcp.example.test/mcp"
+        )
+        yield None  # pragma: no cover -- unreachable, keeps this an async generator
+
+    monkeypatch.setattr(McpPlugin, "_open_session", fake_open)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        McpPlugin(servers=_SERVERS).execute(params={"server": "remote", "tool": "t"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "https://mcp.example.test/mcp" in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # list_tools operation
 # ---------------------------------------------------------------------------

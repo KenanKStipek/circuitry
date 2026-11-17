@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .. import http_conventions
 from .library_sources import (
     FOLDER_SUFFIXES,
     Entry,
@@ -339,7 +340,8 @@ class GitHubSource:
             raise self._http_error(exc, url) from exc
         except urllib.error.URLError as exc:
             raise LibraryFetchError(
-                f"Library source {self.name!r}: could not reach {url} ({exc.reason}). "
+                f"Library source {self.name!r}: could not reach "
+                f"{http_conventions.redact_request_url(url)} ({exc.reason}). "
                 "The cache is still usable offline; only `cof library refresh` "
                 "needs the network."
             ) from exc
@@ -348,7 +350,8 @@ class GitHubSource:
             return json.loads(body) if body else None
         except json.JSONDecodeError as exc:
             raise LibraryFetchError(
-                f"Library source {self.name!r}: {url} returned a non-JSON response."
+                f"Library source {self.name!r}: "
+                f"{http_conventions.redact_request_url(url)} returned a non-JSON response."
             ) from exc
 
     def _http_error(self, exc: urllib.error.HTTPError, url: str) -> LibraryFetchError:
@@ -389,7 +392,10 @@ class GitHubSource:
                 + self._token_hint(invalid=False)
             )
 
-        return LibraryFetchError(f"{prefix}GET {url} failed with HTTP {status}: {exc.reason}")
+        return LibraryFetchError(
+            f"{prefix}GET {http_conventions.redact_request_url(url)} "
+            f"failed with HTTP {status}: {exc.reason}"
+        )
 
     def _token_hint(self, *, invalid: bool) -> str:
         if not self.token_env:
