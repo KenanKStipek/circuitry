@@ -1603,6 +1603,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_reports_host_for_a_schemeless_expo_url_instead_of_panicking() {
+        // cof's own equivalent (issue #818): a schemeless `expo_url`
+        // with no `:` at all used to build a plain `urllib.request.
+        // Request` before `check_url` ran, raising urllib's own bare
+        // "unknown url type" uncaught instead of being reported in
+        // the `host:` line -- `probe`'s own `parse_url` already
+        // returns an `Err` for this on electricity, so `check()` never
+        // panics, but there was no regression test pinning that down.
+        let a = adapter("expo.example.test");
+        let r = a.check().await;
+        assert!(!r.ok);
+        assert!(r.missing.iter().any(|m| m.starts_with("host:")));
+    }
+
+    #[tokio::test]
     async fn check_reports_check_raised_for_a_non_string_expo_url() {
         // Confirmed by running `CyberdinerAdapter(expo_url=5, token="x")
         // .check()` directly: unlike `ollama`'s own

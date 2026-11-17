@@ -469,6 +469,36 @@
         "t": "str",
         "v": "https://u:p@h[invalid"
       }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "alice:hunter2hunter2@host:1234"
+      },
+      "output": {
+        "t": "str",
+        "v": "***REDACTED***@host:1234"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "https://alice:443/x@api.example.test/v1"
+      },
+      "output": {
+        "t": "str",
+        "v": "https://***REDACTED***@api.example.test/v1"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "https://api.example.test/search?api_key=hunter2hunter2"
+      },
+      "output": {
+        "t": "str",
+        "v": "https://api.example.test/search?api_key=%2A%2A%2A"
+      }
     }
   ]
 }

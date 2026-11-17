@@ -76,27 +76,157 @@ fn is_sensitive_key(key: &str) -> bool {
     sensitive_key_re().is_match(key)
 }
 
-/// `cli/redaction.py::_redact_url` -- strips `user[:pass]@` userinfo
-/// from a URL's netloc, keeping the scheme, host:port, path, query and
-/// fragment untouched. Ports the subset of CPython 3.11's
-/// `urllib.parse.urlsplit`/`urlunsplit` that `_redact_url` itself
-/// depends on (leading-control/space stripping, embedded `\t`/`\r`/`\n`
-/// removal, lowercase scheme, and `urlunsplit`'s own empty-`?`/`#`
-/// rules) rather than a full `url`-crate split: this is only ever
-/// reached from [`redact_string`]'s own `"://" in value and "@" in
-/// value` gate, so it only has to recognize the one shape that gate
-/// already promises.
+/// `http_conventions.py::_CREDENTIAL_QUERY_KEY_RE` -- a case-insensitive
+/// *search* (not a full match) for any of these words anywhere in a
+/// query key.
+fn looks_like_credential_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    ["key", "token", "secret", "auth", "password", "pwd"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+/// `urllib.parse.parse_qsl(keep_blank_values=True)` -- `&`-separated
+/// `name=value` pairs (a bare `name` with no `=` keeps an empty value),
+/// each percent-decoded with `+` read as a space.
+fn parse_qsl(query: &str) -> Vec<(String, String)> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| match pair.split_once('=') {
+            Some((k, v)) => (percent_decode_plus(k), percent_decode_plus(v)),
+            None => (percent_decode_plus(pair), String::new()),
+        })
+        .collect()
+}
+
+fn percent_decode_plus(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `http_conventions.py::_mask_credential_query_params` -- masks the
+/// value of any query-string key matching [`looks_like_credential_key`],
+/// then re-encodes the whole query with
+/// [`electricity_value::pycompat::urlencode`] even when nothing
+/// matched (so a space becomes `+`, exactly mirroring
+/// `urllib.parse.urlencode`'s own default `quote_plus` encoding) --
+/// issue #819's fix to this settings-snapshot redactor, which
+/// previously only ever stripped userinfo, never a credential-like
+/// query parameter.
+fn mask_credential_query_params(url: &str) -> String {
+    let Some(query_start) = url.find('?') else {
+        return url.to_string();
+    };
+    let (before_query, rest) = url.split_at(query_start);
+    let query_and_fragment = &rest[1..];
+    let (query, fragment) = match query_and_fragment.find('#') {
+        Some(idx) => (&query_and_fragment[..idx], Some(&query_and_fragment[idx..])),
+        None => (query_and_fragment, None),
+    };
+    let pairs = parse_qsl(query);
+    let masked: Vec<(String, Value)> = pairs
+        .into_iter()
+        .map(|(k, v)| {
+            let value = if looks_like_credential_key(&k) {
+                "***".to_string()
+            } else {
+                v
+            };
+            (k, Value::Str(value))
+        })
+        .collect();
+    let new_query = electricity_value::pycompat::urlencode(&masked, false).unwrap_or_default();
+    let mut result = format!("{before_query}?{new_query}");
+    if let Some(fragment) = fragment {
+        result.push_str(fragment);
+    }
+    result
+}
+
+/// `http_conventions.py::_at_follows_netloc` -- whether an `@` appears
+/// anywhere in *url* after its parsed *netloc*: a password hidden
+/// behind a `/`, `?` or `#` can still smuggle a second, real host past
+/// a boundary that stops at the first one (issue #819, carried over
+/// from #778's `redact_request_url`).
+fn at_follows_netloc(url: &str, netloc: &str) -> bool {
+    let scheme_sep = url.find("://");
+    let rest = scheme_sep
+        .and_then(|idx| url.get(idx + 3 + netloc.len()..))
+        .unwrap_or("");
+    rest.contains('@')
+}
+
+/// `value` with everything up to the LAST `@` cut away and replaced by
+/// [`REDACTED`] followed by `@` -- `http_conventions.py::
+/// redact_request_url`'s own whole-value cut, used here (issue #819)
+/// whenever `redact_url` finds no parseable netloc of its own to strip
+/// userinfo from instead (a userinfo-bearing value with no scheme at
+/// all, or a password hidden behind the parsed authority's own
+/// boundary).
+fn whole_value_cut(value: &str) -> String {
+    let tail = value.rsplit_once('@').map_or(value, |(_, t)| t);
+    mask_credential_query_params(&format!("{REDACTED}@{tail}"))
+}
+
+/// `cli/redaction.py::_redact_url`, extended by issue #819 to apply
+/// `http_conventions.py::redact_request_url`'s own cut (whole-value,
+/// never just the authority's own userinfo, when there is no
+/// parseable netloc or a password is hidden behind the authority's own
+/// boundary) and [`mask_credential_query_params`], keeping this
+/// redactor's own [`REDACTED`] marker throughout rather than deleting
+/// the credential outright (`redact_request_url`'s own behaviour).
 ///
-/// Two of `urlsplit`'s own checks are deliberately not ported:
-/// `_checknetloc`'s Unicode-NFKC homograph check, and
-/// `_check_bracketed_netloc`'s deeper IPv6-literal validation (both are
-/// rare, and both only *narrow* what Python redacts -- a netloc that
-/// fails either raises `ValueError` in Python, which `_redact_url`
-/// catches by returning *value* unchanged, so skipping them here can
-/// only make this redact a URL Python would have left alone, never the
-/// reverse). The bracket-*presence* check (`'[' in netloc` XOR `']' in
-/// netloc`) is ported, since getting that wrong could under-redact.
+/// Ports the subset of CPython 3.11's `urllib.parse.urlsplit`/
+/// `urlunsplit` that `_redact_url` itself depends on (leading-control/
+/// space stripping, embedded `\t`/`\r`/`\n` removal, lowercase scheme,
+/// and `urlunsplit`'s own empty-`?`/`#` rules) rather than a full
+/// `url`-crate split.
+///
+/// One of `urlsplit`'s own checks is deliberately not ported:
+/// `_checknetloc`'s Unicode-NFKC homograph check (rare, and only
+/// *narrows* what this redacts -- a netloc that fails it raises
+/// `ValueError` in Python, which `_redact_url` catches by returning
+/// *value* unchanged, so skipping it here can only make this redact a
+/// URL Python would have left alone, never the reverse).
+/// `_check_bracketed_netloc`'s IPv6-literal bracket-*presence* check
+/// (`'[' in netloc` XOR `']' in netloc`) IS ported, since getting that
+/// wrong could under-redact.
 fn redact_url(value: &str) -> String {
+    if !value.contains('@') {
+        return mask_credential_query_params(value);
+    }
+
     // `url.lstrip(_WHATWG_C0_CONTROL_OR_SPACE)` -- C0 controls (0x00-0x1f)
     // and space (0x20).
     let lstripped = value.trim_start_matches(|c: char| (c as u32) <= 0x20);
@@ -108,28 +238,28 @@ fn redact_url(value: &str) -> String {
         .collect();
 
     let Some(colon) = cleaned.find(':') else {
-        return value.to_string();
+        return whole_value_cut(value);
     };
     let starts_alpha = cleaned
         .chars()
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic());
     if colon == 0 || !starts_alpha {
-        return value.to_string();
+        return whole_value_cut(value);
     }
     let candidate = &cleaned[..colon];
     let scheme_is_valid = candidate
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
     if !scheme_is_valid {
-        return value.to_string();
+        return whole_value_cut(value);
     }
     // `scheme, url = url[:i].lower(), url[i+1:]`
     let scheme = candidate.to_lowercase();
     let rest = &cleaned[colon + 1..];
 
     let Some(after_slashes) = rest.strip_prefix("//") else {
-        return value.to_string();
+        return whole_value_cut(value);
     };
     let netloc_end = after_slashes
         .find(['/', '?', '#'])
@@ -139,16 +269,31 @@ fn redact_url(value: &str) -> String {
 
     // `('[' in netloc and ']' not in netloc) or (']' in netloc and '[' not
     // in netloc)` -- `urlsplit` raises `ValueError` here, which
-    // `_redact_url` catches by returning *value* unchanged.
+    // `_redact_url` catches by returning *value* unchanged (no query
+    // masking either -- the value couldn't be parsed at all).
     if netloc.contains('[') != netloc.contains(']') {
         return value.to_string();
     }
 
     if netloc.is_empty() {
-        return value.to_string();
+        return whole_value_cut(value);
     }
+
+    // A password hidden behind the parsed authority's own boundary
+    // (issue #819) -- the whole value is cut at the LAST `@`, found by
+    // scanning the RAW *value* (never *cleaned*), the same as
+    // `http_conventions.py::redact_request_url` does.
+    if at_follows_netloc(value, netloc) {
+        let scheme_sep = value.find("://");
+        let prefix = scheme_sep.map(|idx| &value[..idx + 3]).unwrap_or("");
+        let tail = value[prefix.len()..]
+            .rsplit_once('@')
+            .map_or("", |(_, t)| t);
+        return mask_credential_query_params(&format!("{prefix}{REDACTED}@{tail}"));
+    }
+
     let Some(at) = netloc.rfind('@') else {
-        return value.to_string();
+        return mask_credential_query_params(value);
     };
     let host = &netloc[at + 1..];
 
@@ -182,12 +327,13 @@ fn redact_url(value: &str) -> String {
     if !fragment.is_empty() {
         out = format!("{out}#{fragment}");
     }
-    out
+    mask_credential_query_params(&out)
 }
 
 /// `cli/redaction.py::_redact_string` -- a JWT or API-key-shaped string
-/// redacts wholesale; a URL carrying userinfo redacts just that part
-/// ([`redact_url`]); anything else passes through unchanged.
+/// redacts wholesale; anything that looks like it could carry a URL
+/// (issue #819: a scheme, OR an `@` even without one) goes through
+/// [`redact_url`]; anything else passes through unchanged.
 fn redact_string(value: &str) -> String {
     if jwt_re().is_match(value) {
         return REDACTED.to_string();
@@ -195,7 +341,7 @@ fn redact_string(value: &str) -> String {
     if keyish_re().is_match(value) {
         return REDACTED.to_string();
     }
-    if value.contains("://") && value.contains('@') {
+    if value.contains("://") || value.contains('@') {
         return redact_url(value);
     }
     value.to_string()
@@ -538,6 +684,39 @@ mod tests {
     fn a_url_with_no_userinfo_passes_through() {
         let url = "https://example.com/path";
         assert_eq!(redact(Value::from(url)), Value::from(url));
+    }
+
+    #[test]
+    fn a_schemeless_base_url_without_any_double_slash_still_redacts() {
+        // #819: a base_url with no :// at all (the same shape as a
+        // schemeless proxy value) still has its credential cut.
+        let url = "alice:hunter2hunter2@host:1234";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from(format!("{REDACTED}@host:1234"))
+        );
+    }
+
+    #[test]
+    fn a_credential_hidden_behind_the_path_still_redacts() {
+        // #819: an @ past the parsed authority's own boundary still
+        // hides a password -- the whole value is cut at the LAST @.
+        let url = "https://alice:443/x@api.example.test/v1";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from(format!("https://{REDACTED}@api.example.test/v1"))
+        );
+    }
+
+    #[test]
+    fn a_credential_like_query_param_with_no_userinfo_is_masked() {
+        // #819: a base_url with a credential-like query key but no @ at
+        // all was never masked before.
+        let url = "https://api.example.test/search?api_key=hunter2hunter2";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from("https://api.example.test/search?api_key=%2A%2A%2A")
+        );
     }
 
     #[test]

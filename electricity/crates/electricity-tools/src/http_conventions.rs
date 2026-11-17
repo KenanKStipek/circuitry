@@ -337,6 +337,68 @@ pub fn redact_request_url(url: &str) -> String {
     mask_credential_query_params(&cut)
 }
 
+/// The length, in bytes from the start of *s*, of a `scheme://...` URL
+/// anchored at `s`'s own start -- bounded at whitespace or a quote/
+/// bracket character, never a comma or period a sentence might put
+/// right after it (issue #819's own `http_conventions.py::
+/// _EMBEDDED_URL_RE`, hand-matched rather than pulling in a regex
+/// dependency this crate doesn't otherwise need for one scan).
+/// `None` when `s` doesn't start with a scheme (an ASCII letter, then
+/// zero or more scheme characters, then `://`) followed by at least
+/// one more character.
+fn embedded_url_len(s: &str) -> Option<usize> {
+    let mut chars = s.char_indices();
+    let (_, first) = chars.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut scheme_end = first.len_utf8();
+    for (idx, c) in chars.by_ref() {
+        if c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.') {
+            scheme_end = idx + c.len_utf8();
+            continue;
+        }
+        break;
+    }
+    if !s[scheme_end..].starts_with("://") {
+        return None;
+    }
+    let body_start = scheme_end + 3;
+    let mut end = body_start;
+    for (idx, c) in s[body_start..].char_indices() {
+        if c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '<' | '>') {
+            break;
+        }
+        end = body_start + idx + c.len_utf8();
+    }
+    (end > body_start).then_some(end)
+}
+
+/// `http_conventions.py::scrub_embedded_urls` -- every `scheme://...`
+/// URL found anywhere inside *text* redacted through
+/// [`redact_request_url`] (issue #819), for a surface with no single,
+/// well-formed URL value of its own to redact: a curl-backed adapter's
+/// response-body excerpt, which may echo back a URL (including its
+/// userinfo) Circuitry itself never named raw.
+pub fn scrub_embedded_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        match embedded_url_len(rest) {
+            Some(len) => {
+                out.push_str(&redact_request_url(&rest[..len]));
+                rest = &rest[len..];
+            }
+            None => {
+                let ch = rest.chars().next().expect("rest is non-empty");
+                out.push(ch);
+                rest = &rest[ch.len_utf8()..];
+            }
+        }
+    }
+    out
+}
+
 /// Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
 /// (space is 0x20, already inside that first range) -- a URL or proxy
 /// value containing one is refused before any I/O, on both engines,
@@ -409,6 +471,25 @@ fn scheme_name(scheme: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrub_embedded_urls_redacts_a_url_found_inside_prose() {
+        let password = "pw_value_pw_value";
+        let text =
+            format!("cannot connect to ws://alice:{password}@host:8000/rpc (ConnectionRefusedError)");
+        let scrubbed = scrub_embedded_urls(&text);
+        assert!(!scrubbed.contains(password));
+        assert!(!scrubbed.contains("alice"));
+        assert_eq!(
+            scrubbed,
+            "cannot connect to ws://host:8000/rpc (ConnectionRefusedError)"
+        );
+    }
+
+    #[test]
+    fn scrub_embedded_urls_leaves_text_with_no_url_unchanged() {
+        assert_eq!(scrub_embedded_urls("no url here at all"), "no url here at all");
+    }
 
     #[test]
     fn strict_port_accepts_an_absent_or_empty_port() {

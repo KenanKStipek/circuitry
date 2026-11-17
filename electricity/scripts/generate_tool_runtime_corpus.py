@@ -246,6 +246,13 @@ def build_redaction_cases() -> list[dict]:
     cases.append(redact_case("https://u:p@h/p?#f"))  # empty query, present fragment
     cases.append(redact_case("https://u:p@h[invalid"))  # unbalanced bracket: unchanged
 
+    # --- issue #819: the same last-@ cut as redact_request_url ---
+    cases.append(redact_case("alice:hunter2hunter2@host:1234"))  # no :// at all
+    cases.append(redact_case("https://alice:443/x@api.example.test/v1"))  # @ behind the path
+    cases.append(
+        redact_case("https://api.example.test/search?api_key=hunter2hunter2")
+    )  # credential-like query key, no userinfo at all
+
     return cases
 
 

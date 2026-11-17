@@ -233,6 +233,64 @@ def redact_request_url(url: str) -> str:
     return _mask_credential_query_params(cut)
 
 
+def redact_request_url_with_marker(url: str, marker: str) -> str:
+    """*url*, cut at the exact same point :func:`redact_request_url` cuts
+    it (issue #819), but with the removed credential replaced by
+    *marker* followed by ``@`` instead of deleted outright -- used by
+    the effective-settings snapshot redactors (``cli/redaction.py``,
+    electricity's ``electricity-redaction``), which want to show a
+    credential was there, not silently remove all trace of it. Unlike
+    :func:`redact_request_url`, this uses the strict
+    :func:`urllib.parse.urlsplit` directly rather than
+    :func:`_urlsplit`'s lenient fallback: a netloc CPython itself
+    refuses to parse (unbalanced IPv6 brackets) is left alone here, the
+    same as it always has been for this redactor, rather than guessed
+    at the way a refusal message needs to always name *something*.
+    Returns *url* unchanged (past :func:`_mask_credential_query_params`)
+    when it has no ``@`` at all -- a value with a credential-like query
+    parameter but no userinfo still gets that masked.
+    """
+    if "@" not in url:
+        return _mask_credential_query_params(url)
+    try:
+        netloc = urllib.parse.urlsplit(url).netloc
+    except ValueError:
+        return url
+    if not netloc:
+        tail = url.rpartition("@")[2]
+        cut = f"{marker}@{tail}"
+    elif _at_follows_netloc(url, netloc):
+        scheme_sep = url.find("://")
+        prefix = url[: scheme_sep + 3] if scheme_sep != -1 else ""
+        tail = url[len(prefix) :].rpartition("@")[2]
+        cut = f"{prefix}{marker}@{tail}"
+    elif "@" in netloc:
+        parsed = urllib.parse.urlsplit(url)
+        new_netloc = f"{marker}@{netloc.rpartition('@')[2]}"
+        cut = urllib.parse.urlunsplit(parsed._replace(netloc=new_netloc))
+    else:
+        return _mask_credential_query_params(url)
+    return _mask_credential_query_params(cut)
+
+
+#: A ``scheme://...`` URL embedded anywhere inside a larger piece of text
+#: -- bounded at whitespace or a quote/bracket character, never at a
+#: comma or period a sentence might put right after it (issue #819).
+_EMBEDDED_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s\"'()<>]+")
+
+
+def scrub_embedded_urls(text: str) -> str:
+    """*text* with every ``scheme://...`` URL found inside it redacted
+    through :func:`redact_request_url` (issue #819) -- for a surface
+    with no single, well-formed URL value of its own to redact: a
+    third-party SDK/library exception's ``str()`` (``webhook``,
+    ``web_fetch``, ``mcp``, ``surrealdb``), or a curl-backed adapter's
+    response-body excerpt, either of which may echo back a URL
+    (including its userinfo) Circuitry itself never named raw.
+    """
+    return _EMBEDDED_URL_RE.sub(lambda m: redact_request_url(m.group(0)), text)
+
+
 def _host_port_text(netloc: str) -> str | None:
     """The raw port text in *netloc* (userinfo already stripped by the
     caller): ``None`` with no ``:`` separator at all (or none after an

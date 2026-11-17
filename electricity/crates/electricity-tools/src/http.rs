@@ -1730,7 +1730,7 @@ fn finalize_streamed_save(
     raw.insert(Value::Str("headers".to_string()), Value::Dict(headers_dict));
     raw.insert(
         Value::Str("url".to_string()),
-        Value::Str(original_url.to_string()),
+        Value::Str(crate::http_conventions::redact_request_url(original_url)),
     );
     let mut value = Dict::new();
     value.insert(
@@ -1819,7 +1819,7 @@ fn finalize_response_save(
     raw.insert(Value::Str("headers".to_string()), Value::Dict(headers_dict));
     raw.insert(
         Value::Str("url".to_string()),
-        Value::Str(original_url.to_string()),
+        Value::Str(crate::http_conventions::redact_request_url(original_url)),
     );
     let mut value = Dict::new();
     value.insert(
@@ -1895,9 +1895,11 @@ fn build_result(
 /// 3xx): `stderr = f"HTTP {status}: {reason}"`, with
 /// [`http_error_excerpt`] appended when non-empty. `raw.url` is always
 /// *original_url* (`plugins/http.py`'s own `url` local, never the
-/// final redirected target). `ok = not (fail_on_error and (status >=
-/// 400 or refused or (redirects: never and a 3xx)))` -- *refused* is a
-/// redirect `params.redirects` would not follow (issue #598).
+/// final redirected target), redacted through
+/// [`crate::http_conventions::redact_request_url`] (issue #818). `ok =
+/// not (fail_on_error and (status >= 400 or refused or (redirects:
+/// never and a 3xx)))` -- *refused* is a redirect `params.redirects`
+/// would not follow (issue #598).
 fn finalize_response(
     parsed: &ParsedRequest,
     original_url: &str,
@@ -1933,7 +1935,7 @@ fn finalize_response(
     raw.insert(Value::Str("headers".to_string()), Value::Dict(headers_dict));
     raw.insert(
         Value::Str("url".to_string()),
-        Value::Str(original_url.to_string()),
+        Value::Str(crate::http_conventions::redact_request_url(original_url)),
     );
     raw.insert(Value::Str("body".to_string()), Value::Str(text));
     let ok = !(parsed.fail_on_error

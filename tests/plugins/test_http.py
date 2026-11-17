@@ -189,6 +189,24 @@ def test_userinfo_with_no_port_never_reaches_urllib_unstripped(
     assert capture["url"] == "http://example.test/page"
 
 
+def test_raw_url_is_redacted_the_same_way_every_other_surface_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #818: ``raw["url"]`` carried the full request URL, userinfo
+    included, even though every other surface that names a request URL
+    redacts it."""
+    password = "pw_value_pw_value"
+    _install_fake_urlopen(monkeypatch, status=200, body="ok")
+
+    result = HttpPlugin().execute(
+        params={"url": f"http://alice:{password}@example.test/page"}
+    )
+
+    assert password not in result.raw["url"]
+    assert "alice" not in result.raw["url"]
+    assert result.raw["url"] == "http://example.test/page"
+
+
 def test_explicit_parse_json_overrides_content_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

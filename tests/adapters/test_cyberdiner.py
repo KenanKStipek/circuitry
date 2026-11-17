@@ -908,6 +908,24 @@ def test_check_ok_when_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     assert r.missing == []
 
 
+def test_check_schemeless_expo_url_reports_host_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #818: a schemeless `expo_url` with no `:` at all used to
+    build a plain `urllib.request.Request` before `check_url` ran,
+    which raises urllib's own bare "unknown url type" uncaught instead
+    of being reported in the `host:` line."""
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        raise AssertionError("a schemeless expo_url must never reach urlopen")
+
+    _patch_opener_open(monkeypatch, fake_urlopen)
+
+    r = _adapter(expo_url="expo.example.test").check()
+    assert r.ok is False
+    assert any(m.startswith("host:") for m in r.missing)
+
+
 def test_check_ok_when_server_answers_with_http_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

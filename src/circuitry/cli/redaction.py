@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+
+from .. import http_conventions
 
 REDACTED = "***REDACTED***"
 
@@ -47,30 +48,13 @@ _KEYISH_RE = re.compile(
 )
 
 
-def _redact_url(value: str) -> str:
-    """If a URL contains userinfo (user[:pass]@host), strip it."""
-    try:
-        parts = urlsplit(value)
-    except ValueError:
-        return value
-    if not parts.scheme or not parts.netloc:
-        return value
-    if "@" not in parts.netloc:
-        return value
-    # netloc looks like "user:pass@host:port" — keep only host:port
-    _, _, host = parts.netloc.rpartition("@")
-    redacted_netloc = f"{REDACTED}@{host}"
-    return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
-
-
 def _redact_string(value: str) -> str:
     if _JWT_RE.match(value):
         return REDACTED
     if _KEYISH_RE.match(value):
         return REDACTED
-    if "://" in value and "@" in value:
-        # Treat as URL with possible userinfo.
-        return _redact_url(value)
+    if "://" in value or "@" in value:
+        return http_conventions.redact_request_url_with_marker(value, REDACTED)
     return value
 
 

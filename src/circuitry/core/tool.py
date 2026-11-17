@@ -155,11 +155,17 @@ def _plugin_target(plugin: Any, mtag: str = "") -> str:
     """Return 'name · model @ host' or 'name @ host' mirroring _adapter_target in prompt.py."""
     from urllib.parse import urlparse
 
+    from .. import http_conventions
+
     name = getattr(plugin, "name", "unknown")
     base_url = getattr(plugin, "base_url", None)
     label = f"{name} · {mtag}" if mtag else name
     if base_url:
-        host = urlparse(str(base_url)).hostname or str(base_url)
+        # A `base_url` with no parseable hostname falls back to naming
+        # the whole value redacted, never raw (issue #819).
+        host = urlparse(str(base_url)).hostname or http_conventions.redact_request_url(
+            str(base_url)
+        )
         return f"{label} @ {host}"
     return label
 

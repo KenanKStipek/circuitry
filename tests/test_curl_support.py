@@ -590,6 +590,28 @@ def test_curl_failure_message_never_includes_the_retry_after_marker() -> None:
     assert "circuitry-retry-after" not in message
 
 
+def test_curl_failure_message_scrubs_a_url_with_userinfo_in_the_response_body() -> None:
+    """#819 item 8: a response body a provider echoes back may itself
+    contain a URL with userinfo (e.g. a redirect-loop or webhook-
+    verification error naming the caller's own configured endpoint) --
+    scrubbed the same as every other surface that names a request URL."""
+    password = "hunter2hunter2"
+    body = (
+        '{"error": "could not verify callback at '
+        f'https://alice:{password}@callback.example.test/hook"}}'
+    )
+    message = curl_failure_message(
+        source="webhook",
+        url="https://api.example.test/v1/send",
+        returncode=22,
+        stdout=body,
+        stderr="",
+    )
+    assert password not in message
+    assert "alice" not in message
+    assert "https://callback.example.test/hook" in message
+
+
 class _FakePopen:
     """Stands in for the real `subprocess.Popen` the curl-version probe
     calls directly (`circuitry.curl_support._real_popen_cls`, #356) —

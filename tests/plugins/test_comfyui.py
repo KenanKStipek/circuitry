@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from curl_test_support import assert_not_in_argv, assert_q_first
+from curl_test_support import (
+    assert_not_in_argv,
+    assert_q_first,
+    read_config_url,
+    read_config_url_and_form,
+)
 
 from circuitry.plugins.comfyui import ComfyUIPlugin
 
@@ -164,6 +169,103 @@ def test_check_uses_q_first(monkeypatch: pytest.MonkeyPatch) -> None:
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     plugin.check()
     assert_q_first(captured["cmd"])
+
+
+def test_curl_bytes_url_travels_through_config_not_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #818: `_curl_bytes` goes through the same `--config` path as
+    `run_curl` -- a `base_url` with userinfo must never reach argv."""
+    captured: dict[str, Any] = {}
+    password = "pw_value_pw_value"
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
+        return _FakePopen(subprocess.CompletedProcess(cmd, 0, stdout=b"bytes", stderr=b""))
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
+    plugin = ComfyUIPlugin(base_url=f"http://alice:{password}@localhost:8188")
+    plugin._curl_bytes(url=f"http://alice:{password}@localhost:8188/view?x=1", timeout_seconds=10)
+    assert_not_in_argv(captured["cmd"], password, "alice")
+    assert captured["url"] == f"http://alice:{password}@localhost:8188/view?x=1"
+
+
+def test_curl_bytes_refuses_a_bad_scheme_before_any_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #818: `check_url` runs before curl is ever invoked."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        raise AssertionError("curl must never run for a refused scheme")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
+    plugin = ComfyUIPlugin(base_url="http://localhost:8188")
+    with pytest.raises(ValueError, match="unsupported URL scheme"):
+        plugin._curl_bytes(url="ftp://localhost:8188/view?x=1", timeout_seconds=10)
+
+
+def test_upload_image_url_and_form_fields_travel_through_config_not_argv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Issue #818: `_upload_image` goes through the same `--config` path
+    as `run_curl`, with its form fields added too -- a `base_url` with
+    userinfo, and the image path, must never reach argv."""
+    image = tmp_path / "ref.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+    captured: dict[str, Any] = {}
+    password = "pw_value_pw_value"
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["url"], captured["form"] = read_config_url_and_form(cmd)
+        return _FakePopen(
+            subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"name": "ref.png"}), stderr="")
+        )
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
+    plugin = ComfyUIPlugin(base_url=f"http://alice:{password}@localhost:8188")
+    plugin._upload_image(image_path=str(image), timeout_seconds=10)
+    assert_not_in_argv(captured["cmd"], password, "alice", str(image))
+    assert captured["url"] == f"http://alice:{password}@localhost:8188/upload/image"
+    assert ("image", f"@{image}") in captured["form"]
+    assert ("type", "input") in captured["form"]
+    assert ("overwrite", "true") in captured["form"]
+
+
+def test_upload_image_refuses_a_bad_port_before_reading_the_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Issue #818: `check_url` runs before the reference image is read
+    (a bad scheme is already refused by `__post_init__`, so this uses an
+    out-of-range port instead to exercise the same ordering)."""
+    image = tmp_path / "ref.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        raise AssertionError("curl must never run for a refused port")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
+    plugin = ComfyUIPlugin(base_url="http://localhost:99999")
+    with pytest.raises(ValueError, match="invalid port"):
+        plugin._upload_image(image_path=str(image), timeout_seconds=10)
+
+
+def test_check_url_travels_through_config_not_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #818: `check()` goes through the same `--config` path as
+    `run_curl` -- a `base_url` with userinfo must never reach argv."""
+    captured: dict[str, Any] = {}
+    password = "pw_value_pw_value"
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
+        return _FakePopen(subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""))
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
+    plugin = ComfyUIPlugin(base_url=f"http://alice:{password}@localhost:8188")
+    result = plugin.check()
+    assert result.ok is True
+    assert_not_in_argv(captured["cmd"], password, "alice")
+    assert captured["url"] == f"http://alice:{password}@localhost:8188/system_stats"
 
 
 def test_check_masks_userinfo_in_the_missing_host_text(monkeypatch: pytest.MonkeyPatch) -> None:

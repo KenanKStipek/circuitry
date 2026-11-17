@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 _HEADER_LINE_RE = re.compile(r'^header = "((?:[^"\\]|\\.)*)"$')
 _URL_LINE_RE = re.compile(r'^url = "((?:[^"\\]|\\.)*)"$')
+_FORM_LINE_RE = re.compile(r'^form = "((?:[^"\\]|\\.)*)"$')
 
 
 def _unescape_config_value(value: str) -> str:
@@ -75,6 +76,29 @@ def read_config_url(cmd: list[str]) -> str | None:
     there's no `--config` in `cmd` at all."""
     url, _ = read_config(cmd)
     return url
+
+
+def read_config_url_and_form(cmd: list[str]) -> tuple[str | None, list[tuple[str, str]]]:
+    """The URL and `-F`/`--form` fields (issue #818: `comfyui`'s own
+    image upload) sent via `--config <fd-path>` in `cmd`, in one pass --
+    the POSIX target is a pipe, so a second read after the first would
+    drain nothing."""
+    try:
+        raw = _read_config_text(cmd)
+    except ValueError:
+        return None, []
+    url: str | None = None
+    form: list[tuple[str, str]] = []
+    for line in raw.splitlines():
+        url_match = _URL_LINE_RE.match(line)
+        if url_match:
+            url = _unescape_config_value(url_match.group(1))
+            continue
+        form_match = _FORM_LINE_RE.match(line)
+        if form_match:
+            name, _, value = _unescape_config_value(form_match.group(1)).partition("=")
+            form.append((name, value))
+    return url, form
 
 
 def assert_q_first(cmd: list[str]) -> None:

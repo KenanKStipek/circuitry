@@ -55,3 +55,27 @@ def test_does_not_redact_plain_dotted_names_shaped_like_three_segments() -> None
     assert redact({"note": "www.example.com"}) == {"note": "www.example.com"}
     assert redact({"note": "a.tar.gz"}) == {"note": "a.tar.gz"}
     assert redact({"note": "1.2.3"}) == {"note": "1.2.3"}
+
+
+def test_redacts_a_schemeless_base_url_without_any_double_slash() -> None:
+    """#819: a base_url with no :// at all still has its credential cut."""
+    out = redact({"base_url": "alice:hunter2hunter2@host:1234"})
+    assert "hunter2" not in out["base_url"]
+    assert out["base_url"] == f"{REDACTED}@host:1234"
+
+
+def test_redacts_a_credential_hidden_behind_the_path() -> None:
+    """#819: an @ past the parsed authority's own boundary still hides a
+    password — the whole value is cut at the LAST @, not just the netloc's
+    own userinfo."""
+    out = redact({"base_url": "https://alice:443/x@api.example.test/v1"})
+    assert "alice" not in out["base_url"]
+    assert out["base_url"] == f"https://{REDACTED}@api.example.test/v1"
+
+
+def test_redacts_a_credential_like_query_param_with_no_userinfo_at_all() -> None:
+    """#819: a base_url with a credential-like query key but no @ still
+    leaked its secret before this redactor masked query params too."""
+    out = redact({"base_url": "https://api.example.test/search?api_key=hunter2hunter2"})
+    assert "hunter2" not in out["base_url"]
+    assert out["base_url"] == "https://api.example.test/search?api_key=%2A%2A%2A"

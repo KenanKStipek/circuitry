@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..core.cancellation import run_tracked
-from ..curl_support import curl_failure_message, redact_host_url, run_curl
+from .. import http_conventions
+from ..curl_support import curl_failure_message, probe_head, redact_host_url, run_curl
 from ..preflight import CheckResult
 from .base import LIMITED_WRITE_FIX, ToolResult
 
@@ -194,19 +194,14 @@ class ComfyUIPlugin:
             ) from e
 
     def _curl_bytes(self, *, url: str, timeout_seconds: int = 60) -> bytes:
-        cmd = [
-            "curl",
-            "-q",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-            url,
-        ]
-
+        # Checked and routed through the same `--config` path as every
+        # other curl call `run_curl` makes -- argv never carries this
+        # URL (issue #818), and `check_url` runs before curl is ever
+        # invoked rather than letting curl discover a bad scheme/port
+        # itself.
+        http_conventions.check_url(url)
         try:
-            proc = run_tracked(cmd, text=False)
+            proc = run_curl(url=url, timeout_seconds=timeout_seconds, text=False)
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
@@ -231,25 +226,22 @@ class ComfyUIPlugin:
 
     def _upload_image(self, *, image_path: str, timeout_seconds: int = 30) -> str:
         """Upload a local image to ComfyUI's input folder. Returns the uploaded filename."""
-        resolved_path = _validate_image_path(image_path)
+        # `check_url` before the path is even read (issue #818): a bad
+        # `base_url` is refused before this touches the filesystem.
         base = self.base_url.rstrip("/")
         url = f"{base}/upload/image"
-        cmd = [
-            "curl",
-            "-q",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-            "-X", "POST",
-            "-F", f"image=@{resolved_path}",
-            "-F", "type=input",
-            "-F", "overwrite=true",
-            url,
-        ]
+        http_conventions.check_url(url)
+        resolved_path = _validate_image_path(image_path)
         try:
-            proc = run_tracked(cmd)
+            proc = run_curl(
+                url=url,
+                timeout_seconds=timeout_seconds,
+                form_fields=(
+                    ("image", f"@{resolved_path}"),
+                    ("type", "input"),
+                    ("overwrite", "true"),
+                ),
+            )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
@@ -512,17 +504,14 @@ class ComfyUIPlugin:
         if shutil.which("curl") is None:
             missing.append("binary:curl")
         else:
+            # Routed through the same `--config` path as every other
+            # curl call here, so argv never carries `base_url` and the
+            # shared proxy rule applies (issue #818) -- `probe_head`
+            # (the same helper ollama's own `check()` uses) treats any
+            # HTTP response, even a 401/404/405, as reachable.
             try:
-                proc = run_tracked(
-                    [
-                        "curl",
-                        "-q",
-                        "--silent",
-                        "--max-time",
-                        "2",
-                        "--head",
-                        self.base_url.rstrip("/") + "/system_stats",
-                    ],
+                proc = probe_head(
+                    self.base_url.rstrip("/") + "/system_stats", timeout_seconds=2
                 )
                 if proc.returncode != 0:
                     missing.append(f"host:{redact_host_url(self.base_url)}")

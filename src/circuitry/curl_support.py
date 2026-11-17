@@ -153,6 +153,10 @@ def curl_failure_message(
     stdout = _mask_secrets(stdout, secrets)
     stderr = _mask_secrets(stderr, secrets)
     detail = parse_error_body(stdout) or stderr.strip() or "no response body"
+    # A response body a provider echoes back may itself contain a URL
+    # with userinfo (issue #819) -- scrubbed before it's ever shown,
+    # the same as every other surface that names a request URL.
+    detail = http_conventions.scrub_embedded_urls(detail)
     model_part = f" model={model!r}" if model else ""
     message = (
         f"{source} request failed (curl exit {returncode}){model_part} "
@@ -192,13 +196,17 @@ def _escape_config_value(value: str) -> str:
 
 
 def _curl_config_file(
-    url: str, headers: Sequence[tuple[str, str]], *, proxy_url: str | None
+    url: str,
+    headers: Sequence[tuple[str, str]],
+    *,
+    proxy_url: str | None,
+    form_fields: Sequence[tuple[str, str]] = (),
 ) -> str:
-    """The ``--config`` file content for ``url``, ``headers`` and the
-    proxy decision — the whole request, so argv never carries any of it
-    (#314: a query-string credential, ``user:pass@`` in the URL, or
-    userinfo in a proxy URL is otherwise visible in ``ps`` just like a
-    header would be).
+    """The ``--config`` file content for ``url``, ``headers``, the
+    proxy decision and any multipart ``form_fields`` — the whole
+    request, so argv never carries any of it (#314: a query-string
+    credential, ``user:pass@`` in the URL, or userinfo in a proxy URL
+    is otherwise visible in ``ps`` just like a header would be).
 
     *proxy_url* is the shared proxy rule's own decision
     (:func:`http_conventions.resolve_proxy`), never curl's: a value
@@ -207,6 +215,14 @@ def _curl_config_file(
     override the decision that already accounted for it); ``None`` means
     ``noproxy = "*"`` (so curl never reads ``*_proxy``/``*_PROXY`` either,
     and connects directly whatever the environment says).
+
+    *form_fields* (issue #818) are each written as a curl config
+    ``form = "<name>=<value>"`` line, curl's own config-file spelling
+    of ``-F``/``--form`` -- a value beginning with ``@`` names a file
+    curl itself reads and uploads, never something this process reads
+    first (``_upload_image`` passes ``image=@<path>`` this way, so the
+    path travels off argv exactly like everything else here, and curl,
+    not this process, ever opens it).
     """
     _validate_no_control_chars(url, "url")
     lines = [f'url = "{_escape_config_value(url)}"']
@@ -214,6 +230,10 @@ def _curl_config_file(
         _validate_no_control_chars(name, "header name")
         _validate_no_control_chars(value, "header value")
         lines.append(f'header = "{name}: {_escape_config_value(value)}"')
+    for name, value in form_fields:
+        _validate_no_control_chars(name, "form field name")
+        _validate_no_control_chars(value, "form field value")
+        lines.append(f'form = "{name}={_escape_config_value(value)}"')
     if proxy_url is not None:
         _validate_no_control_chars(proxy_url, "proxy")
         lines.append(f'proxy = "{_escape_config_value(proxy_url)}"')
@@ -305,12 +325,14 @@ def _strip_retry_after_marker(text: str) -> str:
 
 def _run_curl_posix(
     cmd: list[str], config_bytes: bytes, data: str | None,
-    *, on_line: Callable[[str], None] | None = None,
-) -> subprocess.CompletedProcess[str]:
+    *, on_line: Callable[[str], None] | None = None, text: bool = True,
+) -> subprocess.CompletedProcess[Any]:
     """POSIX: the config travels through a pipe this process creates and
     keeps open just long enough for curl to read it via ``--config
     /dev/fd/<n>`` (an inherited file descriptor, passed with ``pass_fds``)
-    — never a temp file."""
+    — never a temp file. ``text=False`` (issue #818: ``comfyui``'s own
+    image download) returns ``stdout``/``stderr`` as ``bytes``, for a
+    binary response body."""
     read_fd, write_fd = os.pipe()
     try:
         os.write(write_fd, config_bytes)
@@ -320,6 +342,7 @@ def _run_curl_posix(
             input=data,
             pass_fds=(read_fd,),
             on_line=on_line,
+            text=text,
         )
     finally:
         os.close(read_fd)
@@ -327,17 +350,18 @@ def _run_curl_posix(
 
 def _run_curl_windows(
     cmd: list[str], config_bytes: bytes, data: str | None,
-    *, on_line: Callable[[str], None] | None = None,
-) -> subprocess.CompletedProcess[str]:
+    *, on_line: Callable[[str], None] | None = None, text: bool = True,
+) -> subprocess.CompletedProcess[Any]:
     """Windows: `Popen` rejects a non-empty ``pass_fds`` and there's no
     ``/dev/fd``, so the config is written to a file in the per-user temp
     directory (``%TEMP%``, private to the user by default ACL) instead, and
-    always removed afterwards — including on error."""
+    always removed afterwards — including on error. ``text`` -- see
+    :func:`_run_curl_posix`."""
     fd, path = tempfile.mkstemp(prefix="circuitry-curl-", suffix=".conf")
     try:
         with os.fdopen(fd, "wb") as config_file:
             config_file.write(config_bytes)
-        return run_tracked([*cmd, "--config", path], input=data, on_line=on_line)
+        return run_tracked([*cmd, "--config", path], input=data, on_line=on_line, text=text)
     finally:
         os.remove(path)
 
@@ -350,6 +374,7 @@ def _build_config_and_cmd(
     timeout_seconds: int,
     extra_args: Sequence[str] = (),
     fail: bool = True,
+    form_fields: Sequence[tuple[str, str]] = (),
 ) -> tuple[bytes, list[str]]:
     """``(config_bytes, cmd)`` shared by :func:`run_curl` and
     :func:`run_curl_streaming`: the same ``--config`` file content, the
@@ -379,7 +404,9 @@ def _build_config_and_cmd(
     )
 
     header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
-    config_bytes = _curl_config_file(url, header_items, proxy_url=proxy_url).encode()
+    config_bytes = _curl_config_file(
+        url, header_items, proxy_url=proxy_url, form_fields=form_fields
+    ).encode()
     if len(config_bytes) > _MAX_CONFIG_BYTES:
         raise ValueError(
             f"url + headers are {len(config_bytes)} bytes, over the "
@@ -408,29 +435,39 @@ def run_curl(
     headers: Mapping[str, str] | Sequence[tuple[str, str]] = (),
     data: str | None = None,
     timeout_seconds: int,
-) -> subprocess.CompletedProcess[str]:
-    """Run curl with ``-q`` first, the URL and headers off argv, and
-    ``data`` (if given) on stdin.
+    form_fields: Sequence[tuple[str, str]] = (),
+    text: bool = True,
+) -> subprocess.CompletedProcess[Any]:
+    """Run curl with ``-q`` first, the URL, headers and any
+    ``form_fields`` off argv, and ``data`` (if given) on stdin.
 
-    The URL and headers both travel through ``--config`` (see
-    :func:`_curl_config_file`) — on POSIX via an inherited pipe fd
+    The URL, headers and ``form_fields`` all travel through ``--config``
+    (see :func:`_curl_config_file`) — on POSIX via an inherited pipe fd
     (:func:`_run_curl_posix`), on Windows via a per-user temp file removed
     in a ``finally`` (:func:`_run_curl_windows`), since Windows' `Popen`
     has neither `pass_fds` nor `/dev/fd`. The body, when present, travels
     on the *actual* stdin via ``--data-binary @-``; the config can't use
-    that channel too, since a request can have both. Raises ``ValueError``
-    if ``url`` plus ``headers`` exceed ``_MAX_CONFIG_BYTES`` (that config is
-    written to a pipe before curl starts on POSIX, and an oversized write
-    would block forever instead of respecting ``timeout_seconds``). May
-    raise ``FileNotFoundError`` if curl is not on PATH — callers translate that
-    into their own error.
+    that channel too, since a request can have both (never with
+    ``form_fields``, which already builds its own multipart body curl
+    sends in place of ``data``). Raises ``ValueError`` if ``url`` plus
+    ``headers`` plus ``form_fields`` exceed ``_MAX_CONFIG_BYTES`` (that
+    config is written to a pipe before curl starts on POSIX, and an
+    oversized write would block forever instead of respecting
+    ``timeout_seconds``). May raise ``FileNotFoundError`` if curl is not
+    on PATH — callers translate that into their own error. ``text=False``
+    (issue #818: ``comfyui``'s own image download) returns
+    ``stdout``/``stderr`` as ``bytes``, for a binary response body.
     """
     config_bytes, cmd = _build_config_and_cmd(
-        url=url, headers=headers, data=data, timeout_seconds=timeout_seconds
+        url=url,
+        headers=headers,
+        data=data,
+        timeout_seconds=timeout_seconds,
+        form_fields=form_fields,
     )
     if os.name == "nt":
-        return _run_curl_windows(cmd, config_bytes, data)
-    return _run_curl_posix(cmd, config_bytes, data)
+        return _run_curl_windows(cmd, config_bytes, data, text=text)
+    return _run_curl_posix(cmd, config_bytes, data, text=text)
 
 
 def probe_head(url: str, *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:

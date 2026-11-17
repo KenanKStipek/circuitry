@@ -88,6 +88,34 @@ async fn a_plain_get_returns_the_parsed_json_body() {
 }
 
 #[tokio::test]
+async fn raw_url_is_redacted_the_same_way_every_other_surface_names_it() {
+    // Issue #818: `raw.url` carried the full request URL, userinfo
+    // included, even though every other surface that names a request
+    // URL redacts it.
+    let addr = respond_once(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"ok\": true}\n",
+    );
+    let password = "pw_value_pw_value";
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![(
+            "url",
+            Value::Str(format!("http://alice:{password}@{addr}/")),
+        )]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok);
+    let url = dict_get(&result.raw, "url").unwrap();
+    let Value::Str(url) = url else { panic!("url must be a string") };
+    assert!(!url.contains(password));
+    assert!(!url.contains("alice"));
+    assert_eq!(url, &format!("http://{addr}/"));
+}
+
+#[tokio::test]
 async fn a_404_is_a_returned_failure_with_an_excerpt() {
     let body = b"{\"error\": {\"message\": \"nope\"}}";
     let response = format!(
