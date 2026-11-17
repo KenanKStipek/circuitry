@@ -57,18 +57,25 @@ def _escape_aware(string: str) -> str:
 chevron.renderer._html_escape = _escape_aware
 
 
-#: One entry per enclosing effect container, nearest first: its dotted
-#: path (``"prime"`` for a document's own root, ``"prime.d"`` for a
-#: nested dynamic named ``d``, ...) and its own body-and-``finally:``
-#: effect names. Populated by :func:`push_bare_effect_scope`
-#: (``core.dynamic``, on every dynamic, use/reflector/decomposition child
-#: root included) so a bare reference at the document root, in a chain or
-#: tree dynamic, in a ``use`` child's root or in ``finally:`` resolves the
-#: same way a loop body's/``if`` branch's own sibling already does
-#: (#778). A ``ContextVar``, not a plain module global: tree-flow
-#: dispatches concurrent children onto real OS threads
-#: (``cancellation.submit_with_context``), and each one must see the
-#: chain as it stood at submission time without a sibling thread's own
+#: One entry per enclosing effect container, nearest first: its own
+#: self-alias (``"prime"`` for a document's own root or a ``use``/
+#: decomposition child's own isolated root, ``"inner"`` for a reflector's
+#: own inner dynamic, or a nested dynamic's own declared name) and its own
+#: body-and-``finally:`` effect names. The self-alias is always a live,
+#: literal top-level key in the context a bare reference resolves
+#: against -- ``core.dynamic`` widens the context with exactly that one
+#: key, on every dynamic, so it stays reachable this way regardless of how
+#: deep a loop body, an ``if`` branch or a tree branch nests it, where the
+#: canonical dotted spelling computed from the chain (``"prime.outer.d"``)
+#: would not be live (#778 finding 7). Populated by
+#: :func:`push_bare_effect_scope` (``core.dynamic``, on every dynamic,
+#: use/reflector/decomposition child root included) so a bare reference at
+#: the document root, in a chain or tree dynamic, in a ``use`` child's
+#: root or in ``finally:`` resolves the same way a loop body's/``if``
+#: branch's own sibling already does (#778). A ``ContextVar``, not a plain
+#: module global: tree-flow dispatches concurrent children onto real OS
+#: threads (``cancellation.submit_with_context``), and each one must see
+#: the chain as it stood at submission time without a sibling thread's own
 #: further nesting leaking across.
 _BARE_EFFECT_CHAIN: contextvars.ContextVar[tuple[tuple[str, frozenset[str]], ...]] = (
     contextvars.ContextVar("circuitry_bare_effect_chain", default=())
@@ -88,9 +95,14 @@ def push_bare_effect_scope(
     document compiles with that root name), ``"inner"`` for a reflector's
     own inner dynamic, or a nested dynamic's own declared name. *own_effect_names*
     is its own body-and-``finally:`` effect names — a bare head matching one
-    of them resolves to ``"<this container's own path>.<the rest of the
-    reference>"``, looked up the same way the canonical dotted spelling
-    already is.
+    of them resolves to ``"<own_name>.<the rest of the reference>"``,
+    looked up against the same context the fallback itself just missed on.
+    *own_name* alone, never a dotted path built from an ancestor's own
+    name, because ``core.dynamic`` widens that same context with exactly
+    this one flat key (``self.defn.name: dyn``) on every dynamic, nested
+    or not — the live node stays reachable this way through a loop body,
+    an ``if`` branch or a tree branch, where the canonical dotted spelling
+    computed from an ancestor's own path would not be (#778 finding 7).
 
     *isolated* starts a brand new chain rooted at *own_name* alone, sharing
     nothing with whatever chain is already running — a document executed
@@ -99,13 +111,8 @@ def push_bare_effect_scope(
     this container nests under the nearest entry already on the chain —
     a plain ``dynamic:`` block inside the same document.
     """
-    new_chain: tuple[tuple[str, frozenset[str]], ...]
-    if isolated:
-        new_chain = ((own_name, own_effect_names),)
-    else:
-        chain = _BARE_EFFECT_CHAIN.get()
-        parent_path = chain[0][0] if chain else own_name
-        new_chain = ((f"{parent_path}.{own_name}", own_effect_names), *chain)
+    chain = () if isolated else _BARE_EFFECT_CHAIN.get()
+    new_chain = ((own_name, own_effect_names), *chain)
     return _BARE_EFFECT_CHAIN.set(new_chain)
 
 

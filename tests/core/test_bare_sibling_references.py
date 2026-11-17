@@ -131,6 +131,42 @@ def _key_order(obj: Any) -> Any:
     return None
 
 
+def test_nested_dynamic_in_loop_body_reads_its_own_child_not_a_root_sibling() -> None:
+    """A dynamic ``d`` running inside a loop body resolves a bare sibling
+    read through its own self-alias, always a live top-level key in the
+    context it renders against -- not the dotted path ``push_bare_effect_
+    scope`` would compute from its place in the chain, which isn't live
+    while a loop body, an ``if`` branch or a tree branch is running
+    (#778 finding 7). A root effect sharing the same name must not win.
+    """
+    orch = {
+        "effects": [
+            _prompt("x", "root-x"),
+            {
+                "type": "loop",
+                "name": "lp",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {
+                        "type": "dynamic",
+                        "name": "d",
+                        "flow": "chain",
+                        "effects": [
+                            _prompt("x", "loop-x"),
+                            _prompt("reader", "{{x.value}}"),
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({"input": {"items": [1]}})
+    DynamicRuntime(root, adapter=EchoAdapter(), model="m").execute(store=store)
+    reader = store.state["prime"]["lp"]["iter_0"]["d"]["reader"]
+    assert reader["value"] == "loop-x"
+
+
 def test_whole_prime_render_is_byte_identical_across_pythonhashseed() -> None:
     """A whole ``{{{prime}}}`` render's own key order must not depend on
     ``PYTHONHASHSEED`` -- the regression a dict-subclass view whose
