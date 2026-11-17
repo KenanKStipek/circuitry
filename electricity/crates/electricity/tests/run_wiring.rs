@@ -247,8 +247,8 @@ async fn an_unsupported_effect_is_refused_with_no_state_written() {
     let dir = temp_dir("refusal");
     let config = write(&dir, "config.json", "{}");
     // An `mcp` tool provider (an M2 plugin, #448) is still refused --
-    // `validate_yaml` (lane L2a, issue #521) is runnable now, so this
-    // probe was swapped to a provider that stays refused until the M2
+    // `validate_yaml` (issue #521) is runnable now, so this
+    // test was swapped to a provider that stays refused until the M2
     // plugin bridge.
     let doc = write(
         &dir,
@@ -295,7 +295,7 @@ async fn decomposition_enabled_runs() {
 
 /// The narrowing's other half: a config that only turns on
 /// scoring/routing (never decomposition) must run, not refuse --
-/// K2 wires those two into `prompt` in this same lane.
+/// issue #516 wires those two into `prompt` here.
 #[tokio::test]
 async fn scoring_and_routing_enabled_without_decomposition_runs() {
     let dir = temp_dir("scoring-routing-no-decomposition");
@@ -498,7 +498,7 @@ async fn a_persistence_block_enabled_with_a_truthy_non_boolean_is_still_refused(
 
 /// A malformed persistence block still fails the ordinary way (the
 /// validation itself, not the refusal) -- `pre_state_checks` catches
-/// it before the refusal check this lane added ever runs.
+/// it before the refusal check runs.
 #[tokio::test]
 async fn a_malformed_persistence_backend_fails_validation_not_the_refusal() {
     let dir = temp_dir("persistence-malformed");

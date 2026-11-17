@@ -1,4 +1,4 @@
-//! Lane R's own preflight driver (issue #495): builds each adapter and
+//! The preflight driver (issue #495): builds each adapter and
 //! tool a raw document references from *config*'s own runtime block
 //! (never the merged `effective.runtime` -- a document-level
 //! `runtime.adapters.scripted.replies_file` is invisible to preflight
@@ -803,7 +803,7 @@ mod tests {
     /// way to install [`PlaceholderAdapter`], and nothing in a `use`
     /// child can call [`Adapter::generate`] in this milestone either)
     /// -- exercised directly so its message text stays pinned to
-    /// `format_config_refusal`'s own phrasing (PR #497's review),
+    /// `format_config_refusal`'s own phrasing (#497),
     /// `{VERSION}` included, not a hand-written duplicate of it.
     #[tokio::test]
     async fn placeholder_adapter_generate_uses_format_config_refusals_own_phrasing() {

@@ -2,7 +2,7 @@
 //! run-wiring steps 1-19) is the real VM run `electricity-cli`'s own
 //! `Run` action drives -- resolve the config, seed and check the
 //! document, refuse unsupported content, then execute
-//! ([`electricity_vm::execute_root`], lanes B/C) with `--events`/
+//! ([`electricity_vm::execute_root`]) with `--events`/
 //! `--live-state` observing it. `--out`/stdout ([`out`]), `--events`
 //! ([`events`]) and `--live-state` ([`live_state`]) are this crate's own
 //! writers; [`state`] seeds a fresh run's store. `../../DESIGN.md` and
@@ -543,7 +543,7 @@ fn orchestration_dir_string(path: &std::path::Path) -> String {
 /// `runtime_config` bag before any tool dispatches -- `_orchestration_
 /// dir`, `_allowlists`, `_capability_allow` (issue #431's run-wiring
 /// step 8; `electricity-config`'s own `vm-lanes.md` row names this as
-/// this lane's first caller). The same `Value` this function returns is
+/// this module's first caller). The same `Value` this function returns is
 /// both [`RunContext::runtime_config`] (what a tool dispatch actually
 /// reads) and, after [`electricity_redaction::redact`], `state.runtime.
 /// effective_settings.runtime` (confirmed byte-for-byte against the
@@ -914,7 +914,7 @@ struct Observer<'a> {
     totals: &'a Totals,
     events: Option<&'a events::EventLog>,
     live_state: Option<&'a live_state::LiveStateMirror>,
-    /// Issue #449's gate lane item 7's own per-instance `--events`
+    /// Issue #449, item 7's own per-instance `--events`
     /// pairing seam -- the fallback id source when `--events` itself
     /// is off, so `effect_start` always has *some* value to hand back
     /// regardless. When `--events` is on, [`events::EventLog::on_start`]'s
@@ -1249,7 +1249,7 @@ pub fn config_error_for_run(
 /// any effect could possibly have run: a config error (step 1, this
 /// function's very first fallible step) and a refusal of unsupported
 /// content (wired in right after every check error and before any file
-/// is written, issue #408's gate lane) -- the refusal is the one place
+/// is written, issue #408) -- the refusal is the one place
 /// after state-seeding that deliberately *discards* whatever this
 /// function already wrote to *store* rather than reporting it, so a
 /// refused run leaves no `--out`/`--events`/`--live-state` trace at all.
@@ -1609,8 +1609,8 @@ pub async fn run_orchestration_with_config(
 
     // `electricity-config`'s own first caller (vm-lanes.md's own row for
     // this module): between resolve_config and effective_settings, the
-    // same position `runtime_shim.run` checks it in. Lane I
-    // prerequisites (issue #448, item U4(b)): `electricity_compiler::
+    // same position `runtime_shim.run` checks it in (issue #448,
+    // item U4(b)): `electricity_compiler::
     // use_children::allowlist_denials` walks every literal `use` child
     // reachable from the document too (path and inline alike),
     // `cli/allowlist.py::check_allowlist`'s own shape -- a document
@@ -2265,7 +2265,7 @@ pub async fn run_orchestration_with_config(
     // current` at the `RunContext` construction site.
     let supported = electricity_bytecode::Supported::current(extra_supported_providers());
 
-    // Lane A's own refusal walker (issue #408's gate lane), wired in
+    // The refusal walker (issue #408), wired in
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
