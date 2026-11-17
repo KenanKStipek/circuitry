@@ -37,9 +37,8 @@
 //! mismatch touching `int`/`uint`/`double` (`@type_matched`) or a
 //! `list`/`map` against something other than `null` or its own kind
 //! actually raises. [`raises_on_mismatch`] decides which of the two
-//! [`strict_eq`]'s own catch-all falls into; an earlier fix
-//! (`strict_in_fn` erroring on *every* type mismatch) overcorrected,
-//! regressing this specific case.
+//! [`strict_eq`]'s own catch-all falls into; erroring on *every* type
+//! mismatch (as `strict_in_fn` once did) regresses this specific case.
 //!
 //! [`paths::rewrite`](crate::paths::rewrite) substitutes this module's
 //! functions for `cel`'s own `_==_`/`_!=_`/`@in`, the same way it does
