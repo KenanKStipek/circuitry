@@ -111,7 +111,7 @@ pub const SIGNAL_NAMES: [&str; 7] = [
 /// DEFAULT_WEIGHTS`), used only by a direct library call with
 /// `weights: None`. The runtime always passes `electricity-config`'s
 /// own, different, default table instead (`ScoringSettings::default`) --
-/// both tables exist on purpose (issue #505's own ruling).
+/// both tables exist on purpose (issue #505).
 pub const DEFAULT_WEIGHTS: [(&str, f64); 7] = [
     ("prompt_size", 0.28),
     ("state_references", 0.18),
