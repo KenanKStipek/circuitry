@@ -1,4 +1,4 @@
-//! Issue #505's ruling 4: NaN/±inf reach `meta.complexity` exactly as
+//! Issue #505: NaN/±inf reach `meta.complexity` exactly as
 //! Python does -- not just inside this crate's own `ComplexityScore`,
 //! but through the *state writer* a run would actually use to persist
 //! it. A `ComplexityScore::to_meta()` carrying a NaN score (every
