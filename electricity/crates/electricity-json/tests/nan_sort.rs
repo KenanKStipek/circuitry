@@ -39,7 +39,7 @@ impl SplitMix64 {
     }
 }
 
-/// A hand-traced counterexample (see the PR review this pins): 64 keys
+/// A hand-traced counterexample, pinned by this test: 64 keys
 /// in insertion order `0.0, 1.0, 2.0, NaN, -4.0, -3.0, -2.0, -1.0,
 /// -100.0`, then 55 more distinct floats (`100.0..155.0`). `count_run`
 /// finds an initial run of 8 below the 32-element threshold that would
