@@ -738,7 +738,7 @@ fn walk(node: &Value, path: &str, out: &mut BTreeMap<String, NodeMeta>) {
         // instead — but only this exact shape. A real effect
         // genuinely named `last` (nothing stops an author writing
         // one) is an ordinary object with its own `value`/`meta`, not
-        // `{"$ref": ...}`, and must still be walked (F13).
+        // `{"$ref": ...}`, and must still be walked.
         if key == "last" && is_ref_alias(child) {
             continue;
         }
@@ -1717,14 +1717,14 @@ impl RunModel {
 
     /// Whether a `run_end` line has arrived yet (DESIGN.md §3: when it
     /// has, the final live-state write is already on disk) — `osi
-    /// watch`'s own stop condition alongside a completed state (F4).
+    /// watch`'s own stop condition alongside a completed state.
     pub fn run_ended_by_events(&self) -> bool {
         self.run_end.is_some()
     }
 
     /// `run_end`'s own `ok`, when one has arrived — lets a caller settle
     /// a completed run's exit status from the event itself rather than
-    /// re-deriving it from state (F4).
+    /// re-deriving it from state.
     pub fn run_end_ok(&self) -> Option<bool> {
         self.run_end.as_ref().map(|(ok, _, _)| *ok)
     }
@@ -1732,8 +1732,7 @@ impl RunModel {
     /// `run_end`'s own `signal` field (DESIGN.md §3's format table),
     /// when one has arrived and the run ended by a forwarded signal
     /// rather than cleanly — lets `osi watch` report the same exit
-    /// code `cof` itself used (130/143/129), not just ok-vs-failed
-    /// (P2-7).
+    /// code `cof` itself used (130/143/129), not just ok-vs-failed.
     pub fn run_end_signal(&self) -> Option<&str> {
         self.run_end
             .as_ref()
@@ -1754,7 +1753,7 @@ impl RunModel {
     /// The engine's own pid, from `run_start` (DESIGN.md §3's format
     /// table), when an events stream carried one — lets `osi watch`
     /// tell a genuine abort (no `run_end`, dead process) from a run
-    /// simply still going, with no child handle of its own (F4).
+    /// simply still going, with no child handle of its own.
     pub fn run_start_pid(&self) -> Option<i32> {
         self.run_start.as_ref().and_then(|(_, pid)| *pid)
     }
@@ -2381,7 +2380,7 @@ impl RunModel {
                 // segment, so seeding a row for the template itself
                 // here would only ever leave a stale `Pending` row
                 // beside the real per-pass rows observation produces
-                // (F8); skipped below once any real pass already
+                // (as explained above); skipped below once any real pass already
                 // exists. Before the loop's first dispatch, though
                 // (issue #678's Starting/Failed states), its own
                 // eventual passes still read ahead like any other
@@ -2477,7 +2476,7 @@ impl RunModel {
             return RowStatus::skipped(SkipReason::Disabled);
         }
 
-        // Finding 9: an unnamed `if`'s own branches have no node to
+        // An unnamed `if`'s own branches have no node to
         // report `meta.branch` from the way a *named* if's own does —
         // but once any path on the *other* side has a real node, this
         // one, still absent, is definitely the branch that didn't run,
@@ -2510,8 +2509,8 @@ impl RunModel {
         // every earlier sibling in that same chain is already done one
         // way or another — otherwise this node hasn't been reached yet
         // regardless of what the container is doing, and is simply
-        // Pending (F8: the bound below used to skip the sibling check
-        // entirely and call every such node LikelyRunning).
+        // Pending -- the bound below must not skip the sibling check
+        // and call every such node LikelyRunning regardless.
         if entry.parent_flow == Some(Flow::Chain)
             && plan
                 .earlier_siblings(path)
@@ -3792,7 +3791,7 @@ mod tests {
 
     #[test]
     fn a_real_effect_named_last_is_not_mistaken_for_the_ref_alias() {
-        // F13: only the exact `{"$ref": "iter_N"}` shape is the loop
+        // Only the exact `{"$ref": "iter_N"}` shape is the loop
         // alias; an ordinary effect an author happened to name `last`
         // must still be walked.
         let state = json!({
@@ -3951,7 +3950,7 @@ mod tests {
 
     #[test]
     fn a_chain_sibling_still_running_leaves_the_next_one_pending_not_likely_running() {
-        // F8: rule 1 is "every *earlier* plan sibling is complete", not
+        // Rule 1 is "every *earlier* plan sibling is complete", not
         // just "the container is running" — step1 hasn't finished, so
         // step2 cannot plausibly have started yet either.
         let plan = PlanTree::from_program(&three_step_chain_program());
@@ -4070,7 +4069,7 @@ mod tests {
 
     #[test]
     fn an_untaken_if_else_branch_never_blocks_the_chain_sibling_that_follows_it() {
-        // Review finding 9: once the taken branch (`else_branch` here)
+        // Once the taken branch (`else_branch` here)
         // is actually observed, the untaken one (`then_branch`) must
         // resolve to something `sibling_is_complete` counts as settled
         // — not get stuck forever at `LikelyRunning`, which would also
@@ -4458,7 +4457,7 @@ mod tests {
         );
     }
 
-    /// The token rule (issue #527, finding F4): a
+    /// The token rule (issue #527): a
     /// retried prompt where the two candidate pairs actually
     /// *disagree*, so the test can tell them apart — unlike a
     /// retryable adapter error (which carries no tokens of its own),
@@ -4534,7 +4533,7 @@ mod tests {
         assert_eq!((sent, received), (16, 29));
         // The plain pair (the winning attempt only) must *not* match —
         // otherwise this test could not actually tell the two rules
-        // apart (finding F4).
+        // apart.
         assert_ne!((sent, received), (11, 22));
     }
 

@@ -96,7 +96,7 @@ fn replay(name: &str) -> String {
     // with "Interrupted", never from the exit code alone, so an
     // abort with no final `prime.meta.error` at all (the second-SIGINT
     // case, no `prime` node ever reaching a terminal write) renders as
-    // Aborted rather than Cancelled (F12).
+    // Aborted rather than Cancelled.
     let interrupted_exit = fixture
         .snapshots
         .last()

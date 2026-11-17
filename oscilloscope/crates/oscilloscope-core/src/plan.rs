@@ -60,7 +60,7 @@ pub fn compile(
 }
 
 /// The config [`compile_with_discovery`] actually used, when it used
-/// one at all (review finding 3 on #458): a `use: path:` child must
+/// one at all: a `use: path:` child must
 /// compile against this exact same config, not the original call's
 /// own (possibly absent) `--config` argument, or a `group:` defined
 /// only in a discovered global/project config -- resolved fine for the
@@ -379,7 +379,7 @@ pub struct PlanTree {
     /// 1's "every earlier plan sibling is complete", which needs each
     /// chain op's own direct siblings, not its whole subtree.
     earlier_siblings: HashMap<String, Vec<String>>,
-    /// A transparent `if`'s own two branches (#433/review finding 9):
+    /// A transparent `if`'s own two branches (#433):
     /// every real path a `then`/`else` branch contributes, mapped to
     /// every real path the *other* side contributes. Only one side
     /// ever actually runs, and the untaken side's own paths stay
@@ -480,7 +480,7 @@ impl PlanTree {
     }
 
     /// Every real path belonging to the *other* side of `path`'s own
-    /// `if`/`else`, when it's inside one (finding 9) — empty for
+    /// `if`/`else`, when it's inside one — empty for
     /// anything else, including an `if` with no `else` at all.
     pub fn branch_alternates(&self, path: &str) -> &[String] {
         self.branch_alternates
@@ -529,9 +529,9 @@ impl PlanTree {
     /// swapped out — lets a test exercise the grafting walk itself
     /// (DESIGN.md §5) against a hand-built child `Program`, independent
     /// of whatever `electricity-compiler` can or can't compile yet
-    /// (F8: today's lane-B/C stubs make the real `compile` fail on
-    /// every document, so a test that could only reach grafting
-    /// through it would never run at all). The loader still only ever
+    /// (the `electricity-compiler` stub fails to compile any real
+    /// document until #415/#417 land, so a test that could only reach
+    /// grafting through it would never run at all). The loader still only ever
     /// gets called for a real, canonicalizable file on disk —
     /// `try_graft_use`'s existing missing-file/cycle checks run first,
     /// unchanged.
@@ -1189,16 +1189,15 @@ fn walk_region(
 /// for itself; instead its branch's real children are walked with
 /// *this same* `earlier` list via `walk_transparent_branch`, and
 /// whatever real paths they expose are folded back into `earlier` so
-/// a later member of this block still sees them. Before this fix,
-/// `earlier` reset to empty at the top of every nested `Block`
-/// regardless of how it was reached, so a transparent branch's own
-/// children always started from nothing, and the transparent op's
-/// own (parent-duplicate) path was registered as if it were a real
-/// sibling — both threw off the "every earlier sibling is complete"
-/// heuristic (DESIGN.md §2.1 rule 1) for anything near an unnamed
-/// `if`/loop.
+/// a later member of this block still sees them. `earlier` must
+/// never reset to empty at the top of a nested `Block` regardless of
+/// how it was reached: doing that would start a transparent branch's
+/// own children from nothing, and would register the transparent
+/// op's own (parent-duplicate) path as if it were a real sibling --
+/// both throw off the "every earlier sibling is complete" heuristic
+/// (DESIGN.md §2.1 rule 1) for anything near an unnamed `if`/loop.
 ///
-/// Review finding 9: an `if`'s own two branches are each walked from
+/// An `if`'s own two branches are each walked from
 /// their own copy of `earlier` as it stood before the `if`, not
 /// threaded one into the other, since only one side ever actually
 /// runs; threading `then_`'s own result into `else_`'s walk made an
@@ -1985,11 +1984,11 @@ mod tests {
 
     #[test]
     fn compiles_a_real_document_into_a_plan_end_to_end() {
-        // K3/#424 review: the no-plan fallback is covered everywhere
+        // The no-plan fallback is covered everywhere
         // else in this file via hand-built `Program`s, which never
         // exercises `compile`'s own real path through `electricity-
-        // compiler::check_for_run` — a stub that failed on every
-        // document until lanes B/C (#415, #417) landed. Now that they
+        // compiler::check_for_run` — that path only compiles a real
+        // document once #415/#417 land. Now that they
         // have, a real document should compile into a real plan.
         let dir = tempfile::tempdir().unwrap();
         let doc = dir.path().join("do.yml");
@@ -2100,7 +2099,7 @@ mod tests {
 
     #[test]
     fn compile_with_discovery_actually_uses_the_discovered_config_not_just_compiles_without_it() {
-        // Review finding 4 on #458: every other `compile_with_discovery`
+        // Every other `compile_with_discovery`
         // test's document compiles fine with no config at all, so none
         // of them would catch `compile_with_discovery` silently
         // ignoring `home`/`cwd`/the trust value. A `group:` whose
@@ -2140,7 +2139,7 @@ mod tests {
 
     #[test]
     fn from_program_with_options_passes_the_discovered_config_on_to_a_use_path_child() {
-        // Review finding 3 on #458: a `use: path:` child used to
+        // A `use: path:` child used to
         // compile against the root document's own, original
         // `--config` argument (`None`, in the no-config case) even
         // after `compile_with_discovery` found a config for the root
@@ -2330,12 +2329,12 @@ mod tests {
 
     #[test]
     fn grafts_a_use_child_under_its_own_path_stripping_the_childs_prime() {
-        // F8: `try_graft_use` needs a real, canonicalizable file (its
+        // `try_graft_use` needs a real, canonicalizable file (its
         // own missing-file/cycle checks run before the loader is ever
         // called), but not a *compilable* one — the loader is injected
         // so this exercises osi's own grafting walk, independent of
-        // `electricity-compiler`'s lane-B/C stubs, which fail on every
-        // real document today.
+        // whether `electricity-compiler` can compile it yet, which it
+        // can't for any real document today.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("main.yml"), "effects: []\n").unwrap();
         std::fs::write(dir.path().join("child.yml"), "effects: []\n").unwrap();
@@ -2612,7 +2611,7 @@ mod tests {
         );
     }
 
-    /// Review finding 9: an unnamed `if` *with* an `else` must not
+    /// An unnamed `if` *with* an `else` must not
     /// thread one branch's own new paths into the other's walk —
     /// each branch's earlier siblings are exactly what came before the
     /// `if` itself, never the other side's children, and each side's
@@ -3053,9 +3052,10 @@ mod tests {
         assert!(decisions[0].else_paths.is_empty());
     }
 
-    /// Review risk 1 (issue #635): an unnamed `if` directly under a
+    /// An unnamed `if` directly under a
     /// tree `dynamic`'s own `Parallel` branches is reached through
-    /// `walk_op`, never `walk_block`'s own transparent-if handling --
+    /// `walk_op`, never `walk_block`'s own transparent-if handling
+    /// (issue #635) --
     /// `record_op_entry` is the one place both contexts funnel their
     /// `PlanEntryKind::If` through, so this still gets a decision
     /// entry.
@@ -3111,10 +3111,10 @@ mod tests {
         );
     }
 
-    /// Review finding (issue #650): an unnamed loop directly under a
+    /// An unnamed loop directly under a
     /// tree `dynamic`'s own `Parallel` branches is reached through
     /// `walk_op`, never `walk_block`'s own transparent-loop handling
-    /// -- `record_op_entry` is the one place both contexts funnel
+    /// (issue #650) -- `record_op_entry` is the one place both contexts funnel
     /// their loop `PlanEntryKind` through, so its body paths are
     /// still recorded.
     #[test]

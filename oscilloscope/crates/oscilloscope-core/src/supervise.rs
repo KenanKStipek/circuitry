@@ -230,7 +230,7 @@ pub fn exit_code(status: ExitStatus) -> i32 {
 /// `run_end` line's own `signal` field (DESIGN.md §3's format table)
 /// instead of a real `ExitStatus` — `osi watch` has no child process
 /// of its own to read a status from, so this is the only way it can
-/// report the same exit code `cof` itself used (P2-7) rather than just
+/// report the same exit code `cof` itself used rather than just
 /// ok-vs-failed.
 pub fn exit_code_for_signal_name(signal: &str) -> Option<i32> {
     match signal {
@@ -243,7 +243,7 @@ pub fn exit_code_for_signal_name(signal: &str) -> Option<i32> {
 
 /// Whether a process with this pid still exists, probed the
 /// conventional way (`kill(pid, 0)`, which sends no signal and only
-/// checks for `ESRCH`). Used by `osi watch` (F4), which has no `Child`
+/// checks for `ESRCH`). Used by `osi watch`, which has no `Child`
 /// handle of its own for a run it didn't start — the engine's pid, when
 /// an events stream names one (`run_start`, DESIGN.md §3), is the only
 /// way it can tell a genuine abort (no `run_end`, dead process) from a
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn exit_code_for_signal_name_matches_cofs_own_mapping() {
-        // P2-7/P2-10: the same 128+signum codes cof itself uses
+        // The same 128+signum codes cof itself uses
         // (DESIGN.md §4.1), from a run_end event's own signal name
         // rather than a real ExitStatus.
         assert_eq!(exit_code_for_signal_name("SIGINT"), Some(130));

@@ -1,4 +1,4 @@
-//! Engine parity golden tests (issue #431's lane E2, SCOPE item 5):
+//! Engine parity golden tests (issue #431, SCOPE item 5):
 //! the same document, recorded against both `cof` and `electricity`
 //! (`PARITY_CASES` in `oscilloscope/scripts/record_fixtures.py`,
 //! `--parity-only`), must produce the same osi `--log` lines once
