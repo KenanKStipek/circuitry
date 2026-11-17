@@ -1,0 +1,6 @@
+name: c-ollama-proxy-all-proxy-fallback-lowercase-wins
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

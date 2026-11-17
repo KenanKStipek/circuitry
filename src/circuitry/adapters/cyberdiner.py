@@ -69,6 +69,7 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .. import http_conventions
 from ..core.cancellation import acquire_promptly
 from ..curl_support import redact_host_url
 from ..preflight import CheckResult
@@ -144,9 +145,9 @@ def _unwrap(body: dict[str, Any], url: str) -> dict[str, Any]:
     data = body.get("data")
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"cyberdiner: response from {url} is not a CyberDiner job envelope — "
-            "expected a top-level `data` object (expo wraps every job in "
-            f"ApiEnvelope). Got: {json.dumps(body)[:200]}"
+            f"cyberdiner: response from {http_conventions.redact_request_url(url)} is not a "
+            "CyberDiner job envelope — expected a top-level `data` object (expo wraps "
+            f"every job in ApiEnvelope). Got: {json.dumps(body)[:200]}"
         )
     return data
 
@@ -218,14 +219,27 @@ class CyberdinerAdapter:
         payload: dict[str, Any] | None,
         timeout: float,
     ) -> dict[str, Any]:
+        # Checked and proxied the same way the `http` tool is -- never
+        # urllib's own default opener, which would decide the proxy
+        # under its own, different convention and let a `file://`
+        # `expo_url` read a local file (issue #778).
+        http_conventions.check_url(url)
+        display_url = http_conventions.redact_request_url(url)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        req = urllib.request.Request(url, data=body, method=method)
+        # Userinfo stripped before urllib ever sees it (issue #778):
+        # `Request.host` keeps it verbatim otherwise, so a userinfo
+        # with no port (`http://user:pass@host/`) reaches `http.client`
+        # unstripped and raises its own credential-bearing
+        # `InvalidURL("nonnumeric port: ...")`.
+        req = urllib.request.Request(
+            http_conventions.strip_request_url_userinfo(url), data=body, method=method
+        )
         req.add_header("Authorization", f"Bearer {self.token}")
         if body is not None:
             req.add_header("Content-Type", "application/json")
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with http_conventions.open_with_proxy_rule(req, timeout=timeout) as resp:
                 text = resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             detail = ""
@@ -234,19 +248,19 @@ class CyberdinerAdapter:
             except Exception:
                 detail = ""
             raise RuntimeError(
-                f"cyberdiner: HTTP {exc.code} from {url}: {exc.reason}"
+                f"cyberdiner: HTTP {exc.code} from {display_url}: {exc.reason}"
                 + (f" — {detail}" if detail else "")
             ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(
-                f"cyberdiner: request to {url} failed: {exc.reason}"
+                f"cyberdiner: request to {display_url} failed: {exc.reason}"
             ) from exc
 
         try:
             return dict(json.loads(text)) if text else {}
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                f"cyberdiner: non-JSON response from {url}: {text[:200]}"
+                f"cyberdiner: non-JSON response from {display_url}: {text[:200]}"
             ) from exc
 
     def generate(
@@ -385,12 +399,18 @@ class CyberdinerAdapter:
             )
             return CheckResult(ok=False, missing=missing)
 
+        url = self.expo_url.rstrip("/") + "/beta/jobs"
         req = urllib.request.Request(
-            self.expo_url.rstrip("/") + "/beta/jobs", method="GET"
+            http_conventions.strip_request_url_userinfo(url), method="GET"
         )
         req.add_header("Authorization", f"Bearer {self.token}")
         try:
-            with urllib.request.urlopen(req, timeout=2):
+            # Checked and proxied like every other request this
+            # adapter makes -- a bad `expo_url` (wrong scheme/port) or
+            # an unusable proxy counts as unreachable here too, the
+            # same as a connection failure (issue #778).
+            http_conventions.check_url(url)
+            with http_conventions.open_with_proxy_rule(req, timeout=2):
                 pass
         except urllib.error.HTTPError:
             # Any HTTP response (even 401/404/405) means the host answered —

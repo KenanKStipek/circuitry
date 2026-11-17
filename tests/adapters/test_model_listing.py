@@ -37,10 +37,24 @@ class FakeResponse:
         return None
 
 
+def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
+    """Replaces every opener's own ``open`` -- ``OllamaAdapter.list_models``
+    now always builds an explicit opener, the shared proxy rule (issue
+    #778), rather than calling the bare ``urllib.request.urlopen``
+    convenience function; this is the one choke point either call shape
+    goes through (the same idiom ``tests/plugins/test_http.py`` uses).
+    """
+
+    def bound(self: Any, req: Any, data: Any = None, timeout: Any = None) -> Any:
+        return fake(req, timeout)
+
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", bound)
+
+
 def fake_urlopen(payload: Any, *, seen: list[Any] | None = None) -> Any:
-    def _open(url: Any, timeout: float | None = None) -> FakeResponse:
+    def _open(req: Any, timeout: float | None = None) -> FakeResponse:
         if seen is not None:
-            seen.append((url, timeout))
+            seen.append((req.full_url, timeout))
         return FakeResponse(json.dumps(payload).encode("utf-8"))
 
     return _open
@@ -108,10 +122,7 @@ def test_ollama_lists_installed_tags(monkeypatch: pytest.MonkeyPatch) -> None:
             {"name": "llama3.2:latest"},
         ]
     }
-    monkeypatch.setattr(
-        "circuitry.adapters.ollama.urllib.request.urlopen",
-        fake_urlopen(payload, seen=seen),
-    )
+    _patch_opener_open(monkeypatch, fake_urlopen(payload, seen=seen))
 
     adapter = OllamaAdapter(base_url="http://box:11434/")
     assert adapter.list_models() == ["gpt-oss:20b", "llama3.2:latest", "phi3:mini"]
@@ -125,10 +136,10 @@ def test_ollama_lists_installed_tags(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_ollama_degrades_to_empty_when_the_daemon_is_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def boom(url: Any, timeout: float | None = None) -> Any:
+    def boom(req: Any, timeout: float | None = None) -> Any:
         raise OSError("connection refused")
 
-    monkeypatch.setattr("circuitry.adapters.ollama.urllib.request.urlopen", boom)
+    _patch_opener_open(monkeypatch, boom)
     assert OllamaAdapter().list_models() == []
 
 
@@ -138,9 +149,7 @@ def test_ollama_degrades_to_empty_when_the_daemon_is_down(
 def test_ollama_survives_a_surprising_payload(
     monkeypatch: pytest.MonkeyPatch, payload: Any
 ) -> None:
-    monkeypatch.setattr(
-        "circuitry.adapters.ollama.urllib.request.urlopen", fake_urlopen(payload)
-    )
+    _patch_opener_open(monkeypatch, fake_urlopen(payload))
     assert OllamaAdapter().list_models() == []
 
 
@@ -178,10 +187,7 @@ def test_list_adapter_models_builds_from_runtime_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[Any] = []
-    monkeypatch.setattr(
-        "circuitry.adapters.ollama.urllib.request.urlopen",
-        fake_urlopen({"models": [{"name": "phi3:mini"}]}, seen=seen),
-    )
+    _patch_opener_open(monkeypatch, fake_urlopen({"models": [{"name": "phi3:mini"}]}, seen=seen))
     models = list_adapter_models(
         adapter_name="ollama",
         runtime={"adapters": {"ollama": {"base_url": "http://elsewhere:11434"}}},

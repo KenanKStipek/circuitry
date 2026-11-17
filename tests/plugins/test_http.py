@@ -36,6 +36,20 @@ class _FakeResponse:
         return None
 
 
+def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
+    """Replaces every opener's own ``open`` (the ``http`` plugin now always
+    builds an explicit opener, the shared proxy rule (issue #778),
+    rather than calling the bare ``urllib.request.urlopen`` convenience
+    function) -- a single choke
+    point ``urlopen()`` itself also goes through, so either call shape
+    lands on *fake*."""
+
+    def bound(self: Any, req: Any, data: Any = None, timeout: Any = None) -> Any:
+        return fake(req, timeout)
+
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", bound)
+
+
 def _install_fake_urlopen(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -58,7 +72,7 @@ def _install_fake_urlopen(
             status=status, body=body.encode("utf-8"), headers=headers
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +168,27 @@ def test_query_params_are_appended(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_userinfo_with_no_port_never_reaches_urllib_unstripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778: a URL with userinfo and no port
+    (``http://user:pass@host/``) builds a plain
+    ``urllib.request.Request`` whose ``host`` keeps the userinfo
+    verbatim, which then makes CPython's own ``http.client`` raise a
+    bare, credential-bearing ``InvalidURL("nonnumeric port: ...")`` --
+    the ``Request`` is now built from the already-stripped URL, so
+    urllib never sees the userinfo at all (never mind what it would
+    have done with it).
+    """
+    capture: dict[str, Any] = {}
+    _install_fake_urlopen(monkeypatch, status=200, body="ok", capture=capture)
+
+    result = HttpPlugin().execute(params={"url": "http://user:pass@example.test/page"})
+
+    assert result.ok is True
+    assert capture["url"] == "http://example.test/page"
+
+
 def test_explicit_parse_json_overrides_content_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -205,7 +240,7 @@ def test_http_4xx_sets_ok_false_and_status_in_raw_not_exit_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """4xx/5xx fails the tool by default (ok=False); exit_code stays None."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+    _patch_opener_open(monkeypatch, _fake_urlopen_404)
 
     result = HttpPlugin().execute(params={"url": "https://example.test/missing"})
 
@@ -220,7 +255,7 @@ def test_http_4xx_with_fail_on_error_false_stays_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The opt-out param restores the old always-succeeds behaviour."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+    _patch_opener_open(monkeypatch, _fake_urlopen_404)
 
     result = HttpPlugin().execute(
         params={"url": "https://example.test/missing", "fail_on_error": False}
@@ -235,7 +270,7 @@ def test_http_4xx_fail_on_error_templated_false_string_stays_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A Mustache-rendered 'False' string must coerce to boolean False too."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+    _patch_opener_open(monkeypatch, _fake_urlopen_404)
 
     result = HttpPlugin().execute(
         params={"url": "https://example.test/missing", "fail_on_error": "False"}
@@ -270,7 +305,7 @@ def test_http_4xx_stderr_includes_reason_but_not_a_canary_secret(
     redacted excerpt of the response body (the JSON error/message/detail
     field) — a validation reason makes it in, a sibling credential-shaped
     field does not."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_400_with_reason_and_secret)
+    _patch_opener_open(monkeypatch, _fake_urlopen_400_with_reason_and_secret)
 
     result = HttpPlugin().execute(params={"url": "https://example.test/items"})
 
@@ -286,10 +321,65 @@ def test_url_error_raises_actionable_runtime_error(
     def fake_urlopen(req: Any, timeout: int = 0) -> Any:
         raise URLError("Name or service not known")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     with pytest.raises(RuntimeError, match="Name or service not known"):
         HttpPlugin().execute(params={"url": "https://nonsuch.test/"})
+
+
+def test_url_error_never_names_a_password_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778: the connection-failure message names the URL
+    through ``redact_request_url``, so a password in it never reaches the
+    message -- the same guarantee electricity's ``http`` tool now
+    gives too.
+    """
+
+    def fake_urlopen(req: Any, timeout: int = 0) -> Any:
+        raise URLError("Name or service not known")
+
+    _patch_opener_open(monkeypatch, fake_urlopen)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        HttpPlugin().execute(params={"url": "https://alice:s3cr3t@nonsuch.test/"})
+    message = str(exc_info.value)
+    assert "alice" not in message
+    assert "s3cr3t" not in message
+    assert message.startswith("HTTP request to https://nonsuch.test/ failed:")
+
+
+def test_url_error_never_names_a_password_hidden_behind_a_slash_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778: a password made only of digits before the ``/``
+    passes the strict-port check (the host is legitimately ``alice``),
+    but the rest of it, hidden behind the ``/``, must still never
+    reach the connection-failure message.
+    """
+
+    def fake_urlopen(req: Any, timeout: int = 0) -> Any:
+        raise URLError("Name or service not known")
+
+    _patch_opener_open(monkeypatch, fake_urlopen)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        HttpPlugin().execute(params={"url": "https://alice:443/secret@nonsuch.test/"})
+    message = str(exc_info.value)
+    assert "secret" not in message
+    assert message.startswith("HTTP request to https://nonsuch.test/ failed:")
+
+
+def test_a_url_with_no_scheme_never_names_a_password_in_the_scheme_refusal() -> None:
+    """Issue #778: ``alice:pw@host/x`` has no ``://`` at all, so
+    ``check_url``'s scheme refusal must still redact it -- the same
+    way a schemeless proxy value already is -- never echoing ``pw``.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        HttpPlugin().execute(params={"url": "alice:pw@host/x"})
+    message = str(exc_info.value)
+    assert "pw" not in message
+    assert message == "unsupported URL scheme 'alice' in 'host/x': only http or https is supported"
 
 
 def test_missing_url_raises() -> None:

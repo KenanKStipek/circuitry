@@ -103,15 +103,27 @@ class RecordedRequest:
     query: list[list[str]]
     headers: dict[str, str]
     body: str
+    #: The raw request-line target when it was sent in absolute form
+    #: (``GET http://example.invalid/x HTTP/1.1``, issue #778 step 7's own
+    #: proxy cases: this is the one way the mock server can observe, and a
+    #: case can commit, whether a client sent a proxied absolute-form
+    #: request or an ordinary origin-form one). ``None`` for an ordinary
+    #: origin-form request -- the overwhelming majority of existing
+    #: fixtures, which never set this key in ``to_json()`` at all, so no
+    #: other case's committed ``expected.http_requests.json`` changes shape.
+    absolute_form_target: str | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        result = {
             "method": self.method,
             "path": self.path,
             "query": self.query,
             "headers": self.headers,
             "body": self.body,
         }
+        if self.absolute_form_target is not None:
+            result["absolute_form_target"] = self.absolute_form_target
+        return result
 
 
 def _load_fixture(path: Path) -> list[_Matcher]:
@@ -282,12 +294,25 @@ def _make_handler(server: MockHttpServer) -> type[BaseHTTPRequestHandler]:
         def _handle(self, *, write_body: bool = True) -> None:
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length).decode("utf-8") if length else ""
-            split = urlsplit(self.path)
+            raw_target = self.path
+            split = urlsplit(raw_target)
+            # An absolute-form request line (`GET http://host/x HTTP/1.1`,
+            # what a client sends to a forward proxy rather than to the
+            # origin directly) is the one thing `self.path` carries that
+            # `split.path` alone throws away -- `split.scheme`/`split.
+            # netloc` are only ever non-empty for that form, never for an
+            # ordinary origin-form request.
+            absolute_form_target = raw_target if split.scheme and split.netloc else None
             headers = {k: v for k, v in self.headers.items() if k.lower() != "user-agent"}
             query = [[k, v] for k, v in parse_qsl(split.query, keep_blank_values=True)]
             server._record(
                 RecordedRequest(
-                    method=self.command, path=split.path, query=query, headers=headers, body=body
+                    method=self.command,
+                    path=split.path,
+                    query=query,
+                    headers=headers,
+                    body=body,
+                    absolute_form_target=absolute_form_target,
                 )
             )
             matcher, error = server._next_matcher(method=self.command, path=split.path)

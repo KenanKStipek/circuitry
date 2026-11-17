@@ -248,7 +248,7 @@ def _run_electricity(
             case_dir,
             home_dir,
             leftover_replies_path=leftover_replies_path,
-            extra_env=metadata.get("env"),
+            extra_env=harness.materialize_env(metadata.get("env"), mock_http_port=mock_http_port),
             fake_credentials=metadata.get("fake_credentials"),
         ),
         capture_output=True,

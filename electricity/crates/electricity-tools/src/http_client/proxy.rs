@@ -1,143 +1,222 @@
-//! `urllib.request.getproxies_environment`/`proxy_bypass_environment`,
-//! ported (lane E, issue #485) -- the one proxy convention this lane
-//! implements (#448 decision 1: the `http` tool follows urllib's own
-//! rule; curl's own convention, for lane F2's adapters, is a separate,
-//! later extension of this module). Pure functions over an explicit
-//! environment snapshot, never `std::env` directly, so a test (and the
-//! generator's own differential corpus replay) can drive them with a
-//! synthetic environment instead of the process's real one -- the
-//! lane's own environment-isolation rule (every test that resolves a
-//! proxy sets or clears every `*_proxy`/`*_PROXY` variable explicitly).
+//! `circuitry.http_conventions`'s proxy rule, ported (issue #778) --
+//! one convention, shared by the `http` tool
+//! ([`resolve_proxy_checked`] below) and every adapter
+//! (`electricity-adapters::transport`, which calls this same function
+//! rather than keeping its own, separate copy). Circuitry decides the
+//! proxy itself: neither urllib's nor curl's own environment-reading
+//! convention applies on either engine any more. Every caller gets the
+//! checked `Result` form -- a proxy value that can't be used (an
+//! unsupported scheme, an invalid port) is refused outright, never
+//! silently treated as "no proxy" and sent direct.
+//!
+//! Pure functions over an explicit environment snapshot, never
+//! `std::env` directly, so a test (and the generator's own differential
+//! corpus replay) can drive them with a synthetic environment instead of
+//! the process's real one -- every test that resolves a proxy sets or
+//! clears every `*_proxy`/`*_PROXY` variable explicitly.
 
-/// `getproxies_environment()`'s own two-pass precedence rule: *env* is
-/// `(name, value)` pairs in the process's own declaration order (the
-/// order `os.environ.items()`/`std::env::vars()` both iterate in, read
-/// straight from the C `environ` array on every platform this crate
-/// targets) -- first *any* case-insensitive `<scheme>_proxy` sets
-/// `proxies[scheme]`, last one in iteration order winning; then, if
-/// `REQUEST_METHOD` is present (CPython's own CGI guard, CVE-2016-
-/// 1000110), the `http` entry set by that first pass is discarded
-/// outright; then a second pass considers only a variable whose own,
-/// *unlowered* name already ends in `_proxy` (so `HTTP_PROXY` never
-/// qualifies here, only `http_proxy` does) -- a non-empty value
-/// overwrites `proxies[scheme]` regardless of what the first pass
-/// found (restoring an `http` entry the CGI guard just removed, if a
-/// lowercase `http_proxy` exists), and an *empty* value instead
-/// removes that scheme's entry outright, even one the first pass set
-/// from an uppercase variable.
-pub fn getproxies_environment(env: &[(String, String)]) -> Vec<(String, String)> {
-    let mut proxies: Vec<(String, String)> = Vec::new();
-    let set = |proxies: &mut Vec<(String, String)>, scheme: String, value: String| {
-        if let Some(entry) = proxies.iter_mut().find(|(k, _)| *k == scheme) {
-            entry.1 = value;
-        } else {
-            proxies.push((scheme, value));
-        }
-    };
-    let remove = |proxies: &mut Vec<(String, String)>, scheme: &str| {
-        proxies.retain(|(k, _)| k != scheme);
-    };
-
-    for (name, value) in env {
-        let lower = name.to_lowercase();
-        if !value.is_empty() && lower.ends_with("_proxy") {
-            let scheme = lower[..lower.len() - "_proxy".len()].to_string();
-            set(&mut proxies, scheme, value.clone());
+fn env_first(env: &[(String, String)], names: &[&str]) -> Option<String> {
+    for name in names {
+        if let Some((_, value)) = env.iter().find(|(k, _)| k == name) {
+            if !value.is_empty() {
+                return Some(value.clone());
+            }
         }
     }
-    if env.iter().any(|(name, _)| name == "REQUEST_METHOD") {
-        remove(&mut proxies, "http");
-    }
-    for (name, value) in env {
-        if !name.ends_with("_proxy") {
-            continue;
-        }
-        let scheme = name[..name.len() - "_proxy".len()].to_lowercase();
-        if value.is_empty() {
-            remove(&mut proxies, &scheme);
-        } else {
-            set(&mut proxies, scheme, value.clone());
-        }
-    }
-    proxies
+    None
 }
 
-/// `proxy_bypass_environment(host)`: *proxies* is [`getproxies_environment`]'s
-/// own result; *host* is the already-split `hostname[:port]` (urllib's
-/// own `req.host`, which already strips userinfo). `no_proxy == "*"`
-/// bypasses every host; otherwise each comma-separated entry (leading/
-/// trailing whitespace, and a leading dot, both ignored) matches a
-/// bare hostname exactly, a subdomain by suffix (`hostonly == name` or
-/// `hostonly` ends with `"." + name`), or `host:port` verbatim against
-/// an entry that itself carries a port. No special-case for
-/// `localhost`/loopback -- issue #485's own ruling: unlike curl/most
-/// browsers, urllib's own rule exempts nothing unless `no_proxy` says
-/// so.
-pub fn proxy_bypass_environment(proxies: &[(String, String)], host: &str) -> bool {
-    let Some((_, no_proxy)) = proxies.iter().find(|(k, _)| k == "no") else {
-        return false;
-    };
-    if no_proxy == "*" {
+fn is_ip_address(text: &str) -> bool {
+    text.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// *host_lower* matches a bare (no-port) `no_proxy` *entry*: once
+/// *host_lower* is itself an IP address, only an exact match counts --
+/// never a domain suffix (issue #778 -- `0.0.1`
+/// must never bypass `127.0.0.1` just because the text happens to end
+/// the same way a real domain suffix would); a named host matches
+/// *host_lower* exactly or as a domain suffix (a leading dot optional).
+fn host_matches_entry(host_lower: &str, entry: &str) -> bool {
+    if is_ip_address(host_lower) {
+        return host_lower == entry;
+    }
+    host_lower == entry || host_lower.ends_with(&format!(".{entry}"))
+}
+
+/// The scheme's own default port -- used only to decide whether a
+/// `host:port` `no_proxy` entry matches a URL that named no port of
+/// its own: `example.com:443` still matches a portless
+/// `https://example.com/` (issue #778).
+fn scheme_default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" => Some(80),
+        "https" => Some(443),
+        _ => None,
+    }
+}
+
+/// The proxy rule's `no_proxy`/`NO_PROXY`: a comma-separated list; `*`
+/// bypasses everything, and a named entry matches *host* exactly or as
+/// a domain suffix (a leading dot is optional). An IP entry matches
+/// only that exact IP (no suffix, no CIDR). A `host:port` entry (the
+/// host part not itself an IP) bypasses only that host on that exact
+/// *port* -- *port* `None` (the URL named none of its own) falls back
+/// to *scheme*'s own default rather than never matching (issue #778).
+fn no_proxy_bypasses(no_proxy: &str, scheme: &str, host: &str, port: Option<u16>) -> bool {
+    if no_proxy.trim() == "*" {
         return true;
     }
-    let host_lower = host.to_lowercase();
-    let (hostonly, port) = split_host_port(&host_lower);
+    let effective_port = port.or_else(|| scheme_default_port(scheme));
+    let host_lower = host.to_ascii_lowercase();
     for raw_entry in no_proxy.split(',') {
-        let entry = raw_entry.trim();
+        let entry = raw_entry.trim().to_ascii_lowercase();
         if entry.is_empty() {
             continue;
         }
-        let name = entry.trim_start_matches('.').to_lowercase();
-        if name.is_empty() {
-            continue;
-        }
-        if hostonly == name || hostonly.ends_with(&format!(".{name}")) {
-            return true;
-        }
-        if let Some(port) = port {
-            if format!("{hostonly}:{port}") == name {
+        if is_ip_address(&entry) || is_ip_address(&host_lower) {
+            if host_lower == entry {
                 return true;
             }
+            continue;
+        }
+        if let Some((entry_host, entry_port_text)) = entry.rsplit_once(':') {
+            if !entry_host.is_empty()
+                && !entry_port_text.is_empty()
+                && entry_port_text.chars().all(|c| c.is_ascii_digit())
+            {
+                if let (Some(port), Ok(entry_port)) =
+                    (effective_port, entry_port_text.parse::<u16>())
+                {
+                    if entry_port == port
+                        && host_matches_entry(&host_lower, entry_host.trim_start_matches('.'))
+                    {
+                        return true;
+                    }
+                }
+                continue;
+            }
+        }
+        if host_matches_entry(&host_lower, entry.trim_start_matches('.')) {
+            return true;
         }
     }
     false
 }
 
-/// `_splitport`-equivalent: the last `:` (if any) that isn't part of an
-/// IPv6 literal's own brackets splits the host from the port --
-/// `host[:port]` only ever carries one `:` outside brackets in
-/// practice here (a bracketed IPv6 literal's own colons are never
-/// split), so a plain `rsplit_once` after stripping brackets suffices.
-fn split_host_port(host: &str) -> (String, Option<&str>) {
-    if let Some(rest) = host.strip_prefix('[') {
-        if let Some((addr, after)) = rest.split_once(']') {
-            let port = after.strip_prefix(':').filter(|p| !p.is_empty());
-            return (format!("[{addr}]"), port);
-        }
-    }
-    match host.rsplit_once(':') {
-        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
-            (h.to_string(), Some(p))
-        }
-        _ => (host.to_string(), None),
-    }
-}
-
-/// The `http`/`https` proxy URL for *scheme*/*host* under urllib's own
-/// convention, `None` when there's no proxy configured for *scheme* or
-/// `no_proxy` bypasses *host* -- [`crate::http::HttpPlugin`]'s own
-/// caller; *env* is the same explicit snapshot [`getproxies_environment`]
-/// takes (never read from the real process environment inside this
-/// function either, for the same test-isolation reason).
-pub fn resolve_proxy(scheme: &str, host: &str, env: &[(String, String)]) -> Option<String> {
-    let proxies = getproxies_environment(env);
-    if proxy_bypass_environment(&proxies, host) {
+/// The proxy rule's scheme-specific lookup, before the
+/// `all_proxy`/`ALL_PROXY` fallback: an `http` URL uses `http_proxy`, lowercase only -- uppercase
+/// `HTTP_PROXY` is never read; an `https` URL uses `https_proxy`, then
+/// `HTTPS_PROXY`.
+fn proxy_value(
+    scheme: &str,
+    host: &str,
+    port: Option<u16>,
+    env: &[(String, String)],
+) -> Option<String> {
+    let no_proxy = env_first(env, &["no_proxy", "NO_PROXY"]).unwrap_or_default();
+    if no_proxy_bypasses(&no_proxy, scheme, host, port) {
         return None;
     }
-    proxies
-        .iter()
-        .find(|(k, _)| k == scheme)
-        .map(|(_, v)| v.clone())
+    let scheme_specific = match scheme {
+        "http" => env_first(env, &["http_proxy"]),
+        "https" => env_first(env, &["https_proxy", "HTTPS_PROXY"]),
+        _ => None,
+    };
+    scheme_specific.or_else(|| env_first(env, &["all_proxy", "ALL_PROXY"]))
+}
+
+/// [`resolve_proxy_checked_with_port`] with no port of its own to
+/// name -- a `host:port` `no_proxy` entry still matches against
+/// *scheme*'s own default port then, never "no such entry can ever
+/// match" (issue #778) -- the plain form every existing test (and
+/// `electricity-adapters::transport`'s own two real call sites'
+/// *predecessor*) uses.
+pub fn resolve_proxy_checked(
+    scheme: &str,
+    host: &str,
+    env: &[(String, String)],
+) -> Result<Option<String>, String> {
+    resolve_proxy_checked_with_port(scheme, host, None, env)
+}
+
+/// The proxy rule for *scheme*/*host*(:*port*), normalized and checked
+/// -- *env* an explicit snapshot, never read from the real process
+/// environment by this function. `Ok(None)` when no proxy applies
+/// (unset, or `no_proxy` bypasses *host*); `Ok(Some(url))` with a
+/// `http://`-scheme URL (a value with no `scheme://` prefix defaults to
+/// that); `Err` with Circuitry's own refusal text when the value names
+/// an unsupported proxy scheme, or its port is strictly invalid.
+/// *port* only ever matters for a `host:port` `no_proxy` entry (issue
+/// #778); `None` (the caller's own URL named no port of its own)
+/// still matches such an entry against *scheme*'s own default port,
+/// never "can never match" -- see [`no_proxy_bypasses`]'s own
+/// `effective_port`.
+pub fn resolve_proxy_checked_with_port(
+    scheme: &str,
+    host: &str,
+    port: Option<u16>,
+    env: &[(String, String)],
+) -> Result<Option<String>, String> {
+    let Some(value) = proxy_value(scheme, host, port, env) else {
+        return Ok(None);
+    };
+    let normalized = if value.contains("://") {
+        value
+    } else {
+        format!("http://{value}")
+    };
+    let proxy_scheme = normalized
+        .split_once("://")
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    // A proxy value has no meaningful path, so its own control-
+    // character/scheme/port checks never use `check_scheme`/
+    // `strict_port`'s own `urlsplit`-bounded authority -- a password
+    // containing `/`, `?`, `#` or whitespace must still be removed in
+    // full from any refusal this raises (issue #778).
+    crate::http_conventions::check_no_control_or_whitespace(
+        &normalized,
+        crate::http_conventions::redact_proxy_value,
+    )?;
+    if !proxy_scheme.eq_ignore_ascii_case("http") {
+        return Err(format!(
+            "unsupported proxy scheme '{proxy_scheme}' in '{}': only http:// proxies are \
+             supported",
+            crate::http_conventions::redact_proxy_value(&normalized)
+        ));
+    }
+    crate::http_conventions::strict_port_for_proxy(&normalized)?;
+    Ok(Some(with_default_port(&normalized, 80)?))
+}
+
+/// *url* with `:<default_port>` written right after its authority
+/// (`http_conventions::proxy_authority`, never `urlsplit`'s own
+/// `/`/`?`/`#`-bounded netloc) when it names no port of its own, not
+/// even an empty one -- curl's own default for a schemeless/portless
+/// proxy is 1080, its historic SOCKS convention, never this module's
+/// own 80, so the default is written in explicitly rather than left for curl (or
+/// `http.rs`'s own port-defaulting, which would otherwise use the
+/// *target* URL's scheme) to guess (issue #778). The authority is no
+/// longer always a suffix of *url* -- a trailing `/`, `?` or `#` (and
+/// whatever follows it) can come after it -- so the default port is
+/// spliced in right after the authority ends, never appended to the
+/// end of *url* itself.
+fn with_default_port(url: &str, default_port: u16) -> Result<String, String> {
+    let authority = crate::http_conventions::proxy_authority(url)?;
+    let host_port = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
+    if crate::http_conventions::host_port_text(host_port).is_some_and(|text| !text.is_empty()) {
+        return Ok(url.to_string());
+    }
+    let authority_end = url.find("://").map(|i| i + 3).unwrap_or(0) + authority.len();
+    let separator = if host_port.ends_with(':') { "" } else { ":" };
+    Ok(format!(
+        "{}{separator}{default_port}{}",
+        &url[..authority_end],
+        &url[authority_end..]
+    ))
 }
 
 #[cfg(test)]
@@ -152,102 +231,182 @@ mod tests {
     }
 
     #[test]
-    fn lowercase_wins_over_uppercase_regardless_of_order() {
+    fn lowercase_http_proxy_wins_over_uppercase() {
         let e = env(&[
-            ("HTTP_PROXY", "http://upper:1"),
             ("http_proxy", "http://lower:2"),
+            ("HTTP_PROXY", "http://upper:1"),
         ]);
-        let proxies = getproxies_environment(&e);
         assert_eq!(
-            proxies
-                .iter()
-                .find(|(k, _)| k == "http")
-                .map(|(_, v)| v.as_str()),
-            Some("http://lower:2")
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            Some("http://lower:2".to_string())
         );
     }
 
     #[test]
-    fn uppercase_http_proxy_is_ignored_under_cgi() {
-        let e = env(&[("HTTP_PROXY", "http://upper:1"), ("REQUEST_METHOD", "GET")]);
-        let proxies = getproxies_environment(&e);
-        assert!(proxies.iter().find(|(k, _)| k == "http").is_none());
-    }
-
-    #[test]
-    fn lowercase_http_proxy_survives_cgi_even_after_the_uppercase_guard() {
-        let e = env(&[
-            ("HTTP_PROXY", "http://upper:1"),
-            ("http_proxy", "http://lower:2"),
-            ("REQUEST_METHOD", "GET"),
-        ]);
-        let proxies = getproxies_environment(&e);
+    fn uppercase_http_proxy_is_never_read() {
+        let e = env(&[("HTTP_PROXY", "http://upper:1")]);
         assert_eq!(
-            proxies
-                .iter()
-                .find(|(k, _)| k == "http")
-                .map(|(_, v)| v.as_str()),
-            Some("http://lower:2")
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            None
         );
     }
 
     #[test]
-    fn an_empty_lowercase_value_removes_an_uppercase_hit() {
-        let e = env(&[("HTTPS_PROXY", "http://upper:1"), ("https_proxy", "")]);
-        let proxies = getproxies_environment(&e);
-        assert!(proxies.iter().find(|(k, _)| k == "https").is_none());
+    fn https_falls_back_from_lowercase_to_uppercase() {
+        let e = env(&[("HTTPS_PROXY", "http://upper:1")]);
+        assert_eq!(
+            resolve_proxy_checked("https", "example.com", &e).unwrap(),
+            Some("http://upper:1".to_string())
+        );
+    }
+
+    #[test]
+    fn both_schemes_fall_back_to_all_proxy_then_uppercase() {
+        let e = env(&[("all_proxy", "http://p:1")]);
+        assert_eq!(
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+        let e = env(&[("ALL_PROXY", "http://p:1")]);
+        assert_eq!(
+            resolve_proxy_checked("https", "example.com", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+    }
+
+    #[test]
+    fn a_schemeless_proxy_value_defaults_to_http() {
+        let e = env(&[("http_proxy", "proxy.corp:3128")]);
+        assert_eq!(
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            Some("http://proxy.corp:3128".to_string())
+        );
     }
 
     #[test]
     fn no_proxy_star_bypasses_everything() {
-        let proxies = env(&[("no", "*")]);
-        assert!(proxy_bypass_environment(&proxies, "example.com"));
-    }
-
-    #[test]
-    fn no_proxy_matches_a_suffix_with_a_leading_dot() {
-        let proxies = env(&[("no", ".example.com")]);
-        assert!(proxy_bypass_environment(&proxies, "api.example.com"));
-        assert!(proxy_bypass_environment(&proxies, "example.com"));
-        assert!(!proxy_bypass_environment(&proxies, "notexample.com"));
-    }
-
-    #[test]
-    fn no_proxy_matches_a_bare_hostname_exactly() {
-        let proxies = env(&[("no", "example.com")]);
-        assert!(proxy_bypass_environment(&proxies, "example.com"));
-        assert!(!proxy_bypass_environment(&proxies, "other.com"));
-    }
-
-    #[test]
-    fn no_proxy_is_port_aware() {
-        let proxies = env(&[("no", "example.com:8080")]);
-        assert!(proxy_bypass_environment(&proxies, "example.com:8080"));
-        assert!(!proxy_bypass_environment(&proxies, "example.com:9090"));
-        assert!(!proxy_bypass_environment(&proxies, "example.com"));
-    }
-
-    #[test]
-    fn loopback_is_not_exempt_unless_listed() {
-        let proxies = env(&[("http_proxy", "http://proxy:3128")]);
+        let e = env(&[("http_proxy", "http://p:1"), ("no_proxy", "*")]);
         assert_eq!(
-            resolve_proxy("http", "127.0.0.1:8080", &proxies),
-            Some("http://proxy:3128".to_string())
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            None
         );
     }
 
     #[test]
-    fn resolve_proxy_returns_none_when_bypassed() {
-        let e = env(&[
-            ("http_proxy", "http://proxy:3128"),
-            ("no_proxy", "example.com"),
-        ]);
-        assert_eq!(resolve_proxy("http", "example.com", &e), None);
+    fn no_proxy_matches_host_exactly_and_by_suffix_with_leading_dot_optional() {
+        let e = env(&[("http_proxy", "http://p:1"), ("no_proxy", ".example.com")]);
+        assert_eq!(
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_proxy_checked("http", "api.example.com", &e).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_proxy_checked("http", "notexample.com", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
     }
 
     #[test]
-    fn resolve_proxy_returns_none_when_no_scheme_entry() {
-        let e = env(&[("https_proxy", "http://proxy:3128")]);
-        assert_eq!(resolve_proxy("http", "example.com", &e), None);
+    fn no_proxy_ip_entry_matches_only_that_exact_ip() {
+        // Issue #778: `0.0.1` must not bypass `127.0.0.1` by suffix.
+        let e = env(&[("http_proxy", "http://p:1"), ("no_proxy", "0.0.1")]);
+        assert_eq!(
+            resolve_proxy_checked("http", "127.0.0.1", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+        assert_eq!(resolve_proxy_checked("http", "0.0.1", &e).unwrap(), None);
+    }
+
+    #[test]
+    fn no_proxy_host_port_entry_matches_only_that_host_on_that_port() {
+        let e = env(&[
+            ("http_proxy", "http://p:1"),
+            ("no_proxy", "example.com:8080"),
+        ]);
+        assert_eq!(
+            resolve_proxy_checked_with_port("http", "example.com", Some(8080), &e).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_proxy_checked_with_port("http", "example.com", Some(80), &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+        assert_eq!(
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+    }
+
+    #[test]
+    fn no_proxy_host_port_entry_matches_a_urls_implicit_default_port() {
+        // Issue #778: `example.com:443` still matches a portless
+        // `https://example.com/` -- the URL's own implicit port is
+        // 443, the https default, not "no port to compare against".
+        let e = env(&[
+            ("https_proxy", "http://p:1"),
+            ("no_proxy", "example.com:443"),
+        ]);
+        assert_eq!(
+            resolve_proxy_checked("https", "example.com", &e).unwrap(),
+            None
+        );
+        // An explicit, non-default port on the same host still
+        // doesn't match the entry.
+        assert_eq!(
+            resolve_proxy_checked_with_port("https", "example.com", Some(8443), &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+    }
+
+    #[test]
+    fn no_proxy_uppercase_fallback() {
+        let e = env(&[("http_proxy", "http://p:1"), ("NO_PROXY", "example.com")]);
+        assert_eq!(
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_proxy_checked_rejects_a_non_http_proxy_scheme() {
+        let e = env(&[("http_proxy", "socks5://host:1080")]);
+        let err = resolve_proxy_checked("http", "example.com", &e).unwrap_err();
+        assert_eq!(
+            err,
+            "unsupported proxy scheme 'socks5' in 'socks5://host:1080': only http:// proxies \
+             are supported"
+        );
+    }
+
+    #[test]
+    fn resolve_proxy_checked_rejects_an_invalid_proxy_port() {
+        let e = env(&[("http_proxy", "http://host:99999")]);
+        assert!(resolve_proxy_checked("http", "example.com", &e).is_err());
+    }
+
+    #[test]
+    fn resolve_proxy_checked_writes_the_default_port_80_explicitly() {
+        // Issue #778: never left for curl's own 1080 default, or for
+        // `http.rs`'s own target-scheme-dependent fallback, to decide.
+        for (value, expected) in [
+            ("proxy.corp", "http://proxy.corp:80"),
+            ("http://proxy.corp", "http://proxy.corp:80"),
+            ("http://proxy.corp:", "http://proxy.corp:80"),
+            (
+                "http://user:pass@proxy.corp",
+                "http://user:pass@proxy.corp:80",
+            ),
+            ("http://proxy.corp:3128", "http://proxy.corp:3128"),
+        ] {
+            let e = env(&[("http_proxy", value)]);
+            assert_eq!(
+                resolve_proxy_checked("http", "example.com", &e).unwrap(),
+                Some(expected.to_string()),
+                "value: {value}"
+            );
+        }
     }
 }

@@ -205,8 +205,9 @@ const LIMITED_SAVE_TO: &str = "only a document run by path may save a response t
 
 /// `core/tool.py::_HTTP_FAMILY_PROVIDERS` -- a local copy, not a call
 /// into `crate::retry`'s own private `is_http_family_provider` (issue
-/// #485's own scope note: `retry.rs` is final except for
-/// `parse_retry_after_seconds`'s own widening). *provider* is the
+/// #485's own scope note: `retry.rs` is final apart from later fixes to
+/// `parse_retry_after_seconds` itself, issue #778 step 7 included).
+/// *provider* is the
 /// tool's own `provider:` as written, never normalized -- a ` HTTP `
 /// provider still dispatches the `http` plugin (`resolve_plugin`'s own
 /// `.strip().lower()`) but is never classified HTTP family, so

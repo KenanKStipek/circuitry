@@ -1,0 +1,9 @@
+- request:
+    method: GET
+    path: /bypassed
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"via": "direct"}'

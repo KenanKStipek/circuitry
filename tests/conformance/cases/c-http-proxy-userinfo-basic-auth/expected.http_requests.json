@@ -1,0 +1,27 @@
+[
+  {
+    "method": "GET",
+    "path": "/authed",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "example.invalid"
+      ],
+      [
+        "proxy-authorization",
+        "Basic cHJveHl1c2VyOnByb3h5cGFzcw=="
+      ]
+    ],
+    "body": "",
+    "absolute_form_target": "http://example.invalid/authed"
+  }
+]

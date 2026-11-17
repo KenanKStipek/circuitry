@@ -36,6 +36,7 @@ pub mod gh;
 pub mod hash;
 pub mod http;
 pub mod http_client;
+pub mod http_conventions;
 pub mod imagemagick;
 pub mod json;
 // `PLUGIN_NAMES` itself lives in `electricity-bytecode` (issue #511): the

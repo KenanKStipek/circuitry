@@ -20,11 +20,13 @@ import pytest
 from curl_test_support import RecordingJSONHandler, assert_not_in_argv, local_server
 
 from circuitry.curl_support import (
+    _curl_config_file,
     _curl_supports_retry_after_header,
     curl_error_code,
     curl_failure_message,
     extract_retry_after,
     parse_error_code,
+    probe_head,
     redact_host_url,
     run_curl,
 )
@@ -48,10 +50,14 @@ def test_url_userinfo_is_stripped() -> None:
     assert "example.test/v1/chat" in message
 
 
-def test_url_userinfo_in_hint_is_also_stripped() -> None:
-    """The ollama exit-7 hint interpolates `self.base_url` directly, not the
-    `url` argument — the stripping must apply to the whole rendered message,
-    not just the `url=` field."""
+def test_hint_is_passed_through_verbatim_the_caller_must_redact_it_first() -> None:
+    """`curl_failure_message` only redacts its own `url=` field (issue
+    #778) -- a caller that builds a `hint` naming a URL (the ollama
+    exit-7 hint interpolates `self.base_url` directly, not the `url`
+    argument) must redact it itself, through
+    :func:`circuitry.http_conventions.redact_request_url` or
+    :func:`redact_host_url`, before passing it in; see
+    `adapters/ollama.py::_raise_curl_failure`."""
     message = curl_failure_message(
         source="ollama",
         model=None,
@@ -59,9 +65,9 @@ def test_url_userinfo_in_hint_is_also_stripped() -> None:
         returncode=7,
         stdout="",
         stderr="curl: (7) Failed to connect",
-        hint="Ollama at http://user:canarypw@example.test:11434 is not reachable.",
+        hint="Ollama at http://example.test:11434 is not reachable.",
     )
-    assert "canarypw" not in message
+    assert message.endswith("Ollama at http://example.test:11434 is not reachable.")
 
 
 def test_redact_host_url_strips_userinfo_for_a_preflight_host_text() -> None:
@@ -83,6 +89,26 @@ def test_redact_host_url_masks_a_credential_query_param() -> None:
 
 def test_redact_host_url_leaves_a_plain_url_untouched() -> None:
     assert redact_host_url("http://localhost:11434") == "http://localhost:11434"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://user:pa/ss@example.test:11434",
+        "http://user:pa?ss@example.test:11434",
+        "http://user:pa#ss@example.test:11434",
+    ],
+)
+def test_redact_host_url_masks_a_password_hidden_behind_a_slash_question_mark_or_hash(
+    url: str,
+) -> None:
+    """Issue #778: `urlsplit`'s own netloc for these ends at the first
+    `/`, `?` or `#`, so it never sees the `@` that follows -- the
+    password must still come out fully removed."""
+    redacted = redact_host_url(url)
+    assert redacted == "http://example.test:11434"
+    assert "pa" not in redacted
+    assert "ss" not in redacted
 
 
 def test_redact_host_url_coerces_a_non_string_value_with_str() -> None:
@@ -174,6 +200,46 @@ def test_run_curl_rejects_header_name_with_embedded_cr() -> None:
             headers={"X-Thing\r": "value"},
             timeout_seconds=5,
         )
+
+
+def test_curl_config_file_writes_a_proxy_line_plus_an_empty_noproxy() -> None:
+    """When a proxy is configured, curl's own ``no_proxy``/``NO_PROXY``
+    read must never override the proxy rule's own decision, which
+    already accounted for it (issue #778).
+    """
+    text = _curl_config_file(
+        "http://example.test/x", [("Accept", "application/json")], proxy_url="http://proxy:3128"
+    )
+    lines = text.splitlines()
+    assert 'url = "http://example.test/x"' in lines
+    assert 'header = "Accept: application/json"' in lines
+    assert 'proxy = "http://proxy:3128"' in lines
+    assert 'noproxy = ""' in lines
+
+
+def test_curl_config_file_writes_noproxy_star_with_no_proxy_configured() -> None:
+    """``noproxy = "*"`` stops curl reading ``*_proxy``/``*_PROXY``
+    itself for a request the proxy rule decided should go direct
+    (issue #778).
+    """
+    text = _curl_config_file("http://example.test/x", [], proxy_url=None)
+    lines = text.splitlines()
+    assert 'noproxy = "*"' in lines
+    assert not any(line.startswith("proxy =") for line in lines)
+
+
+def test_run_curl_refuses_a_bad_proxy_scheme_before_any_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A proxy value this adapter can't use (an unsupported scheme
+    here) is refused outright, never silently treated as "no proxy"
+    and sent direct (issue #778).
+    """
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("http_proxy", "socks5://proxy:1080")
+    with pytest.raises(ValueError, match="unsupported proxy scheme"):
+        run_curl(url="http://example.invalid/x", timeout_seconds=5)
 
 
 def test_run_curl_rejects_url_with_embedded_newline() -> None:
@@ -326,6 +392,34 @@ def test_run_curl_delivers_headers_and_body_without_putting_them_on_argv(
     assert "canary prompt text" not in cmd_str
     assert calls[0][0] == "curl"
     assert calls[0][1] == "-q"
+
+
+class _NotFoundHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every request with a plain 404 -- no body, no JSON --
+    for :func:`test_probe_head_succeeds_on_a_4xx_response` (issue
+    #778)."""
+
+    def do_HEAD(self) -> None:
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_probe_head_succeeds_on_a_4xx_response() -> None:
+    """``probe_head`` cares only that the host answered -- a 404 (or
+    401/405) means reachable, matching main's own pre-#778 probe and
+    electricity's own ``head_probe`` (issue #778): it never adds
+    ``--fail-with-body``, unlike :func:`run_curl`, which must fail a
+    4xx/5xx for its own callers.
+    """
+    with local_server(_NotFoundHandler) as base_url:
+        proc = probe_head(base_url + "/api/tags", timeout_seconds=5)
+
+    assert proc.returncode == 0
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")

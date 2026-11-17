@@ -1,9 +1,11 @@
 //! `plugins/http.py::HttpPlugin`, ported -- a single HTTP request/
 //! response over the shared client ([`crate::http_client`]), with
-//! urllib's own redirect rule, proxy convention and error shapes
-//! (issue #485, lane E). See [`http_url`] for the small `urllib.parse`
-//! subset (`urlsplit`/`urljoin`/`quote`) this file's own redirect
-//! handling needs.
+//! urllib's own redirect rule and error shapes (issue #485, lane E).
+//! The proxy convention is Circuitry's own now (issue #778), not
+//! urllib's (`http_client::resolve_proxy`/`resolve_proxy_target`
+//! below). See [`http_url`] for the small `urllib.parse` subset
+//! (`urlsplit`/`urljoin`/`quote`) this file's own redirect handling
+//! needs.
 
 use crate::http_client::{self, ConnectTarget, RawRequest, Scheme, SendError, TimeoutModel};
 use crate::{CheckResult, ErrorCause, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
@@ -44,7 +46,10 @@ fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
     match err {
         SendError::Connect { text, .. } => ToolError {
             py_class: PyExc::RuntimeError,
-            message: format!("HTTP request to {original_url} failed: {text}"),
+            message: format!(
+                "HTTP request to {} failed: {text}",
+                crate::http_conventions::redact_request_url(original_url)
+            ),
             cause: ErrorCause::NoReply,
         },
         SendError::Timeout => ToolError {
@@ -76,56 +81,49 @@ fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
     }
 }
 
-/// A scheme `urlopen()` recognizes the syntax of but has no handler
-/// for (`OpenerDirector.open`'s own dispatch, `getattr(handler, name +
-/// "_open")` failing, `unknown_open` raising `URLError('unknown url
-/// type: %s' % req.type)`) -- wrapped, inside the same `try/except
-/// URLError` as a connect failure, and retried the same way
-/// (`ErrorCause::NoReply`).
-fn unknown_url_type_failure(original_url: &str, scheme: &str) -> ToolError {
+/// A scheme other than `http`/`https` (issue #778) -- the
+/// initial URL or a redirect target alike -- is refused before any I/O,
+/// with Circuitry's own text ([`crate::http_conventions::check_scheme`]),
+/// never retried (`ErrorCause::None`): `cof run` itself now refuses the
+/// same way, before ever reaching urllib's own `FTPHandler`/`FileHandler`/
+/// `DataHandler` or its `unknown_open`'s `URLError`.
+fn scheme_refused(scheme: &str, original_url: &str) -> ToolError {
+    let message = crate::http_conventions::check_scheme(scheme, original_url, &["http", "https"])
+        .expect_err("scheme_refused is only called once check_scheme has already failed");
     ToolError {
-        py_class: PyExc::RuntimeError,
-        message: format!("HTTP request to {original_url} failed: unknown url type: {scheme}"),
-        cause: ErrorCause::NoReply,
+        py_class: PyExc::ValueError,
+        message,
+        cause: ErrorCause::None,
     }
 }
 
-/// `ftp:`/`file:`/`data:` -- schemes urllib itself *does* have a
-/// handler for (`FTPHandler`/`DataHandler`/`FileHandler`, installed by
-/// `build_opener()`'s own defaults), so `cof run` speaks real FTP,
-/// reads a local file, or decodes an inline `data:` URL. This crate
-/// implements none of that (never read a local file, never speak FTP)
-/// -- a documented divergence (DESIGN.md), refused before any I/O
-/// with electricity's own text, never cof's own eventual `TypeError`
-/// (`int(resp.status)` on a `None` status, for file/data) or a real
-/// FTP round trip.
-/// `HTTPRedirectHandler.http_error_302`'s own `"%s - Redirection to
-/// url '%s' is not allowed" % (msg, newurl)` -- pinned against real
-/// CPython in `generate_http_corpus.py`'s own `redirect_reason_cases`
-/// (issue #485), since this file never actually
-/// raises through a real `HTTPRedirectHandler` to get the text from
-/// CPython itself.
-pub fn disallowed_redirect_scheme_reason(msg: &str, newurl: &str) -> String {
-    format!("{msg} - Redirection to url '{newurl}' is not allowed")
+/// `http_conventions.check_url` (issue #778) -- *url*'s scheme (RFC 3986's own grammar via
+/// [`http_url::urlsplit`], never [`splittype`]'s looser, urllib-parse-
+/// time-only one) must be `http`/`https`, and its port must pass
+/// [`crate::http_conventions::strict_port`]. Called on *url* before
+/// [`parse_params`] -- before `save_to`'s own filesystem checks, and
+/// before `params['params']` is appended -- the same order and the
+/// same shared text `plugins/http.py::HttpPlugin.execute`'s own
+/// `http_conventions.check_url(url)` call uses, never `Request`'s own
+/// "unknown url type" text.
+fn check_url(url: &str) -> Result<(), ToolError> {
+    let split = http_url::urlsplit(url, "");
+    crate::http_conventions::check_scheme(&split.scheme, url, &["http", "https"])
+        .map_err(value_error)?;
+    crate::http_conventions::strict_port(&split.netloc, url).map_err(value_error)?;
+    Ok(())
 }
 
 /// `HTTPRedirectHandler.http_error_302`'s own `inf_msg + msg` (the two
-/// loop limits, `max_repeats`/`max_redirections`) -- same provenance
-/// note as [`disallowed_redirect_scheme_reason`] above.
+/// loop limits, `max_repeats`/`max_redirections`) -- pinned against
+/// real CPython in `generate_http_corpus.py`'s own
+/// `redirect_reason_cases` (issue #485), since this file never
+/// actually raises through a real `HTTPRedirectHandler` to get the
+/// text from CPython itself.
 pub fn redirect_loop_reason(msg: &str) -> String {
     format!(
         "The HTTP server returned a redirect error that would lead to an infinite loop.\nThe last 30x error message was:\n{msg}"
     )
-}
-
-fn unsupported_in_electricity_failure(original_url: &str, scheme: &str) -> ToolError {
-    ToolError {
-        py_class: PyExc::RuntimeError,
-        message: format!(
-            "HTTP request to {original_url} failed: scheme '{scheme}' is not supported by electricity (http/https only)"
-        ),
-        cause: ErrorCause::NoReply,
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -597,29 +595,17 @@ const ERROR_EXCERPT_MAX_CHARS: usize = 500;
 // turns it into an `Authorization` header).
 // ---------------------------------------------------------------------
 
-/// `urllib.request._splittype` -- `re.compile('([^/:]+):(.*)',
-/// re.DOTALL)`'s own `match` (anchored at position 0, so a leading `/`
-/// or no `:` at all never matches): `None` when the regex doesn't
-/// match -- `Request.__init__`'s own `ValueError: unknown url type:
-/// %r`, raised unwrapped at parse time, before `urlopen` ever runs
-/// (`unknown_scheme_or_not_http` below is the separate, *wrapped*
-/// check for a scheme this regex *does* recognize but `urlopen` has no
-/// handler for, e.g. `ftp-nope:` or a bare `127.0.0.1:8080/x`, the
-/// scheme it finds here being an IPv4 address up to its own first
-/// `:`). Deliberately looser than [`http_url::urlsplit`]'s own RFC
-/// 3986 scheme grammar (which requires an alphabetic first character)
-/// -- the two disagree on exactly this kind of input, and this is the
-/// one urllib itself actually runs at parse time.
-fn splittype(url: &str) -> Option<String> {
-    splittype_with_rest(url).0
-}
-
 /// `urllib.request._splittype`'s own full result (scheme lowercased,
-/// plus everything after the first matched `:`) -- [`splittype`]
-/// above only ever needs the scheme; [`resolve_proxy_target`]'s own
-/// `_parse_proxy` port needs the rest too, to tell a URL-form proxy
-/// value (`http://user:pass@host:port`) apart from an authority-form
-/// one (`host:port`, or `user:pass@host:port` with no scheme at all).
+/// plus everything after the first matched `:`) -- only
+/// [`resolve_proxy_target`]'s own `_parse_proxy` port still needs this
+/// (to tell a URL-form proxy value, `http://user:pass@host:port`,
+/// apart from an authority-form one, `host:port` or `user:pass@host:
+/// port` with no scheme at all); `execute`'s own scheme check uses
+/// [`check_url`]/[`http_url::urlsplit`] instead, now that it runs on
+/// the raw URL before this file ever calls `Request`'s own
+/// urllib-parse-time regex (issue #778: `plugins/http.py` never
+/// raises `Request`'s "unknown url type" text either, only
+/// `http_conventions.check_url`'s own).
 fn splittype_with_rest(url: &str) -> (Option<String>, &str) {
     if let Some(colon) = url.find(':') {
         let candidate = &url[..colon];
@@ -695,79 +681,29 @@ fn split_hostport(netloc: &str) -> (&str, PortText<'_>) {
     (host, port)
 }
 
-/// `int(text)` for a port, as `_get_hostport` reads it: CPython's own
-/// base-10 `int()` of a `str` -- surrounding whitespace, one optional
-/// sign, ASCII digits with PEP 515 single underscores between digits
-/// (`+80` and `8_0` are both port 80). `None` where `int()` raises
-/// `ValueError`. Non-ASCII decimal digits, which `int()` also accepts,
-/// count as non-numeric here (documented in DESIGN.md).
-fn py_int_port(text: &str) -> Option<i128> {
-    let s = py_strip(text);
-    let (negative, digits) = match s.as_bytes().first() {
-        Some(b'+') => (false, &s[1..]),
-        Some(b'-') => (true, &s[1..]),
-        _ => (false, s),
-    };
-    let bytes = digits.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut value: i128 = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'_' {
-            let between_digits = i > 0
-                && i + 1 < bytes.len()
-                && bytes[i - 1].is_ascii_digit()
-                && bytes[i + 1].is_ascii_digit();
-            if !between_digits {
-                return None;
-            }
-            continue;
-        }
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        value = value
-            .saturating_mul(10)
-            .saturating_add(i128::from(b - b'0'));
-    }
-    Some(if negative { -value } else { value })
-}
-
-/// The request's `(host, port)`, or the error `cof` raises for the port:
-/// `InvalidURL: nonnumeric port: '<text>'` (bare, before any I/O, as
-/// `http.client` raises it outside urllib's `URLError` wrapping), or,
-/// for a number outside `0..=65535`, electricity's own wrapped
-/// "port out of range" text (CPython only fails later, in
-/// `getaddrinfo`, with OS-specific text; documented in DESIGN.md). Either
-/// way no socket is opened, so a bad port never falls back to the
-/// scheme's default port.
+/// The request's `(host, port)`, the strict port rule
+/// ([`crate::http_conventions::strict_port`]) -- refused before any I/O
+/// with Circuitry's own text, naming *original_url* with any userinfo
+/// removed, for anything but an absent/empty port or a 1-65535
+/// ASCII-digit value. No bad port ever falls back to the scheme's
+/// default port.
 fn request_host_port(
     netloc: &str,
     scheme: &str,
     original_url: &str,
 ) -> Result<(String, u16), ToolError> {
-    let (host, port_text) = split_hostport(netloc);
-    let port = match port_text {
-        PortText::Absent | PortText::Empty => default_port(scheme),
-        PortText::Given(text) => match py_int_port(text) {
-            None => {
-                return Err(ToolError {
-                    py_class: PyExc::InvalidURL,
-                    message: format!("nonnumeric port: '{text}'"),
-                    cause: ErrorCause::None,
-                });
-            }
-            Some(value) => u16::try_from(value).map_err(|_| ToolError {
-                py_class: PyExc::RuntimeError,
-                message: format!(
-                    "HTTP request to {original_url} failed: port out of range 0-65535: {text}"
-                ),
-                cause: ErrorCause::NoReply,
-            })?,
-        },
-    };
-    Ok((host.to_string(), port))
+    let port = crate::http_conventions::strict_port(netloc, original_url).map_err(|message| {
+        ToolError {
+            py_class: PyExc::ValueError,
+            message,
+            cause: ErrorCause::None,
+        }
+    })?;
+    let (host, _) = split_hostport(netloc);
+    Ok((
+        host.to_string(),
+        port.unwrap_or_else(|| default_port(scheme)),
+    ))
 }
 
 /// A header value's own latin-1 encodability -- `http.client`'s own
@@ -979,18 +915,25 @@ fn coerce_headers_param(value: Option<&Value>) -> Result<Vec<(Value, Value)>, To
     }
 }
 
-fn parse_params(params: &Value, secret_headers: &[String]) -> Result<ParsedRequest, ToolError> {
-    let save = save_target(params)?;
-    let url_value = get(params, "url");
-    let url = match url_value {
-        Some(Value::Str(s)) if !py_strip(s).is_empty() => py_strip(s).to_string(),
-        _ => {
-            return Err(value_error(
-                "HttpPlugin requires params['url'] as a non-empty string.",
-            ));
-        }
-    };
+/// `params['url']`, stripped and checked non-empty -- the only piece of
+/// `parse_params` extracted before `execute`'s own scheme/port check
+/// ([`check_url`]), which must run before `parse_params`'s own
+/// `save_target` call touches the filesystem, or `params['params']` is
+/// appended to the URL (issue #778).
+fn extract_url(params: &Value) -> Result<String, ToolError> {
+    match get(params, "url") {
+        Some(Value::Str(s)) if !py_strip(s).is_empty() => Ok(py_strip(s).to_string()),
+        _ => Err(value_error(
+            "HttpPlugin requires params['url'] as a non-empty string.",
+        )),
+    }
+}
 
+fn parse_params(
+    url: String,
+    params: &Value,
+    secret_headers: &[String],
+) -> Result<ParsedRequest, ToolError> {
     let method = get(params, "method")
         .cloned()
         .unwrap_or_else(|| Value::Str("GET".to_string()))
@@ -1022,6 +965,12 @@ fn parse_params(params: &Value, secret_headers: &[String]) -> Result<ParsedReque
             "HttpPlugin: pass either params['json'] or params['body'], not both.",
         ));
     }
+
+    // `plugins/http.py`'s own order (issue #778): `save_target`'s
+    // filesystem checks run only after `execute`'s own scheme/port
+    // check on the raw URL, and before `params['params']` is appended
+    // below.
+    let save = save_target(params)?;
 
     let mut url = url;
     if let Some(Value::Dict(query)) = get(params, "params") {
@@ -2018,11 +1967,12 @@ fn to_string_pairs(pairs: &[(Value, Value)]) -> Vec<(String, String)> {
 /// `req.host`, exactly as the current hop's own URL writes it --
 /// userinfo stripped (same as [`split_netloc`] already strips), but
 /// the port kept or omitted exactly as written, never filled in with
-/// the scheme's own default. `proxy_bypass_environment`'s own *host*
-/// argument (issue #485: a synthetic default port
-/// always appended, as this function used to, makes a `no_proxy`
-/// entry with no port of its own -- the common case -- never match a
-/// request whose URL also never wrote one).
+/// the scheme's own default -- the `Host` header's own shape. The
+/// proxy rule's own `no_proxy` matching (issue #778) uses
+/// [`split_netloc`]'s hostname alone instead, never this function: a synthetic default
+/// port always appended would make a `no_proxy` entry with no port of
+/// its own -- the common case -- never match a request whose URL also
+/// never wrote one.
 pub(crate) fn netloc_host_as_written(netloc: &str) -> &str {
     match netloc.rfind('@') {
         Some(idx) => &netloc[idx + 1..],
@@ -2054,7 +2004,13 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
     let authority = if !r_scheme.starts_with('/') {
         proxy.to_string()
     } else if let Some(rest) = r_scheme.strip_prefix("//") {
-        match rest.find('/') {
+        // The authority ends at the first `/`, `?` or `#` -- the same
+        // boundary `urlsplit` (and `http_conventions::proxy_authority`,
+        // which already normalized *proxy* before this ever runs) use,
+        // so a value like `http://proxy.corp:3128?x` (its own query
+        // string, no userinfo) still reads the hostport as
+        // `proxy.corp:3128`, never the whole remainder (issue #778).
+        match rest.find(['/', '?', '#']) {
             Some(end) => rest[..end].to_string(),
             None => rest.to_string(),
         }
@@ -2082,37 +2038,74 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
     }
 }
 
-/// [`http_client::ProxyTarget`] for the current hop, urllib's own
-/// convention end to end: [`http_client::resolve_proxy`]'s own
-/// environment lookup/`no_proxy` bypass, then [`parse_proxy`] for the
-/// proxy value itself, unquoting both the hostport and (when both a
-/// user and a password are present) the `Basic` credentials.
-/// `pub` (not `pub(crate)`): `electricity-adapters::cyberdiner` --
-/// the one adapter that speaks urllib's own wire shape instead of
-/// curl's -- reuses this directly for its own proxy resolution
-/// (issue #515), rather than re-deriving urllib's
+/// [`http_client::ProxyTarget`] for the current hop, the proxy rule
+/// end to end (issue #778): [`http_client::resolve_proxy_checked`]'s own
+/// environment lookup/`no_proxy` bypass -- by hostname alone, port
+/// stripped, matching [`split_netloc`]'s own target-host comparison --
+/// then [`parse_proxy`] for the proxy value itself, unquoting both the
+/// hostport and, whenever a user is present (an empty password
+/// included), the `Basic` credentials. `Err` when the proxy
+/// value itself names an unsupported scheme or a strictly invalid port
+/// -- refused before any I/O, the same as the request URL's own port
+/// ([`request_host_port`]), *never* silently falling through to a
+/// direct connection (issue #778): every caller
+/// of this function, on every surface (the `http` tool itself,
+/// `electricity-adapters::cyberdiner`, `systemone`'s own webhook
+/// probe), propagates this `Err` outright. `pub` (not `pub(crate)`):
+/// `electricity-adapters::cyberdiner` reuses this directly for its own
+/// proxy resolution (issue #515), rather than re-deriving the
 /// proxy-URL/auth parsing a second time.
-pub fn resolve_proxy_target(scheme: &str, netloc: &str) -> Option<http_client::ProxyTarget> {
-    let host_for_bypass = netloc_host_as_written(netloc);
-    let proxy_value = http_client::resolve_proxy(scheme, host_for_bypass)?;
+pub fn resolve_proxy_target(
+    scheme: &str,
+    netloc: &str,
+) -> Result<Option<http_client::ProxyTarget>, String> {
+    let env: Vec<(String, String)> = std::env::vars().collect();
+    resolve_proxy_target_from(scheme, netloc, &env)
+}
+
+/// [`resolve_proxy_target`], over an explicit environment snapshot --
+/// the pure, test-driven form (same split as [`http_client::
+/// resolve_proxy_checked`]'s own).
+fn resolve_proxy_target_from(
+    scheme: &str,
+    netloc: &str,
+    env: &[(String, String)],
+) -> Result<Option<http_client::ProxyTarget>, String> {
+    let (host_for_bypass, port_for_bypass) = split_netloc(netloc);
+    let Some(proxy_value) = http_client::resolve_proxy_checked_with_port(
+        scheme,
+        &host_for_bypass,
+        port_for_bypass,
+        env,
+    )?
+    else {
+        return Ok(None);
+    };
     let parsed = parse_proxy(&proxy_value);
     let hostport = http_url::unquote(&parsed.hostport);
     let (proxy_host, proxy_port) = split_netloc(&hostport);
-    let proxy_port = proxy_port.unwrap_or_else(|| default_port(scheme));
-    let basic_auth = match (&parsed.user, &parsed.password) {
-        (Some(user), Some(password)) if !user.is_empty() && !password.is_empty() => {
-            let user = http_url::unquote(user);
-            let password = http_url::unquote(password);
-            use base64::Engine;
-            Some(base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}")))
-        }
-        _ => None,
-    };
-    Some(http_client::ProxyTarget {
+    // `http_client::resolve_proxy_checked` already writes `:80` into a
+    // portless proxy value explicitly, so this never actually
+    // triggers in practice -- kept as a defensive fallback with the
+    // proxy rule's own default (the *proxy*'s scheme, always `http`),
+    // never `default_port(scheme)`'s own target-scheme-dependent guess
+    // (443 for an https target), which is urllib's own quirk, not the
+    // proxy rule's (issue #778).
+    let proxy_port = proxy_port.unwrap_or(80);
+    // `Basic` auth applies whenever a user is present, even with no
+    // password at all (`user@proxy`) -- not only when both pieces are
+    // non-empty (issue #778).
+    let basic_auth = parsed.user.as_ref().map(|user| {
+        let user = http_url::unquote(user);
+        let password = http_url::unquote(parsed.password.as_deref().unwrap_or(""));
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
+    });
+    Ok(Some(http_client::ProxyTarget {
         host: proxy_host,
         port: proxy_port,
         basic_auth,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------
@@ -2134,27 +2127,14 @@ impl ToolPlugin for HttpPlugin {
     }
 
     async fn execute(&self, params: Value, call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
-        let parsed = parse_params(&params, call.secret_headers)?;
+        // The scheme/port check, before any I/O and before touching
+        // any local file (`save_to`'s own filesystem checks included):
+        // checked on the raw URL, before `params['params']` is
+        // appended (issue #778).
+        let raw_url = extract_url(&params)?;
+        check_url(&raw_url)?;
+        let parsed = parse_params(raw_url, &params, call.secret_headers)?;
         let original_url = parsed.url.clone();
-
-        let initial_scheme = match splittype(&parsed.url) {
-            None => {
-                return Err(value_error(format!(
-                    "unknown url type: {}",
-                    Value::Str(parsed.url.clone()).py_repr()
-                )));
-            }
-            Some(scheme) => scheme,
-        };
-        if !matches!(initial_scheme.as_str(), "http" | "https") {
-            return Err(
-                if matches!(initial_scheme.as_str(), "ftp" | "file" | "data") {
-                    unsupported_in_electricity_failure(&original_url, &initial_scheme)
-                } else {
-                    unknown_url_type_failure(&original_url, &initial_scheme)
-                },
-            );
-        }
 
         let client = http_client::build_client().map_err(runtime_error)?;
         let timeout =
@@ -2168,32 +2148,27 @@ impl ToolPlugin for HttpPlugin {
 
         loop {
             let split = http_url::urlsplit(&current_url, "");
-            // The only schemes [`http_client`] ever speaks -- reached on
-            // every hop, not just the first: a redirect to `ftp://` is
-            // allowed by [`redirect_policy`]'s own method/status check
-            // (urllib's own `HTTPRedirectHandler` would really follow
-            // it and speak FTP for real, a real handler being
-            // installed by `build_opener()`'s own defaults) but this
-            // crate never implements FTP/file/data at all -- refused
-            // before any I/O, same wrapped shape as an unrecognized
-            // scheme on the initial URL, and recorded as a divergence
-            // (DESIGN.md).
+            // The only schemes [`http_client`] ever speaks -- checked
+            // on every hop, not just the first, so a redirect to a scheme
+            // other than http/https is refused the same way the initial
+            // URL is (`cof run` now refuses it too, before ever following
+            // such a redirect).
             if !matches!(split.scheme.as_str(), "http" | "https") {
-                return Err(
-                    if matches!(split.scheme.as_str(), "ftp" | "file" | "data") {
-                        unsupported_in_electricity_failure(&original_url, &split.scheme)
-                    } else {
-                        unknown_url_type_failure(&original_url, &split.scheme)
-                    },
-                );
+                return Err(scheme_refused(&split.scheme, &current_url));
             }
             let scheme_enum = if split.scheme == "https" {
                 Scheme::Https
             } else {
                 Scheme::Http
             };
-            let (host, port) = request_host_port(&split.netloc, &split.scheme, &original_url)?;
-            let proxy = resolve_proxy_target(&split.scheme, &split.netloc);
+            let (host, port) = request_host_port(&split.netloc, &split.scheme, &current_url)?;
+            let proxy = resolve_proxy_target(&split.scheme, &split.netloc).map_err(|message| {
+                ToolError {
+                    py_class: PyExc::ValueError,
+                    message,
+                    cause: ErrorCause::None,
+                }
+            })?;
 
             let mut target = split.path.clone();
             if target.is_empty() {
@@ -2377,20 +2352,11 @@ impl ToolPlugin for HttpPlugin {
                     let resolved = http_url::urljoin(&current_url, &location);
                     let quoted = http_url::quote(&resolved, http_url::STRING_PUNCTUATION);
                     let target_scheme = http_url::urlsplit(&quoted, "").scheme;
-                    if !matches!(target_scheme.as_str(), "" | "http" | "https" | "ftp") {
-                        let reason = disallowed_redirect_scheme_reason(&response.reason, &quoted);
-                        return build_result(
-                            &parsed,
-                            &original_url,
-                            response,
-                            Some(reason),
-                            false,
-                            call.scrub,
-                        );
-                    }
-                    // `plugins/http.py::_RedirectPolicy.redirect_request`:
-                    // reached after urllib's own scheme check, before its
-                    // method/status rule.
+                    // `plugins/http.py::_RedirectPolicy.redirect_request`
+                    // (issue #778): the never/strip_auth decision runs
+                    // first, on its own terms -- a target this mode
+                    // would refuse anyway is refused that way, whatever
+                    // its scheme, never the shared scheme refusal's.
                     if parsed.redirects == RedirectMode::Never
                         || (parsed.redirects == RedirectMode::StripAuth
                             && target_scheme.to_lowercase() != "https")
@@ -2419,6 +2385,17 @@ impl ToolPlugin for HttpPlugin {
                                 call.scrub,
                             );
                         }
+                        // Checked only once this hop is actually about
+                        // to be followed -- any scheme other than
+                        // http/https gets the shared refusal text,
+                        // whatever it is (`file:`, `data:`, ... -- not
+                        // only `ftp`).
+                        crate::http_conventions::check_scheme(
+                            &target_scheme,
+                            &quoted,
+                            &["http", "https"],
+                        )
+                        .map_err(value_error)?;
                         *visited.entry(quoted.clone()).or_insert(0) += 1;
                         if parsed.redirects == RedirectMode::StripAuth {
                             let origin = redirect_origin(&current_url);
@@ -2579,6 +2556,21 @@ mod proxy_parse_tests {
     }
 
     #[test]
+    fn url_form_strips_the_scheme_and_a_trailing_query_or_fragment() {
+        // The authority ends at the first `/`, `?` or `#`, not only
+        // `/` -- matching cof's own `urlsplit`-backed `split_proxy_url`,
+        // which already reads this the same way (issue #778).
+        assert_eq!(
+            parse_proxy("http://proxy.corp:3128?x").hostport,
+            "proxy.corp:3128"
+        );
+        assert_eq!(
+            parse_proxy("http://proxy.corp:3128#x").hostport,
+            "proxy.corp:3128"
+        );
+    }
+
+    #[test]
     fn authority_form_with_credentials_splits_user_and_password() {
         let parsed = parse_proxy("user:pass@proxy.corp:3128");
         assert_eq!(parsed.hostport, "proxy.corp:3128");
@@ -2595,7 +2587,7 @@ mod proxy_parse_tests {
     }
 
     #[test]
-    fn a_bare_user_with_no_password_builds_no_basic_auth() {
+    fn a_bare_user_with_no_password_splits_to_no_password() {
         let parsed = parse_proxy("user@proxy.corp:3128");
         assert_eq!(parsed.user.as_deref(), Some("user"));
         assert!(parsed.password.is_none());
@@ -2675,29 +2667,7 @@ mod port_tests {
     }
 
     #[test]
-    fn py_int_port_reads_a_port_the_way_cpython_int_does() {
-        assert_eq!(py_int_port("80"), Some(80));
-        assert_eq!(py_int_port("+9"), Some(9));
-        assert_eq!(py_int_port("-1"), Some(-1));
-        assert_eq!(py_int_port("0_9"), Some(9));
-        assert_eq!(py_int_port("99999"), Some(99999));
-        for bad in [
-            "abc",
-            "_9",
-            "9_",
-            "9__0",
-            "+",
-            "-",
-            "8o",
-            "+-1",
-            "\u{0668}\u{0660}",
-        ] {
-            assert_eq!(py_int_port(bad), None, "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn request_host_port_matches_cof_for_each_port_shape() {
+    fn request_host_port_follows_the_strict_port_rule() {
         let url = "http://x/";
         assert_eq!(
             request_host_port("h", "http", url).unwrap(),
@@ -2708,28 +2678,71 @@ mod port_tests {
             ("h".to_string(), 443)
         );
         assert_eq!(
-            request_host_port("h:+9", "http", url).unwrap(),
-            ("h".to_string(), 9)
+            request_host_port("h:80", "http", url).unwrap(),
+            ("h".to_string(), 80)
         );
         assert_eq!(
-            request_host_port("[::1]:8_0", "http", url).unwrap(),
-            ("::1".to_string(), 80)
+            request_host_port("[::1]:8080", "http", url).unwrap(),
+            ("::1".to_string(), 8080)
         );
-        let err = request_host_port("h:abc", "http", url).unwrap_err();
-        assert_eq!(err.py_class, PyExc::InvalidURL);
-        assert_eq!(err.message, "nonnumeric port: 'abc'");
-        assert_eq!(err.cause, ErrorCause::None);
-        let err = request_host_port("[::1]:abc", "http", url).unwrap_err();
-        assert_eq!(err.message, "nonnumeric port: 'abc'");
-        for (netloc, text) in [("h:99999", "99999"), ("h:-1", "-1")] {
+        for (netloc, port_text) in [
+            ("h:abc", "abc"),
+            ("h:+9", "+9"),
+            ("h:0_9", "0_9"),
+            ("h:0", "0"),
+            ("h:99999", "99999"),
+            ("h:-1", "-1"),
+        ] {
             let err = request_host_port(netloc, "http", url).unwrap_err();
-            assert_eq!(err.py_class, PyExc::RuntimeError);
+            assert_eq!(err.py_class, PyExc::ValueError);
             assert_eq!(
                 err.message,
-                format!("HTTP request to {url} failed: port out of range 0-65535: {text}")
+                format!("invalid port in URL '{url}': '{port_text}'")
             );
-            assert_eq!(err.cause, ErrorCause::NoReply);
+            assert_eq!(err.cause, ErrorCause::None);
         }
+    }
+
+    #[test]
+    fn resolve_proxy_target_refuses_an_invalid_proxy_port_before_any_io() {
+        let env = vec![("http_proxy".to_string(), "http://proxy:0".to_string())];
+        let err = resolve_proxy_target_from("http", "example.invalid", &env).unwrap_err();
+        assert_eq!(err, "invalid port in URL 'http://proxy:0': '0'");
+    }
+
+    #[test]
+    fn resolve_proxy_target_resolves_a_valid_proxy() {
+        let env = vec![("http_proxy".to_string(), "http://proxy:3128".to_string())];
+        let target = resolve_proxy_target_from("http", "example.invalid", &env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.host, "proxy");
+        assert_eq!(target.port, 3128);
+    }
+
+    #[test]
+    fn resolve_proxy_target_is_none_with_no_proxy_configured() {
+        assert!(
+            resolve_proxy_target_from("http", "example.invalid", &[])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resolve_proxy_target_sends_basic_auth_for_a_bare_user_with_no_password() {
+        // `Basic` auth applies whenever a user is present, even with
+        // an empty password (issue #778).
+        let env = vec![(
+            "http_proxy".to_string(),
+            "http://user@proxy.corp:3128".to_string(),
+        )];
+        let target = resolve_proxy_target_from("http", "example.invalid", &env)
+            .unwrap()
+            .unwrap();
+        use base64::Engine;
+        let expected = base64::engine::general_purpose::STANDARD.encode("user:");
+        assert_eq!(target.basic_auth, Some(expected));
     }
 }
 

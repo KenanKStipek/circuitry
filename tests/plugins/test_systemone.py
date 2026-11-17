@@ -541,6 +541,24 @@ def test_a_refused_connection_names_the_url_and_is_retryable() -> None:
     assert classify_exception(excinfo.value).retryable is True
 
 
+def test_a_refused_port_never_echoes_a_password_hidden_past_the_authority() -> None:
+    """A `base_url` whose authority ends at a port that is itself a
+    refused connection hides a second `@` -- and a real host -- behind
+    it: the "not reachable" message must name only the part after the
+    LAST `@`, never the port-shaped credential fragment in between
+    (issue #778).
+    """
+    port = _closed_port()
+    url = f"http://127.0.0.1:{port}/ss@x"
+    with pytest.raises(RuntimeError) as excinfo:
+        SystemOnePlugin(base_url=url).execute(params=_params(), timeout_seconds=5)
+
+    message = str(excinfo.value)
+    assert message == "systemone server not reachable at http://x"
+    assert f"{port}/" not in message
+    assert "ss" not in message
+
+
 def test_a_timeout_names_the_url_and_the_seconds_and_is_retryable() -> None:
     with socket.socket() as silent:
         silent.bind(("127.0.0.1", 0))
@@ -921,6 +939,67 @@ def test_allow_remote_accepts_a_remote_base_url() -> None:
     plugin = SystemOnePlugin(base_url="https://api.typesafe.ai/", allow_remote=True)
     assert plugin._server() == "https://api.typesafe.ai"
     assert plugin.check().ok is True
+
+
+def test_a_loopback_server_never_applies_the_shared_proxy_rule(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """systemone's own rule, loopback never proxied, is never
+    overridden by the shared proxy rule (issue #778)."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        systemone_module.http_conventions, "apply_request_proxy", lambda req: calls.append(req.full_url)
+    )
+    server.reply_answers()
+
+    result = _plugin(server).execute(params=_params(), timeout_seconds=10)
+
+    assert result.ok is True, result.stderr
+    assert calls == []
+
+
+def test_a_remote_server_applies_the_shared_proxy_rule(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server that isn't loopback (``allow_remote: true``) follows
+    the shared proxy rule like every other surface, instead of
+    urllib's own default proxy-reading convention (issue #778)."""
+    monkeypatch.setattr(systemone_module, "is_loopback_host", lambda host: False)
+    calls: list[str] = []
+    real_apply = systemone_module.http_conventions.apply_request_proxy
+
+    def recording_apply(req: Any) -> None:
+        calls.append(req.full_url)
+        real_apply(req)
+
+    monkeypatch.setattr(systemone_module.http_conventions, "apply_request_proxy", recording_apply)
+    server.reply_answers()
+
+    result = _plugin(server, allow_remote=True).execute(params=_params(), timeout_seconds=10)
+
+    assert result.ok is True, result.stderr
+    assert calls == [server.url + systemone_module.ENDPOINT_PATH]
+
+
+def test_a_bad_proxy_is_refused_before_any_request_reaches_the_server(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proxy value systemone can't use (an unsupported scheme here)
+    is refused outright, never silently treated as "no proxy" and
+    sent direct (issue #778).
+    """
+    from http_server_support import PROXY_ENV_VARS
+
+    for name in (*PROXY_ENV_VARS, "no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("http_proxy", "socks5://proxy:1080")
+    monkeypatch.setattr(systemone_module, "is_loopback_host", lambda host: False)
+    server.reply_answers()
+
+    with pytest.raises(ValueError, match="unsupported proxy scheme"):
+        _plugin(server, allow_remote=True).execute(params=_params(), timeout_seconds=10)
+
+    assert server.requests == []
 
 
 def test_allow_remote_is_false_unless_the_config_says_true() -> None:
