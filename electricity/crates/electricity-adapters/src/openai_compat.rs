@@ -844,8 +844,7 @@ pub fn check_dependencies(cfg: &OpenAiCompatibleConfig) -> CheckResult {
 }
 
 /// `_openai_compat.py::OpenAICompatibleAdapter` -- one struct for the
-/// whole family, configured per provider name (the stub's own fields
-/// were this lane's to change).
+/// whole family, configured per provider name.
 /// A pre-check one family member raises before any request --
 /// returns the extra headers (`azure-openai`'s own `api-key`) to send
 /// alongside the ordinary ones, or an error with exact text
