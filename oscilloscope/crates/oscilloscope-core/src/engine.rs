@@ -61,8 +61,8 @@ impl RunSpec {
 
 /// What this engine binary can do, detected once at startup (the
 /// decision behind issue #424: detect `--events` support
-/// from `cof run --help` rather than assuming a version; issue #431's
-/// lane E2 detects `--live-state` the same way from `electricity
+/// from `cof run --help` rather than assuming a version; issue #431
+/// detects `--live-state` the same way from `electricity
 /// --help`, since an older electricity built before M0-H has neither
 /// flag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -84,7 +84,7 @@ pub struct EngineCaps {
     /// engine, nor `run_start`/state at all.
     pub label: bool,
     /// Set when the `--help` probe itself couldn't find the binary at
-    /// all (M4): lets a caller skip the "this cof has no --events"
+    /// all: lets a caller skip the "this cof has no --events"
     /// notice in that case, which otherwise printed -- wrongly --
     /// ahead of the real "couldn't launch cof" error the later spawn
     /// goes on to report for the exact same reason.
@@ -212,12 +212,12 @@ enum ProbeOutcome {
 /// `supervise::SupervisedChild::wait`'s own bounded join).
 ///
 /// `signals`, when given, is polled (non-consuming, `has_pending`) on
-/// every 20ms tick of the wait loop alongside the deadline (review
-/// finding 2 on #458): a signal landing mid-probe ends it exactly as
-/// early as a timeout would, rather than leaving a user's Ctrl-C
-/// waiting for up to `timeout` before `do_run`'s own
-/// `pending_signal_exit_code` check -- reached only after this
-/// function returns -- ever gets a chance to act on it.
+/// every 20ms tick of the wait loop alongside the deadline, so a
+/// signal landing mid-probe ends it exactly as early as a timeout
+/// would, rather than leaving a user's Ctrl-C waiting for up to
+/// `timeout` before `do_run`'s own `pending_signal_exit_code` check
+/// -- reached only after this function returns -- ever gets a chance
+/// to act on it.
 fn run_probe(
     mut cmd: Command,
     timeout: Duration,
@@ -297,8 +297,8 @@ impl CofEngine {
     /// and looking for the flag's own name in its output — the same
     /// detection serves a `cof` built before #419 lands and any older
     /// release a user still has on `PATH`. `signals`, when given, lets
-    /// a Ctrl-C landing mid-probe end it immediately (review finding 2
-    /// on #458) rather than waiting out `PROBE_TIMEOUT`.
+    /// a Ctrl-C landing mid-probe end it immediately rather than
+    /// waiting out `PROBE_TIMEOUT`.
     pub fn detect(binary: impl Into<String>, signals: Option<&mut SignalWatcher>) -> Self {
         Self::detect_with_timeout(binary, signals, PROBE_TIMEOUT)
     }
@@ -306,8 +306,7 @@ impl CofEngine {
     /// [`CofEngine::detect`], with the probe's own timeout given
     /// explicitly rather than always `PROBE_TIMEOUT` -- lets a test
     /// exercise `detect` end to end against a hanging `--help`
-    /// without really waiting out the production 10s bound (review
-    /// finding 6 on #458).
+    /// without really waiting out the production 10s bound.
     fn detect_with_timeout(
         binary: impl Into<String>,
         signals: Option<&mut SignalWatcher>,
@@ -325,7 +324,7 @@ impl CofEngine {
         // detection itself simple without changing cof's own output
         // formatting for the user.
         cmd.env("NO_COLOR", "1");
-        // P2-10: its own process group, same as the real engine spawn
+        // Its own process group, same as the real engine spawn
         // (supervise.rs), so a terminal Ctrl-C landing while this
         // probe is still running doesn't kill it directly — that used
         // to make `.output()` return early/incomplete, which
@@ -399,9 +398,9 @@ impl Engine for CofEngine {
 
 /// `electricity <config.json> <orchestration.yml> -e k=v... --out
 /// <dir>/state.json [--events <dir>/events.jsonl] [--live-state
-/// <dir>/state.live.json]` (DESIGN.md §4.2, issue #431's lane E2):
+/// <dir>/state.live.json]` (DESIGN.md §4.2, issue #431):
 /// M0-H gave electricity both flags together, so an older build on
-/// `PATH` from before that lane has neither — osi falls back to
+/// `PATH` from before that landed has neither — osi falls back to
 /// supervising it with no observation at all in that case, the same
 /// no-events path `CofEngine` already falls back to, rather than
 /// passing a flag the binary doesn't understand.
@@ -429,8 +428,7 @@ impl ElectricityEngine {
     /// including its own process group (so a terminal Ctrl-C landing
     /// mid-probe doesn't kill it directly and get misread as "no
     /// support"). `signals`, when given, lets a Ctrl-C landing mid-probe
-    /// end it immediately (review finding 2 on #458) rather than
-    /// waiting out `PROBE_TIMEOUT`.
+    /// end it immediately rather than waiting out `PROBE_TIMEOUT`.
     pub fn detect(binary: impl Into<String>, signals: Option<&mut SignalWatcher>) -> Self {
         use std::os::unix::process::CommandExt;
 
@@ -899,10 +897,9 @@ mod tests {
 
     #[test]
     fn cof_detect_falls_back_to_state_only_on_a_hanging_help() {
-        // The real `detect()` path end to end (review finding 6 on
-        // #458: a previous version of this test called `run_probe`
-        // directly instead, never actually exercising `detect` itself
-        // at all), with a short probe timeout substituted in via
+        // The real `detect()` path end to end -- calling `run_probe`
+        // directly instead would never actually exercise `detect`
+        // itself at all -- with a short probe timeout substituted in via
         // `detect_with_timeout` so this doesn't really wait out the
         // production 10s bound: a `cof` stand-in whose `run --help`
         // hangs still returns promptly, with `timed_out` set and no
@@ -941,7 +938,7 @@ mod tests {
 
     #[test]
     fn run_probe_is_cancelled_promptly_by_a_pending_signal_instead_of_waiting_out_the_timeout() {
-        // Review finding 2 on #458: a Ctrl-C landing mid-probe must end
+        // A Ctrl-C landing mid-probe must end
         // it right away, not leave a user waiting out the probe's own
         // (generous, 10s in production) timeout.
         let mut signals = SignalWatcher::new().unwrap();

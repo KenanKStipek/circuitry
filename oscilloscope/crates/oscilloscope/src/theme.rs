@@ -19,7 +19,7 @@ use clap::ValueEnum;
 use ratatui::style::Color;
 
 /// The eleven themes, in the order `--theme`/`OSI_THEME` accept and
-/// `t` cycles through (issue #535). Derives `ValueEnum` (finding 10)
+/// `t` cycles through (issue #535). Derives `ValueEnum`
 /// so `--help` lists every name as clap's own possible-values list,
 /// in this same declaration order -- clap's default kebab-case
 /// rename (`SolarizedDark` -> `solarized-dark`) matches `as_str`'s

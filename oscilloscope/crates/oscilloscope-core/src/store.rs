@@ -23,8 +23,8 @@ use crate::model::{NodeMeta, RunModel, node_tokens};
 use crate::render::RowKind;
 
 /// A container kind in the Store's area diagram (DESIGN.md §6.3e,
-/// issue #695's settled point 1): a decision, a loop, a parallel
-/// `dynamic` or a `use`. Everything else (a tool, a prompt, a loop
+/// issue #695): a decision, a loop, a parallel `dynamic` or a
+/// `use`. Everything else (a tool, a prompt, a loop
 /// pass before it is known to fold, `try`/`finally`) is never a
 /// container of its own here -- a `try`/`finally` body has no tile
 /// of its own on the Store either way, its children attaching
@@ -54,10 +54,10 @@ fn is_pass_segment(path: &str) -> bool {
 /// (DESIGN.md §2.4: `kind · 215 t`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreLeaf {
-    /// The real, full dotted state path -- never a pass's own
-    /// path once folded (issue #695's settled point 1): the leaf
-    /// this fold actually names, so history, selection and `enter`
-    /// all resolve against a real step.
+    /// The real, full dotted state path -- never a pass's own path
+    /// once folded (issue #695): the leaf this fold actually names,
+    /// so history, selection and `enter` all resolve against a real
+    /// step.
     pub path: String,
     /// The tile's own label: the leaf's bare key (`kind`, `reply`),
     /// or, once a loop pass has folded into its single token-bearing
@@ -155,8 +155,7 @@ impl StoreNode {
 
 /// `path`'s own direct children in the real state tree -- the same
 /// walk the old Cost treemap's `direct_children_of` did, kept here
-/// now that `treemap.rs` is gone (issue #695's removal, settled
-/// point 7).
+/// now that `treemap.rs` is gone (issue #695's removal).
 fn direct_children_of(path: &str, flat: &BTreeMap<String, NodeMeta>) -> Vec<String> {
     let prefix = format!("{path}.");
     let mut direct_children: Vec<String> = Vec::new();
@@ -252,8 +251,8 @@ fn build_children(
 
 /// `direct_children_of`'s own walk (`subtree_entries`, a
 /// `BTreeMap`) reads children alphabetically by path, never in plan
-/// order -- issue #695's settled point 1 asks for plan order
-/// specifically (`kind, gate, drafts`, not `drafts, gate, kind`).
+/// order -- issue #695 asks for plan order specifically (`kind,
+/// gate, drafts`, not `drafts, gate, kind`).
 /// `plan::normalize_pass_segments` turns a real pass's own `iter_N`
 /// into the `iter_*` placeholder `PlanTree::all_paths` itself uses,
 /// so a loop's own real passes sort together at the position their
@@ -399,9 +398,8 @@ fn container_own_leaf(
 /// A loop pass path, built as a container first (so any further
 /// nesting inside it still applies normally), then folded into its
 /// own single token-bearing step when it has exactly one (issue
-/// #695's settled point 2) -- the tool `pause`, with no tokens of
-/// its own, never counts either way, since it never even builds a
-/// node at all.
+/// #695) -- the tool `pause`, with no tokens of its own, never
+/// counts either way, since it never even builds a node at all.
 #[allow(clippy::too_many_arguments)]
 fn build_pass(
     path: &str,
@@ -509,8 +507,8 @@ fn build_leaf(
 
 // ---------------------------------------------------------------
 // Layout: plan order, stacked children, largest-remainder areas,
-// one-cell gutters, container padding (issue #695's settled point
-// 1; the exact rectangles are pinned in `tests::layout` against the
+// one-cell gutters, container padding (issue #695; the exact
+// rectangles are pinned in `tests::layout` against the
 // frames' own geometry).
 // ---------------------------------------------------------------
 
@@ -685,8 +683,8 @@ fn top_level_fold(weights: &[u64], span: u16) -> (Vec<usize>, Vec<usize>) {
 }
 
 /// The Store's own area diagram, laid out into `w`×`h` cells at
-/// `(x, y)` (issue #695's settled point 1): `nodes` in plan order,
-/// alternating columns (even depth) and rows (odd depth), areas by
+/// `(x, y)` (issue #695): `nodes` in plan order, alternating
+/// columns (even depth) and rows (odd depth), areas by
 /// largest-remainder apportionment of each node's own tokens, with
 /// one-cell gutters between siblings and, inside a container, a
 /// title row, one-cell left/right padding and a bottom padding row
@@ -898,8 +896,7 @@ fn layout_node(node: &StoreNode, rect: StoreRect, depth: u16) -> Vec<StoreTile> 
 pub struct StoreTableRow {
     pub path: String,
     /// `drafts › iter_1 › draft` -- the full breadcrumb from the
-    /// run's own root (issue #695's settled point 1: "a flat table
-    /// needs it").
+    /// run's own root (issue #695: "a flat table needs it").
     pub label: String,
     pub tokens_sent: u64,
     pub tokens_received: u64,
@@ -936,9 +933,9 @@ fn flatten_leaves(nodes: &[StoreNode], root_path: &str, out: &mut Vec<StoreTable
     }
 }
 
-/// The "Largest Stores" table (DESIGN.md §2.4, issue #695's settled
-/// point 4): every store with tokens, ranked by tokens descending,
-/// ties broken in plan order (the tree's own child order, which
+/// The "Largest Stores" table (DESIGN.md §2.4, issue #695): every
+/// store with tokens, ranked by tokens descending, ties broken in
+/// plan order (the tree's own child order, which
 /// `build_store_tree` already preserves) -- share is of the run's
 /// own tokens so far.
 pub fn build_store_table(
@@ -971,9 +968,9 @@ pub fn build_store_table(
     rows
 }
 
-/// Readings (DESIGN.md §2.4, issue #695's settled point 4): Largest,
-/// Stores with tokens, Ratio sent to received, and the running (or
-/// last-run) loop's own progress.
+/// Readings (DESIGN.md §2.4, issue #695): Largest, Stores with
+/// tokens, Ratio sent to received, and the running (or last-run)
+/// loop's own progress.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StoreReadings {
     /// The table's own first row: its label and total tokens.
@@ -1008,10 +1005,10 @@ fn passes_with_tokens_in_state(path: &str, flat: &BTreeMap<String, NodeMeta>) ->
         .count()
 }
 
-/// Readings' own Loop line (issue #695's settled point 4): the
-/// running loop, else the most recently run one (any status but
-/// `Pending`, so a loop that ended `FailedHandled` still gets a
-/// figure) -- `plan::resolve_each_len`/`Row::loop_progress` supplies
+/// Readings' own Loop line (issue #695): the running loop, else the
+/// most recently run one (any status but `Pending`, so a loop that
+/// ended `FailedHandled` still gets a figure) --
+/// `plan::resolve_each_len`/`Row::loop_progress` supplies
 /// the planned pass count `m`.
 pub fn build_store_readings(
     table: &[StoreTableRow],
@@ -1538,9 +1535,9 @@ mod tests {
         assert_eq!(apportion(&[], 10), Vec::<u16>::new());
     }
 
-    /// Issue #695's settled point 1: siblings alternate columns and
-    /// rows by depth, not just once -- three levels deep, depth 2's
-    /// own siblings sit in columns again, the same as depth 0's.
+    /// Issue #695: siblings alternate columns and rows by depth,
+    /// not just once -- three levels deep, depth 2's own siblings
+    /// sit in columns again, the same as depth 0's.
     #[test]
     fn layout_alternates_columns_and_rows_at_depth_two() {
         let tree = vec![container(

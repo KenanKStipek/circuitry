@@ -320,8 +320,8 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     // /dev/null` dies so fast from the first SIGINT alone that the
     // second has nothing left to interrupt, making the exact landing
     // moment a coin flip under whatever load the test runner is under
-    // (this is the same shape issue #424's review flagged for the
-    // golden fixtures, F12, fixed there with the same kind of sleep).
+    // (this is the same shape issue #424 flagged for the
+    // golden fixtures, fixed there with the same kind of sleep).
     let doc = write_doc(
         work.path(),
         "do.yml",
@@ -361,7 +361,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     // running, makes `cof` call `os._exit` at once (`cli/interrupts
     // .py`) — no final write, the same abort DESIGN.md §1.1 measures.
     // osi's own exit code is still the engine's (130); the real point
-    // of this test, per issue #424's review, is that forwarding a
+    // of this test, per issue #424, is that forwarding a
     // *second* signal is exercised end to end at all, and still leaves
     // nothing running regardless of which of the two paths the engine
     // took.
@@ -570,7 +570,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
-/// #545's review finding 1: `cof`'s `--live-state` writer serialises
+/// #545: `cof`'s `--live-state` writer serialises
 /// whatever the shared state dict holds *when its own debounce
 /// interval next comes due*, not a copy taken at the triggering
 /// effect's own completion -- so a slow leading effect can leave that

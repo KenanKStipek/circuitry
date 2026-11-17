@@ -252,7 +252,7 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(status.success(), "osi should exit 0, got {status:?}");
 
-    // Finding 17: the same grace period every other test here gives
+    // The same grace period every other test here gives
     // the draining thread to catch up on whatever osi wrote between
     // its last read and actually exiting — the alternate-screen exit
     // sequence included — before this one reads the captured buffer.
@@ -2054,7 +2054,7 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     assert_no_leftover_process(work.path());
 }
 
-/// Review finding K2: a forwarded `SIGTERM` must reach the engine as
+/// A forwarded `SIGTERM` must reach the engine as
 /// a real `SIGTERM`, not be silently turned into a `SIGINT` the way
 /// the TUI's own `cancel_once` used to — osi itself still exits with
 /// the POSIX `128+signum` code either way (143), but only because
@@ -2112,8 +2112,8 @@ fn a_forwarded_sigterm_in_the_tui_exits_143() {
     assert_no_leftover_process(work.path());
 }
 
-/// Review finding K2, `SIGHUP`'s own exit code (129) — and finding
-/// K1's "a `SIGHUP` must never wait for a key": the terminal is gone
+/// `SIGHUP`'s own exit code (129) — and the rule that a `SIGHUP`
+/// must never wait for a key: the terminal is gone
 /// by definition, so this must leave the instant the engine does,
 /// never pausing on the finished screen the way a run that simply
 /// completes on its own now does.
@@ -2956,7 +2956,7 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
     );
     // The Tape's own header band (issue #678) carries the status
     // glyph and word together, `✗ Failed` -- the icon trace just
-    // ahead of it is in the same failed colour now (§9's settled
+    // ahead of it is in the same failed colour now (§9's
     // icon-in-the-word-osi rule), so ratatui's own diff can reuse
     // that run's SGR code across the cursor jump between them
     // rather than emitting a fresh one right before the glyph.

@@ -8,9 +8,9 @@
 //! is therefore reserved — an orchestration literally named `watch`
 //! needs a `./watch` or `watch.yml` path instead), and everything else
 //! parses directly as [`RunArgs`]. A `clap` derive otherwise mixes
-//! flags and positionals in any order on its own; the #422 review's
-//! "flags work before the positionals" only broke under the O-0
-//! stub's `#[command(external_subcommand)]` dispatch, which matched
+//! flags and positionals in any order on its own; #422's own
+//! "flags work before the positionals" expectation only broke under
+//! the O-0 stub's `#[command(external_subcommand)]` dispatch, which matched
 //! the *first* token against the top level's own (empty) flag set
 //! before ever reaching `RunArgs` — this dispatch avoids that entirely.
 
@@ -187,7 +187,7 @@ struct WatchArgs {
 /// `--theme`, else `OSI_THEME`, else `terminal` (DESIGN.md §6.3) --
 /// shared by both `osi <doc>` and `osi watch`, so the two can never
 /// resolve the same environment differently. `osi_theme_env` is the
-/// caller's own read of `OSI_THEME` (finding 13: kept pure, like
+/// caller's own read of `OSI_THEME`, kept pure, like
 /// `theme::ColorMode::detect`, rather than reading the process
 /// environment itself -- a test can then exercise every branch
 /// without mutating process-wide state at all).
@@ -279,7 +279,7 @@ impl oscilloscope_core::format::ClockZone for LocalZone {
 /// print time (a line with no `ts`, like a forwarded-signal notice).
 struct Clock {
     zone: Box<dyn oscilloscope_core::format::ClockZone>,
-    /// The highest clock time printed so far (K5): a line's own `ts`
+    /// The highest clock time printed so far: a line's own `ts`
     /// can legitimately be *earlier* than one already printed (a
     /// coalesced state write backdating a node's `▶` line to its real
     /// `created_at`, DESIGN.md §2.4's "new node that is already
@@ -329,7 +329,7 @@ fn print_line(out: &mut impl Write, clock: &mut Clock, ts: Option<&str>, text: &
 }
 
 /// Prints the `exit <code>` line every path through `do_run` ends
-/// with (P2-1) — including a usage-style failure before the engine
+/// with — including a usage-style failure before the engine
 /// was ever spawned, which used to print nothing on stdout at all.
 fn exit_early(code: u8) -> ExitCode {
     println!("exit {code}");
@@ -337,7 +337,7 @@ fn exit_early(code: u8) -> ExitCode {
 }
 
 /// The exit code osi should use right now, without ever spawning the
-/// engine, if a signal already arrived (P2-10) — the same 128+signum
+/// engine, if a signal already arrived — the same 128+signum
 /// codes `cof` itself uses. `None` means nothing is pending yet.
 fn pending_signal_exit_code(signals: &mut Option<SignalWatcher>) -> Option<u8> {
     let watcher = signals.as_mut()?;
@@ -358,7 +358,7 @@ fn unique_run_dir() -> PathBuf {
 }
 
 /// Creates the run directory private (`0700`): it can hold `state.live
-/// .json`/`state.json`, which carry prompt and tool output (F2).
+/// .json`/`state.json`, which carry prompt and tool output.
 ///
 /// The default directory's name is a predictable `osi-<pid>-<nanos>`
 /// under a shared `/tmp`, so it is created non-recursively and must
@@ -366,10 +366,10 @@ fn unique_run_dir() -> PathBuf {
 /// something planted ahead of time) is refused rather than reused.
 /// `--out-dir` may be a path the caller wants created in full (missing
 /// parents and all) and may legitimately already exist from an
-/// earlier run (F3 clears its stale observation files, not the
-/// directory itself), so it uses `create_dir_all`'s own semantics
+/// earlier run (the cleanup below clears its stale observation files,
+/// not the directory itself), so it uses `create_dir_all`'s own semantics
 /// instead — but only ever chmods the leaf directory when *this call*
-/// is the one that created it (K7): forcing `0700` onto a directory
+/// is the one that created it: forcing `0700` onto a directory
 /// the caller already had, for whatever reason of their own, is a
 /// real, unrequested change to something outside osi's own run
 /// directory, and silently chmod'ing *someone else's* directory (one
@@ -414,9 +414,9 @@ fn build_engine(
 }
 
 /// The notice `do_run` prints right after `build_engine`'s own probe,
-/// when it has one (M4/#433) -- pulled out of `do_run` itself (review
-/// finding 6 on #458) so the exact wording for each of `caps`'s own
-/// cases is unit-testable without a real engine binary on `PATH`.
+/// when it has one (issue #433) -- pulled out of `do_run` itself so the
+/// exact wording for each of `caps`'s own cases is unit-testable
+/// without a real engine binary on `PATH`.
 fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<String> {
     if caps.timed_out {
         Some(format!(
@@ -473,13 +473,13 @@ fn label_capability_notice(
 /// Option<DiscoveredConfig>)`, so a caller can hand the *same*
 /// effective config this compile actually used on to
 /// `PlanTree::from_program_with_options` for every `use: path:` child
-/// (review finding 3 on #458) instead of the caller's own original,
-/// possibly-absent `--config` argument.
+/// instead of the caller's own original, possibly-absent `--config`
+/// argument.
 ///
 /// An empty `CIRCUITRY_CONFIG` (`CIRCUITRY_CONFIG=`) is treated the
 /// same as unset, matching `cli/config.py::resolve_config`'s own
-/// `os.getenv("CIRCUITRY_CONFIG")` truthiness check (review finding 8
-/// on #458) — `PathBuf::from("")` would otherwise name a real,
+/// `os.getenv("CIRCUITRY_CONFIG")` truthiness check —
+/// `PathBuf::from("")` would otherwise name a real,
 /// non-empty path here (`""`, read as the current directory) and skip
 /// discovery silently instead of falling through to it.
 macro_rules! compile_plan {
@@ -515,12 +515,12 @@ macro_rules! compile_plan {
 }
 
 /// `do_run`'s own plain supervise loop, shared with `run_tui`'s own
-/// TUI-unavailable fallback (review finding 14): forwards every
+/// TUI-unavailable fallback: forwards every
 /// signal osi receives to the engine's process group, escalates to
 /// `SIGKILL` 10s after a second one, drains its stderr and
-/// observations every tick, and returns once it has exited. Before
-/// this was shared, that fallback just blocked on `child.wait()` with
-/// no signal forwarding at all — a SIGINT/TERM/HUP to osi did nothing
+/// observations every tick, and returns once it has exited. Without
+/// this sharing, that fallback would just block on `child.wait()` with
+/// no signal forwarding at all — a SIGINT/TERM/HUP to osi would do nothing
 /// until the engine ended on its own.
 #[allow(clippy::too_many_arguments)]
 fn supervise_plain(
@@ -1081,7 +1081,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     };
 
     // Registered before *anything* else in this function, not just
-    // before spawning the engine (F13): `build_engine`'s own `cof run
+    // before spawning the engine: `build_engine`'s own `cof run
     // --help` detection, and compiling the plan, both run a blocking
     // subprocess/compile step before the engine is ever spawned, and
     // each can legitimately take longer than a human's first Ctrl-C
@@ -1151,7 +1151,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     );
 
     let engine = build_engine(args.engine, &mut signals);
-    // Review finding 2 on #458: a Ctrl-C landing during the probe
+    // A Ctrl-C landing during the probe
     // `build_engine` just ran is cancelled promptly (`run_probe`'s own
     // signal check), but is still only *pending*, not yet acted on --
     // checked here, before the probe's own notice below, so a
@@ -1179,7 +1179,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         }
     };
 
-    // K4: the exact options a real `electricity <config> <doc> -e
+    // The exact options a real `electricity <config> <doc> -e
     // k=v...` run would check this document against (DESIGN.md §5
     // via `electricity::check_options`), so the plan can't drift from
     // what the engine itself would check. With no config argument,
@@ -1208,7 +1208,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     };
 
     // The run directory is created only right here, immediately before
-    // the spawn it exists for (P2-1): every check above (the config,
+    // the spawn it exists for: every check above (the config,
     // the plan compile) can fail without ever needing it on disk at
     // all, and a failure there used to leave a freshly made, empty
     // directory behind with no "exit" line printed either.
@@ -1226,14 +1226,14 @@ fn do_run(args: RunArgs) -> ExitCode {
     // printing its whole log (including its own `■ run` line) before
     // this run has written anything, and suppressing this run's own
     // summary line since the differ would already think it had seen
-    // one (F3). osi made this directory (or it's the default, always
+    // one. osi made this directory (or it's the default, always
     // fresh), so clearing stale observation files here can't lose
     // anything the caller put there on purpose.
     for stale in [spec.live_state_path(), spec.out_path(), spec.events_path()] {
         let _ = std::fs::remove_file(&stale);
     }
 
-    // P2-10: a signal that arrived any time after `SignalWatcher::new`
+    // A signal that arrived any time after `SignalWatcher::new`
     // above -- during `build_engine`'s own `cof run --help` detection,
     // or the plan compile, both blocking steps that run before any of
     // this -- must not go on to spawn the engine at all: forwarding it
@@ -1252,8 +1252,8 @@ fn do_run(args: RunArgs) -> ExitCode {
             Ok(pair) => pair,
             Err(err) => {
                 eprintln!("osi: couldn't launch {}: {err}", engine.name());
-                // The directory was just created for this spawn alone
-                // (P2-1): the engine never started, so a default one
+                // The directory was just created for this spawn alone:
+                // the engine never started, so a default one
                 // shouldn't be left behind empty. A caller's own
                 // `--out-dir` is never removed, same as every other
                 // path through this function.
@@ -1333,7 +1333,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         &orchestration.to_string_lossy(),
     );
 
-    // Join the tee threads before draining anything further (F6): the
+    // Join the tee threads before draining anything further: the
     // engine already exited (`try_wait` above returned `Some`), so this
     // reaps a already-reaped child again -- safe, and how `Drop`'s own
     // kill-then-wait does it too -- but it also blocks until every
@@ -1368,7 +1368,7 @@ fn do_run(args: RunArgs) -> ExitCode {
 /// torn down and a plain writer is all that's left): reaps the
 /// engine, drains whatever's left of its stderr and the final
 /// live-state write, computes the run's own summary line exactly
-/// once (M1: never mid-run), and prints the exit code and (for the
+/// once (never mid-run), and prints the exit code and (for the
 /// default run directory only) where its files ended up. Returns the
 /// engine's own exit code, the same number every path through here
 /// has always used to build its `ExitCode` from.
@@ -1426,7 +1426,7 @@ fn finish_run(
     // `document_hash`.
     history.write(Some(engine_name), final_state.as_ref(), model, plan);
 
-    // M1: the run's own summary line is computed exactly once, here,
+    // The run's own summary line is computed exactly once, here,
     // after every other line this run will ever produce has already
     // been printed -- `Differ::finish` never emits it mid-run, and a
     // per-tick heuristic no longer exists to race state and events
@@ -1489,17 +1489,17 @@ fn icon_frame_for(no_animation: bool, elapsed: Duration) -> u64 {
 /// not to spin a whole CPU core on a shared machine.
 const KEY_POLL_INTERVAL: Duration = Duration::from_millis(30);
 
-/// How many of the TUI's own log lines are kept at most (review
-/// finding 13): unlike `--log`'s own stdout stream, the TUI's log
+/// How many of the TUI's own log lines are kept at most: unlike
+/// `--log`'s own stdout stream, the TUI's log
 /// pane buffer lives in memory for as long as osi does, and a long-
 /// running orchestration never had anything bounding it at all.
 const MAX_LOG_LINES: usize = 10_000;
 
 /// Pushes one line onto the TUI's own log buffer, then trims it back
-/// to `MAX_LOG_LINES` (finding 13) — the oldest lines go first, same
+/// to `MAX_LOG_LINES` — the oldest lines go first, same
 /// as a terminal's own scrollback eventually would. `next_seq` is a
 /// plain running count of every line ever pushed, bumped here and
-/// never reset or shifted by the trim above (finding 4) -- the log
+/// never reset or shifted by the trim above -- the log
 /// pane's own highlight key for a line is this sequence number, not
 /// its position in `log_lines`, which the trim would otherwise shift
 /// out from under an already-marked key.
@@ -1606,8 +1606,8 @@ fn mark_highlights(
     *prev = Some(new.clone());
 }
 
-/// Marks `log:<seq>` for every line pushed since the last rebuild
-/// (finding 4): `next_seq` is `push_log_line`'s own running count of
+/// Marks `log:<seq>` for every line pushed since the last rebuild:
+/// `next_seq` is `push_log_line`'s own running count of
 /// every line ever pushed, immune to `MAX_LOG_LINES`' own trim, so a
 /// line's key stays stable even once the trim has dropped it from
 /// `log_lines` itself. `prev_total` is the same count as of the
@@ -1615,7 +1615,7 @@ fn mark_highlights(
 ///
 /// `baseline_exists` is the same "does `prev_render_state` already
 /// hold a real build" condition `mark_highlights` tests via its own
-/// `prev` (issue #535's log-pane half of finding 3): on the loop's
+/// `prev` (issue #535's log-pane half): on the loop's
 /// first real rebuild there is no baseline yet, so every line pushed
 /// by the catch-up drain that ran before it -- replaying what an
 /// already-progressed or already-finished run did before `osi
@@ -1640,8 +1640,8 @@ fn mark_new_log_lines(
 }
 
 /// Marks `details:sent`/`details:received` when the *currently*
-/// selected path's own blocks changed since the last rebuild (finding
-/// 5) -- `prev` only ever compares against the same path: switching
+/// selected path's own blocks changed since the last rebuild --
+/// `prev` only ever compares against the same path: switching
 /// the selection to a different row, or to none, never counts as a
 /// change on its own, it just restarts the comparison from that new
 /// path's own first observation.
@@ -1685,7 +1685,7 @@ fn mark_details_highlights(
 /// confirmed `q` (§6.3: "cancel, with confirm (= Ctrl-C)") must behave
 /// exactly like Ctrl-C itself, never a separate path that could drift
 /// from it. `sig` is `Int` for a key (Ctrl-C always means SIGINT) but
-/// the real signal osi itself received for an external one (K2): the
+/// the real signal osi itself received for an external one: the
 /// plain loop above already forwards *that* signal unchanged, and the
 /// TUI must too, rather than silently turning every SIGTERM/SIGHUP
 /// into a SIGINT and leaving osi exiting 130 for either.
@@ -1749,7 +1749,7 @@ fn cancel_for_lost_terminal(
     }
 }
 
-/// A follow-up finding: a pty slave whose master
+/// A pty slave whose master
 /// has closed, but which was never osi's own *controlling* terminal
 /// (no `setsid`-then-`TIOCSCTTY` acquisition, as a driver using
 /// `start_new_session=True` alone never gives it one) raises no
@@ -1791,7 +1791,7 @@ fn stdin_hung_up() -> bool {
     fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
 }
 
-/// A third finding, from a real `sample` of a
+/// From a real `sample` of a
 /// still-spinning `osi`: `stdin_hung_up`'s own pre-check, run between
 /// crossterm calls, never gets another turn once the main thread is
 /// actually *inside* `event::poll`/`event::read` when the hang-up
@@ -2154,8 +2154,8 @@ fn format_log_line(clock: &mut Clock, ts: Option<&str>, text: &str) -> String {
 
 /// How often the TUI's own render state (the plan tree's rows, the
 /// header's effect counts, everything `oscilloscope_core::render::
-/// build` computes) is allowed to be rebuilt from scratch (review
-/// finding K4) — `REDRAW_INTERVAL` caps how often a frame is drawn,
+/// build` computes) is allowed to be rebuilt from scratch —
+/// `REDRAW_INTERVAL` caps how often a frame is drawn,
 /// but every ~30ms key-poll tick used to rebuild this *and* recompute
 /// `keys::visible_rows` regardless of whether either observation,
 /// key or resize had actually changed anything since the last one,
@@ -2172,7 +2172,7 @@ const RENDER_REBUILD_INTERVAL: Duration = Duration::from_secs(1);
 /// `RenderState` and reads keys instead of printing a plain-text
 /// stream.
 ///
-/// Review finding K1: the engine exiting does not, on its own, end
+/// The engine exiting does not, on its own, end
 /// this loop — only three things do, and only once it has (DESIGN.md
 /// §6.3's final-state screen): a confirmed `q` (`App::
 /// quit_when_finished`), a Ctrl-C cancel, or any external INT/TERM/
@@ -2216,7 +2216,7 @@ fn run_tui(
     model.set_label_hint(label_hint);
     let mut clock = Clock::new();
     let mut log_lines: Vec<String> = Vec::new();
-    // Finding 4: a plain running count of every line ever pushed,
+    // A plain running count of every line ever pushed,
     // never reset or shifted by `MAX_LOG_LINES`' own trim -- a log
     // line's own highlight key is this sequence number, never its
     // position in `log_lines` itself.
@@ -2248,7 +2248,7 @@ fn run_tui(
     }
     let mut highlights = highlight::Tracker::new();
     let mut prev_render_state: Option<oscilloscope_core::render::RenderState> = None;
-    // Finding 4/5: both start out already caught up with whatever
+    // Both start out already caught up with whatever
     // the startup lines above just did, so the loop's own first real
     // rebuild is the one that establishes the first real baseline --
     // nothing from before the loop started ever counts as "new".
@@ -2269,7 +2269,7 @@ fn run_tui(
             // this should be a real terminal; if it still isn't one
             // underneath (an exotic CI pty, a stdout swapped out from
             // under osi), fall back to the plain supervise loop
-            // (finding 14) rather than a broken half-raw-mode session
+            // rather than a broken half-raw-mode session
             // — a bare `child.wait()` here left SIGINT/TERM/HUP to osi
             // doing nothing at all until the engine ended on its own.
             eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
@@ -2317,17 +2317,17 @@ fn run_tui(
 
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
-    // Finding 1: a *rebuild* (`render::build` plus `mark_highlights`'
+    // A *rebuild* (`render::build` plus `mark_highlights`'
     // own `changes::diff`) and a *draw* are no longer the same flag --
     // `needs_rebuild` is only ever set by something that can actually
     // change what gets built (an observation, a key, a resize, the 1s
     // timer); the redraw rule's own animation/fade tick below sets
     // only `needs_draw`, so a live run with nothing else happening no
     // longer rebuilds on every ~30ms key-poll tick the way a single
-    // `dirty` flag did (K4's own regression -- about 20 rebuilds a
+    // `dirty` flag did -- that single flag cost about 20 rebuilds a
     // second instead of about 1, since `needs_rebuild` used to stay
     // true, re-triggering the rebuild block, for every tick between
-    // two actual draws, not just reset once a real draw happened).
+    // two actual draws, not just reset once a real draw happened.
     let mut needs_rebuild = true;
     let mut needs_draw = true;
     let mut exit_status: Option<std::process::ExitStatus> = None;
@@ -2336,7 +2336,7 @@ fn run_tui(
     // other known instant (DESIGN.md's "one clock") freezes its own
     // elapsed time here instead of ticking on to `now` forever.
     let mut exit_status_ts: Option<String> = None;
-    // K1: set once a confirmed `q`, a Ctrl-C cancel, or an external
+    // Set once a confirmed `q`, a Ctrl-C cancel, or an external
     // signal has happened — the only three things that make this loop
     // leave the instant the engine exits, rather than staying open on
     // its final state until the user explicitly asks to leave.
@@ -2404,7 +2404,7 @@ fn run_tui(
         store_screen.as_ref(),
         &mut transcript_cache,
     );
-    // Finding 3: no `mark_highlights` call here -- `prev_render_state`
+    // No `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
     // `current_state: None`, before the loop has polled anything),
     // so the loop's own first real rebuild below is genuinely the
@@ -2437,8 +2437,8 @@ fn run_tui(
             }
         }
         // The engine already exited on its own (the finished screen is
-        // up) and a fresh signal just arrived — K1's "any external
-        // signal" trigger applies even then (a SIGHUP in particular
+        // up) and a fresh signal just arrived — the "any external
+        // signal" trigger above applies even then (a SIGHUP in particular
         // must never wait on a key with the terminal already gone).
         if leave_once_exited && exit_status.is_some() {
             break;
@@ -2497,7 +2497,7 @@ fn run_tui(
             }
         }
 
-        // K4: a full rebuild is forced at least once a second even
+        // A full rebuild is forced at least once a second even
         // with nothing else dirty, so the header's own elapsed time
         // still visibly ticks while the run is otherwise quiet --
         // once the engine process has exited, that elapsed time is
@@ -2639,7 +2639,7 @@ fn run_tui(
                 &mut transcript_cache,
             );
         }
-        // K4: computed every tick regardless (collapse/filter/errors-
+        // Computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
@@ -2664,7 +2664,7 @@ fn run_tui(
         };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
-        // Third finding: never call into
+        // Never call into
         // crossterm directly here at all any more -- see
         // `spawn_event_reader`'s own doc comment for why a pre-check
         // between crossterm calls, on this same thread, can't work.
@@ -2709,7 +2709,7 @@ fn run_tui(
                                     &mut next_log_seq,
                                     &mut clock,
                                 );
-                                // K1: only a *confirmed* `q` leaves on
+                                // Only a *confirmed* `q` leaves on
                                 // its own once the engine exits — a
                                 // plain `c` cancels but still shows
                                 // the finished screen afterwards.
@@ -2730,12 +2730,12 @@ fn run_tui(
                                     );
                                     leave_once_exited = true;
                                 } else {
-                                    // K3: "with nothing running: quit".
+                                    // With nothing running: quit.
                                     break 'tui;
                                 }
                             }
                             keys::Action::CycleTheme => {
-                                // Finding 19: only logs the fallback
+                                // Only logs the fallback
                                 // note on an actual transition into
                                 // (or out of) it -- on a 16-colour
                                 // terminal, `t` cycling past several
@@ -3041,8 +3041,8 @@ fn run_tui(
 /// `cof`'s own pre-execution failure shape (DESIGN.md §4.1): with no
 /// orchestration ever started, it prints exactly `{"ok":false,
 /// "error":"..."}` to stdout and nothing reaches `--live-state`/`--out`
-/// at all. Parsed as a stream of whole JSON values, not split by line
-/// (M2): stdout is a pipe, so a real `cof` pretty-prints that object
+/// at all. Parsed as a stream of whole JSON values, not split by
+/// line: stdout is a pipe, so a real `cof` pretty-prints that object
 /// across several lines (`console.print_json`'s default), and a
 /// line-by-line scan never finds it there -- only against a fixture
 /// someone had already flattened to one line by hand.
@@ -3063,7 +3063,7 @@ fn read_stdout_json_error(path: &Path) -> Option<String> {
 }
 
 /// The engine's own last word when neither state nor stdout said
-/// anything at all (M2's last-resort reason): a trimmed, non-empty
+/// anything at all (the last-resort reason): a trimmed, non-empty
 /// line from the very end of its stderr tee.
 fn last_nonempty_stderr_line(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -3075,7 +3075,7 @@ fn last_nonempty_stderr_line(path: &Path) -> Option<String> {
 }
 
 /// The failed run's own reason, when `prime.meta.error` has none to
-/// give (M2) -- in priority order: a `run_end` event's own `error`
+/// give -- in priority order: a `run_end` event's own `error`
 /// (DESIGN.md §3's format table always carries one for a failing
 /// run), then cof's pre-execution stdout JSON (DESIGN.md §4.1), then
 /// its last stderr line.
@@ -3092,9 +3092,9 @@ fn failure_reason_fallback(run_dir: &Path, model: &RunModel) -> Option<String> {
 /// "process exited with no ended state" branch): shared by
 /// `finish_run` (which has a real exit code) and `finish_watch`
 /// (which has none, and passes `likely_failed` from `run_end`'s own
-/// `ok` instead, K4). Goes through the same `run_status` the TUI
+/// `ok` instead). Goes through the same `run_status` the TUI
 /// header and `Differ::finish` use, so the three surfaces can't
-/// label the same run differently -- this is the K6 fix: an invalid
+/// label the same run differently: an invalid
 /// document (`likely_failed`, with cof's own stdout JSON as the
 /// reason) must read "failed", not "aborted".
 fn unended_run_summary_text(
@@ -3265,11 +3265,11 @@ fn drain_until_ended(
 }
 
 /// `do_watch`'s own plain stop-condition loop, shared with `run_tui_
-/// watch`'s own TUI-unavailable fallback (review finding 14): the
-/// same three ways a watched run ends (DESIGN.md §6.3, F4) — a
+/// watch`'s own TUI-unavailable fallback: the
+/// same three ways a watched run ends (DESIGN.md §6.3) — a
 /// completed live-state write, an events `run_end`, or the engine's
 /// own pid (from a `run_start` event) going away — plus a local
-/// signal (P2-7). Before this was shared, that fallback reported the
+/// signal. Without this sharing, that fallback would report the
 /// run aborted at once, with no actual watching at all.
 #[allow(clippy::too_many_arguments)]
 fn supervise_plain_watch(
@@ -3365,9 +3365,9 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     }
 
     let target = PathBuf::from(&args.target);
-    // P2-4: a typo'd path used to be silently treated as a direct
+    // A typo'd path used to be silently treated as a direct
     // `state.live.json` target and waited on forever -- with no
-    // staleness timeout (N3's own decision) there was nothing to ever
+    // staleness timeout at all, there was nothing to ever
     // notice it, let alone say so.
     if !target.exists() {
         eprintln!("osi: watch target {} does not exist", target.display());
@@ -3385,7 +3385,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         )
     };
 
-    // P2-4: says once, up front, what this watch is actually waiting
+    // Says once, up front, what this watch is actually waiting
     // on, rather than leaving a user looking at a silent, running
     // process with no clue what it's for -- the live-state file for a
     // run that simply hasn't started yet (or never will) looks
@@ -3394,7 +3394,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         eprintln!("osi: waiting for {}", live_state_path.display());
     }
 
-    // K4: the same options check -- `--config`/`-e`, when given --
+    // The same options check -- `--config`/`-e`, when given --
     // `osi <doc>` itself uses, so `osi watch --plan doc.yml` compiles
     // the same plan a live `osi run` of that document would.
     let plan = match &args.plan {
@@ -3498,10 +3498,10 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let mut model = RunModel::new();
     let mut signals = SignalWatcher::new().ok();
 
-    // F4/N3: `osi watch` owns no `Child` for a run it didn't start,
+    // `osi watch` owns no `Child` for a run it didn't start,
     // so `supervise_plain_watch` stops on a completed live-state
     // write, an events `run_end`, the engine's own pid (from a
-    // `run_start` event) going away, or a local signal (P2-7) —
+    // `run_start` event) going away, or a local signal —
     // whichever comes first.
     let (mut last_state, local_signal) = supervise_plain_watch(
         &mut out,
@@ -3541,7 +3541,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// watch`, `q` just detaches"), with no confirm, whether or not the
 /// watched run is still going.
 ///
-/// Review finding K1: watching a run that's already finished (or one
+/// Watching a run that's already finished (or one
 /// that finishes while this is open) stays on that final state until
 /// the user presses `q` or Ctrl-C, same as `run_tui` — it does not
 /// detach back to the shell the instant `run_ended`/a dead pid is
@@ -3592,7 +3592,7 @@ fn run_tui_watch(
     let mut model = RunModel::new();
     let mut clock = Clock::new();
     let mut log_lines: Vec<String> = Vec::new();
-    // Finding 4: see `run_tui`'s own `next_log_seq`.
+    // See `run_tui`'s own `next_log_seq`.
     let mut next_log_seq: u64 = 0;
     // See `run_tui`'s own `story` (issue #635).
     let mut story: Vec<oscilloscope_core::diff::LogLine> = Vec::new();
@@ -3601,7 +3601,7 @@ fn run_tui_watch(
     let events_path = run_dir.join("events.jsonl");
     let mut signals = SignalWatcher::new().ok();
     let mut local_signal: Option<ForwardSignal> = None;
-    // Finding 15: `q` on a still-live run is a voluntary detach, not
+    // `q` on a still-live run is a voluntary detach, not
     // an abort.
     let mut detached_while_live = false;
     // Issue #698: set once `esc` leaves this loop for the Select
@@ -3627,7 +3627,7 @@ fn run_tui_watch(
     }
     let mut highlights = highlight::Tracker::new();
     let mut prev_render_state: Option<oscilloscope_core::render::RenderState> = None;
-    // Finding 4/5: see `run_tui`'s own comment above.
+    // See `run_tui`'s own comment above.
     let mut prev_log_total: u64 = next_log_seq;
     let mut prev_details_highlight: Option<(
         String,
@@ -3664,7 +3664,7 @@ fn run_tui_watch(
     let mut terminal = match guard_and_terminal {
         Ok(t) => t,
         Err(err) => {
-            // Finding 14: actually watches via the same stop-
+            // Actually watches via the same stop-
             // condition loop `do_watch` uses, rather than reporting
             // the run aborted at once with no watching at all.
             eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
@@ -3724,10 +3724,10 @@ fn run_tui_watch(
     // one spawned here (issue #698's own `EventReader` doc comment).
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
-    // Finding 1: see `run_tui`'s own comment above.
+    // See `run_tui`'s own comment above.
     let mut needs_rebuild = true;
     let mut needs_draw = true;
-    // K1: once the watched run has ended (by state, by events, or by
+    // Once the watched run has ended (by state, by events, or by
     // its pid going away), this loop keeps running — redrawing the
     // final state and reading keys — rather than detaching on its
     // own; only `ended` stops `observe_tick` from polling a run
@@ -3806,7 +3806,7 @@ fn run_tui_watch(
         store_screen.as_ref(),
         &mut transcript_cache,
     );
-    // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
+    // No `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
     // `last_state: None`; the loop's own first real rebuild is the
     // genuine first observation, including when `osi watch` attaches
@@ -3940,7 +3940,7 @@ fn run_tui_watch(
             }
         }
 
-        // K4, same as `run_tui`: forced only while the run itself
+        // Same as `run_tui`: forced only while the run itself
         // is still going, since a finished run's own elapsed time is
         // frozen and a forced rebuild past that point would only
         // cost cycles (the Flow screen's own model among them) for no
@@ -4093,7 +4093,7 @@ fn run_tui_watch(
         };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
-        // Third finding: never call into
+        // Never call into
         // crossterm directly here at all any more -- see
         // `spawn_event_reader`'s own doc comment for why a pre-check
         // between crossterm calls, on this same thread, can't work.
@@ -4133,16 +4133,16 @@ fn run_tui_watch(
                             &store_rows,
                         ) {
                             keys::Action::Quit => {
-                                // Finding 15: `q` while the watched
+                                // `q` while the watched
                                 // run is still going is a voluntary
                                 // detach, not an abort — the run
-                                // already having ended (K1's own
+                                // already having ended (which already shows the
                                 // finished screen) still gets the
                                 // normal ok/failed/aborted summary.
                                 detached_while_live = !ended;
                                 break 'tui;
                             }
-                            // K3: Ctrl-C in `osi watch` always just
+                            // Ctrl-C in `osi watch` always just
                             // detaches too, same as `q` — but reports
                             // the same 130 a real forwarded SIGINT
                             // would, not the final state's own code.
@@ -4163,7 +4163,7 @@ fn run_tui_watch(
                                 break 'tui;
                             }
                             keys::Action::CycleTheme => {
-                                // Finding 19: see `run_tui`'s own
+                                // See `run_tui`'s own
                                 // comment above.
                                 let previously_applied = resolved_theme.theme.name;
                                 theme_name = theme_name.next();
@@ -5983,7 +5983,7 @@ fn run_combined_signal_leg(
 /// own loop stopped (a completed run, a local Ctrl-C, or a dead pid
 /// with nothing left to watch): one more drain for anything that
 /// landed between the loop's last check and now, the same single
-/// final-summary computation `do_run`'s own `finish_run` uses (M1),
+/// final-summary computation `do_run`'s own `finish_run` uses,
 /// and the exit code `osi run` of the same document would have used
 /// — from a signal `run_end` named, or from watch's own local Ctrl-C,
 /// rather than only ok-vs-failed. Returns that exit code; the caller
@@ -6010,7 +6010,7 @@ fn finish_watch(
         *last_state = Some(state);
     }
 
-    // Finding 15: a voluntary `q` detach from a run that was still
+    // A voluntary `q` detach from a run that was still
     // going is not an abort — reported distinctly, and exits 0,
     // rather than falling into the generic "no final state" ending
     // below (which this would otherwise always hit: the run, by
@@ -6114,7 +6114,7 @@ fn watch_exit_code(
             _ if model.run_end_ok() == Some(true) => 0,
             _ => {
                 // Stopped on a dead pid, with nothing that counts as a
-                // clean completion: an abort (F4).
+                // clean completion: an abort.
                 1
             }
         }
@@ -6124,7 +6124,7 @@ fn watch_exit_code(
 /// Prints a clap parse error to the right stream and returns its exit
 /// code: `--help`/`--version` (exit 0) print to stdout, same as any
 /// other successful output; an actual usage error (exit 2) prints to
-/// stderr, same as every other error `osi` reports (#422 review note).
+/// stderr, same as every other error `osi` reports (#422).
 fn report_clap_error(err: clap::Error) -> ExitCode {
     if err.exit_code() == 0 {
         print!("{err}");
@@ -6649,7 +6649,7 @@ mod tests {
         );
     }
 
-    /// Finding 3: the real call sequence both TUI loops take now --
+    /// The real call sequence both TUI loops take now --
     /// `osi watch` attaching to a run that's already well under way
     /// (full state from the very first real rebuild, nothing like
     /// `run_tui`/`run_tui_watch`'s own placeholder build with `state:
@@ -6678,7 +6678,7 @@ mod tests {
         );
 
         // No placeholder build is ever fed through `mark_highlights`
-        // in `run_tui`/`run_tui_watch` any more (finding 3) --
+        // in `run_tui`/`run_tui_watch` any more --
         // `prev_render_state` starts exactly like this.
         let mut prev_render_state = None;
         let mut highlights = highlight::Tracker::new();
@@ -6802,7 +6802,7 @@ mod tests {
         );
     }
 
-    /// Finding 4: `mark_new_log_lines` marks every sequence number
+    /// `mark_new_log_lines` marks every sequence number
     /// from the previous rebuild's total up to the new one, and
     /// nothing retroactively once a key has already been marked.
     /// `baseline_exists` is `true` throughout here -- a later rebuild
@@ -6858,7 +6858,7 @@ mod tests {
         assert_eq!(prev_total, 6);
     }
 
-    /// Finding 5: `details:sent`/`details:received` mark only when
+    /// `details:sent`/`details:received` mark only when
     /// the *same* selected path's blocks actually changed, never on
     /// a bare selection change to a different path.
     #[test]
@@ -6955,7 +6955,7 @@ mod tests {
         assert!(rendered.contains("Switches off the scope icon's trace"));
         assert!(rendered.contains("The colour theme"));
         assert!(rendered.contains("Turns run history off"));
-        // Finding 10: `--theme`'s possible values (a derived
+        // `--theme`'s possible values (a derived
         // `ValueEnum`) are listed in `--help`, not just its own
         // description text.
         assert!(rendered.contains("dracula"), "{rendered}");
@@ -6987,7 +6987,7 @@ mod tests {
         assert!(parsed.no_animation);
     }
 
-    /// Finding 15: an explicit icon test for `--no-animation` -- the
+    /// An explicit icon test for `--no-animation` -- the
     /// still frame (0) regardless of how long the run's been live,
     /// versus a real frame number once animation is on.
     #[test]
@@ -7005,7 +7005,7 @@ mod tests {
 
         let err = RunArgs::try_parse_from(args(&["--theme", "bogus", "do-thing.yml"]))
             .expect_err("an unknown theme name is a usage error");
-        // Finding 10: `--theme` is now a derived `ValueEnum`
+        // `--theme` is now a derived `ValueEnum`
         // (clap's own usage error, not `ThemeName::parse`'s), so
         // every valid name is listed right there in the error too.
         assert!(err.to_string().contains("dracula"), "{err}");
@@ -7013,7 +7013,7 @@ mod tests {
 
     #[test]
     fn resolve_theme_choice_prefers_the_cli_flag_over_osi_theme() {
-        // Finding 13: `resolve_theme_choice` takes its own
+        // `resolve_theme_choice` takes its own
         // `OSI_THEME` reading as a plain argument now, so this test
         // never touches the process environment at all.
         assert_eq!(
@@ -7046,7 +7046,7 @@ mod tests {
     fn recognized_flags_work_before_the_orchestration_positional() {
         // DESIGN.md §4.1/issue #424's own synopsis: "Flags may also
         // appear before the positionals." Asserted at the `clap` parse
-        // alone (`RunArgs::try_parse_from`, never `run`/`do_run`): F11 —
+        // alone (`RunArgs::try_parse_from`, never `run`/`do_run`):
         // `do_run` reaches `CofEngine::detect("cof")`, which runs the
         // real `cof run --help` under this process's own real `HOME`
         // and credentials whenever `cof` is on `PATH`, in *every*
@@ -7072,7 +7072,7 @@ mod tests {
 
     #[test]
     fn a_signal_already_pending_before_the_spawn_gives_its_exit_code_with_no_spawn() {
-        // P2-10: registering *this test's own* `SignalWatcher` first,
+        // Registering *this test's own* `SignalWatcher` first,
         // then sending the signal to this very process, exercises the
         // exact pre-spawn race deterministically -- no engine process
         // and no wall-clock delay involved, so the kernel's own
@@ -7098,9 +7098,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let doc = dir.path().join("do.yml");
         std::fs::write(&doc, "effects: []\n").unwrap();
-        // P2-1: an explicit --out-dir in this test's own TempDir, not
+        // An explicit --out-dir in this test's own TempDir, not
         // the default temp directory -- this error path returns
-        // before the run directory is ever created (P2-1), but every
+        // before the run directory is ever created, but every
         // test that reaches do_run uses its own --out-dir regardless,
         // so a future change along this path can't start leaking
         // osi-* directories into a shared /tmp on every cargo test.
@@ -7229,7 +7229,7 @@ mod tests {
 
     #[test]
     fn watch_exits_2_on_a_target_that_does_not_exist() {
-        // P2-4: a typo'd path must not be silently treated as a live
+        // A typo'd path must not be silently treated as a live
         // -state file and waited on forever.
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist");
@@ -7245,17 +7245,19 @@ mod tests {
             r#"{"runtime":{"last_run":{"completed_at":"t"}},"prime":{"value":true,"meta":{"error":null}}}"#,
         )
         .unwrap();
-        // Finding 7: `--log` forces the plain stream even on this
+        // `--log` forces the plain stream even on this
         // test runner's own TTY (an interactive `cargo test` run), so
         // this never enters the real TUI's raw mode / alternate screen
-        // — and, since K1, never waits on a key nothing here will send.
+        // — and never waits on a key nothing here will send, since the
+        // loop stays open on its final state rather than exiting the
+        // instant the engine does.
         let code = run(args(&["watch", dir.path().to_str().unwrap(), "--log"]));
         assert_eq!(code, ExitCode::from(0));
     }
 
     #[test]
     fn watch_stops_on_a_dead_run_start_pid_instead_of_hanging_forever() {
-        // F4: an aborted run (a second signal, SIGKILL, a crash) never
+        // An aborted run (a second signal, SIGKILL, a crash) never
         // writes a final snapshot, so `run_ended(state)` alone never
         // becomes true. `osi watch` must still notice, from the
         // engine's own pid (announced by a `run_start` event) going
@@ -7279,7 +7281,7 @@ mod tests {
 
         let target = dir.path().to_path_buf();
         let handle = std::thread::spawn(move || {
-            // Finding 7: `--log`, same reason as the test above.
+            // `--log`, same reason as the test above.
             run(std::iter::once("osi".to_string()).chain([
                 "watch".to_string(),
                 target.to_str().unwrap().to_string(),
@@ -7302,7 +7304,7 @@ mod tests {
 
     #[test]
     fn watch_reports_the_signal_run_end_named_not_just_ok_vs_failed() {
-        // P2-7: a run_end event names the real signal that ended the
+        // A run_end event names the real signal that ended the
         // run (DESIGN.md §3's format table); osi watch should report
         // that same exit code (130 for SIGINT), not just 1.
         let dir = tempfile::tempdir().unwrap();
@@ -7317,14 +7319,14 @@ mod tests {
         )
         .unwrap();
 
-        // Finding 7: `--log`, same reason as the first watch test above.
+        // `--log`, same reason as the first watch test above.
         let code = run(args(&["watch", dir.path().to_str().unwrap(), "--log"]));
         assert_eq!(code, ExitCode::from(130));
     }
 
     #[test]
     fn finish_watch_reports_a_distinct_detached_ending_for_a_voluntary_q_on_a_live_run() {
-        // Finding 15: `q` on a run that's still going is a voluntary
+        // `q` on a run that's still going is a voluntary
         // detach, not an abort — reported distinctly, and exits 0,
         // rather than the generic "no final state" abort every other
         // ending without one falls into.
@@ -7500,7 +7502,7 @@ mod tests {
         );
         let state = final_state.expect("drain_until_ended should read the final --out write");
 
-        // Review finding 3 (PR #496): the drain's own diff lines must
+        // The drain's own diff lines must
         // carry the failure, not just the fixture this test wrote by
         // hand straight into `state.json` -- a check against that
         // fixture alone would pass even with no drain at all.
@@ -7536,7 +7538,7 @@ mod tests {
 
     #[test]
     fn drain_until_ended_never_drops_a_held_end_line() {
-        // #545's review finding 3: a held `End` line must not be
+        // #545: a held `End` line must not be
         // abandoned just because the drain loop itself reached a
         // quiet pass before the token counts ever showed up over
         // `--live-state` -- the run's authoritative final `--out`
@@ -7597,7 +7599,7 @@ mod tests {
 
     #[test]
     fn drain_until_ended_falls_back_to_the_live_snapshot_it_polled_when_out_path_has_nothing() {
-        // Review finding 1 on PR #496: `osi watch <dir | live.json>`
+        // `osi watch <dir | live.json>`
         // (DESIGN.md Q5) can point at a run osi didn't start, where
         // `out_path` (`run_dir.join("state.json")`) is never written
         // at all -- `drain_until_ended` must still surface the final
@@ -7671,7 +7673,7 @@ mod tests {
 
     #[test]
     fn push_log_line_keeps_only_the_most_recent_max_log_lines() {
-        // Finding 13: the TUI's own log buffer has nothing else
+        // The TUI's own log buffer has nothing else
         // bounding it for as long as osi keeps running.
         let mut log_lines: Vec<String> = Vec::new();
         let mut next_log_seq: u64 = 0;
@@ -7684,7 +7686,7 @@ mod tests {
             log_lines.last().unwrap(),
             &format!("line {}", MAX_LOG_LINES + 4)
         );
-        // Finding 4: the sequence count keeps going regardless of
+        // The sequence count keeps going regardless of
         // the trim -- it's the key's own stable identity, not the
         // buffer's own length.
         assert_eq!(next_log_seq, (MAX_LOG_LINES + 5) as u64);
@@ -7712,7 +7714,7 @@ mod tests {
 
     #[test]
     fn clock_never_prints_an_earlier_clock_time_than_it_already_has() {
-        // K5: a backdated line (DESIGN.md §2.4's "new node that is
+        // A backdated line (DESIGN.md §2.4's "new node that is
         // already complete" row, or events and state simply landing a
         // tick apart) can carry a `ts` earlier than one the clock has
         // already shown — the printed `HH:MM:SS` must never visibly
@@ -7744,7 +7746,7 @@ mod tests {
 
     #[test]
     fn engine_capability_notice_reports_a_timed_out_probe_distinctly_from_no_events() {
-        // Review finding 6 on #458: the timed-out probe's own notice
+        // The timed-out probe's own notice
         // text was untested.
         let timed_out = EngineCaps {
             events: false,
@@ -7885,7 +7887,7 @@ mod tests {
 
     #[test]
     fn create_run_dir_is_always_private() {
-        // F2: a run directory can hold state with prompt and tool
+        // A run directory can hold state with prompt and tool
         // output, so it must never be left group/world-readable.
         let parent = tempfile::tempdir().unwrap();
 
@@ -7917,7 +7919,7 @@ mod tests {
 
     #[test]
     fn create_run_dir_never_chmods_an_out_dir_it_did_not_create() {
-        // K7: forcing 0700 onto a directory the caller already had is
+        // Forcing 0700 onto a directory the caller already had is
         // an unrequested change to something outside osi's own run
         // directory -- it must be left exactly as the caller made it,
         // not quietly locked down.
@@ -7941,7 +7943,7 @@ mod tests {
 
     #[test]
     fn a_reused_out_dir_does_not_replay_the_previous_runs_final_state() {
-        // F3: the previous run's `state.live.json`/`state.json`/
+        // The previous run's `state.live.json`/`state.json`/
         // `events.jsonl` must be gone before the engine is spawned into
         // a reused `--out-dir`, or the first poll reads the *old* run's
         // final snapshot and prints its whole log (including its own
@@ -7989,10 +7991,10 @@ mod tests {
 
     #[test]
     fn the_summary_line_is_last_when_the_events_stream_is_already_complete() {
-        // M1, case A: the events writer has already caught up (its own
+        // Case A: the events writer has already caught up (its own
         // `end`/`run_end` already on disk) by the same tick the state
-        // write lands -- the exact race the measured bug hit, since
-        // the event's own millisecond-plus-`Z` timestamp and the
+        // write lands -- a race that can duplicate the summary line,
+        // since the event's own millisecond-plus-`Z` timestamp and the
         // state's microsecond-plus-offset one for the same instant
         // are not comparable as strings at all.
         let dir = tempfile::tempdir().unwrap();
@@ -8041,7 +8043,7 @@ mod tests {
 
     #[test]
     fn the_summary_line_is_last_when_the_state_write_arrives_before_the_events_stream_does() {
-        // M1, case B: the reverse race -- the live-state file already
+        // Case B: the reverse race -- the live-state file already
         // shows the run complete while the events writer is still
         // catching up (only `start` on disk so far), the end event
         // and the final `--out` write both landing only on the next
@@ -8110,7 +8112,7 @@ mod tests {
 
     #[test]
     fn read_stdout_json_error_parses_a_pretty_printed_object() {
-        // M2: a real `cof`, with stdout as a pipe, pretty-prints its
+        // A real `cof`, with stdout as a pipe, pretty-prints its
         // pre-execution failure object across several lines -- a
         // line-by-line scan never finds it there, only a fixture
         // already flattened to one line by hand.
@@ -8129,7 +8131,7 @@ mod tests {
 
     #[test]
     fn a_validation_failure_puts_cofs_own_reason_on_the_summary_line() {
-        // M2: a run that ended with no `prime` node at all (a document
+        // A run that ended with no `prime` node at all (a document
         // invalid enough that nothing ran) has no `prime.meta.error` of
         // its own -- cof's own pre-execution stdout JSON is the only
         // place the real reason lives.
