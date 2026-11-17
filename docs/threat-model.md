@@ -238,7 +238,9 @@ only), target URL (userinfo stripped, credential-like query parameters
 such as a search API key masked) and a parsed form of the provider's error
 body. Credential values passed on the request are also stripped from that
 body/stderr text as a second layer, in case a provider ever echoes back
-what it was sent. `meta.error` and `meta.fallback_attempts[].error`, which
+what it was sent, and any URL found embedded in the body (another
+endpoint a provider's own error text names, say) has its userinfo
+stripped too. `meta.error` and `meta.fallback_attempts[].error`, which
 land in run state on every prompt failure, are additionally passed through
 the redaction helper (below) before being stored.
 

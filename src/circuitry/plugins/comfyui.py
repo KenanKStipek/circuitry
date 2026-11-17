@@ -151,7 +151,8 @@ class ComfyUIPlugin:
     def __post_init__(self) -> None:
         if not self.base_url.startswith(("http://", "https://")):
             raise ValueError(
-                f"base_url must start with http:// or https://, got: {self.base_url!r}"
+                "base_url must start with http:// or https://, got: "
+                f"{http_conventions.redact_request_url(self.base_url)!r}"
             )
 
     def _curl_json(

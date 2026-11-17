@@ -1395,9 +1395,19 @@ even though that part was never actually contacted. A bare userinfo
 `@` (`http://user:pass@host/`) is unaffected: only the credential is
 removed, and the real host is still named. Either way, a credential-
 like query parameter (a key containing `key`, `token`, `secret`,
-`auth`, `password` or `pwd`) is masked to `***` in what's left. Any
-other surface that may still name a request URL raw is tracked in a
-follow-up issue.
+`auth`, `password` or `pwd`) is masked to `***` in what's left.
+
+Every other surface that names a configured or requested URL applies
+the same rule: the `runtime.effective_settings` snapshot (`--out`,
+`--json`, `--live-state`, `last-run.json`) cuts a `base_url` at the same
+point, keeping a `***REDACTED***@` marker instead of removing the
+credential outright; `cof`'s verbose progress labels, `cof doctor`/
+`cof setup`'s detection table, a library source's fetch errors, the
+`rss` tool's fetch error, and `comfyui`'s own scheme refusal all redact
+rather than echo a configured URL raw; and a library/SDK exception's
+own text (`webhook`, `web_fetch`, `mcp`, `surrealdb`, and a curl-backed
+adapter's response-body excerpt) has any URL found inside it scrubbed
+the same way before it reaches a failure message.
 
 The `http` tool refuses any scheme other than `http`/`https` — before any
 I/O and before touching any local file (so a `file://` URL is never read

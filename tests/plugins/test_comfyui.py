@@ -67,6 +67,16 @@ class _FakePopen:
         return False
 
 
+def test_bad_scheme_refusal_never_names_a_password_in_the_base_url() -> None:
+    """Issue #819: `__post_init__`'s scheme refusal echoed the raw
+    `base_url`, userinfo included."""
+    password = "pw_value_pw_value"
+    with pytest.raises(ValueError, match="base_url must start with") as excinfo:
+        ComfyUIPlugin(base_url=f"ftp://alice:{password}@localhost:8188")
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
 def test_curl_json_post_sends_body_on_stdin_not_argv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
