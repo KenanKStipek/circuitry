@@ -1,9 +1,9 @@
-//! Runtime decomposition (`core/decompose.py`) -- issue #521 (M1 lane
-//! L2a of #448) ported every pure part that needs no `prompt`-effect
+//! Runtime decomposition (`core/decompose.py`) -- issue #521 (issue
+//! #448) ported every pure part that needs no `prompt`-effect
 //! wiring: the route-up model, the planner's input/output shapes,
 //! `_validate_plan`, the `meta.decomposition` record builders, the
 //! plan's identity and cycle text, and the decomposition child's seed
-//! state. [`maybe_decompose`] (issue #522, lane L2b) is the call-site
+//! state. [`maybe_decompose`] (issue #522) is the call-site
 //! wiring: `exec::prompt::execute_prompt` calls it once, right after
 //! the retry policy is resolved and before `build_options`, and acts
 //! on whichever of [`Posture`]'s three cases comes back.
@@ -42,8 +42,7 @@ use electricity_yaml::{DumpError, DumpOptions};
 /// byte by `electricity/scripts/generate_decompose_planner.py
 /// --check`. `core/decompose.py::_planner_path`'s default -- the path
 /// an override (`_decomposition_planner_path`) is not ported here,
-/// since nothing in this lane runs the planner yet (lane L2b's own
-/// concern).
+/// since nothing in this crate runs the planner yet.
 pub const PLANNER_YAML: &str = include_str!("decompose_planner.yml");
 
 /// `core/decompose.py::_DEFAULT_RESULT_PATH`.

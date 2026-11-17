@@ -8,29 +8,29 @@
 //! ([`compose`], [`prompt_files`], [`digest`]), and the two entry points
 //! that reproduce Circuitry's two surfaces ([`pipeline`]).
 //!
-//! # Lanes (issue #408)
+//! # Modules (issue #408)
 //!
-//! Lanes A (this crate's stable public API), B, C and D each filled in
-//! disjoint files and have all landed — see each module's own header
-//! for which lane owns it and which Circuitry source it ports:
+//! Each module below ports a disjoint part of Circuitry's own
+//! load-and-check pipeline and has landed — see each module's own
+//! header for which Circuitry source it ports:
 //!
-//! | Module | Lane | Circuitry source |
-//! |---|---|---|
-//! | [`load`] | B | `cli/orchestration_loader.py` |
-//! | [`structural`] | B | `core/document_check.py` (orchestrates [`difflib`]/[`schema_instance`]) |
-//! | [`difflib`] | B | `difflib.get_close_matches` (Python stdlib) |
-//! | [`schema_instance`] | B | the `Value` -> schema-instance conversion |
-//! | [`pipeline`] | B | `cli/runtime_shim.py` (`validate`/`run`, and `core/concurrency.py`'s config-parsing errors) |
-//! | [`project_root`] | B | `core/prompt_files.py::default_project_root` |
-//! | [`compile`] (`containers`/`leaves`) | C | `core/compiler.py` |
-//! | [`state_ns`] | C | `core/state_ns.py` |
-//! | [`groups`] | C | `core/compiler.py`'s `unknown_concurrency_group_errors` (an effect's `group:` reference; the `max_concurrency`/`concurrency_groups` config-parsing errors are [`pipeline`]'s, lane B) |
-//! | [`cycles`] | C | `core/cycle_check.py` |
-//! | [`compose`] | D | `core/prompt_compose.py` (composition checks) |
-//! | [`prompt_files`] | D | `core/prompt_files.py` |
-//! | [`overrides`] | M1-J2 (#518) | `core/compiler.py::apply_effect_overrides`/`_overlay_effect`/`_disable_subtree` |
-//! | [`digest`] | D | `core/prompt_compose.py::document_content_digest` |
-//! | [`lint`] | #428 | `core/lint.py::lint_orchestration` |
+//! | Module | Circuitry source |
+//! |---|---|
+//! | [`load`] | `cli/orchestration_loader.py` |
+//! | [`structural`] | `core/document_check.py` (orchestrates [`difflib`]/[`schema_instance`]) |
+//! | [`difflib`] | `difflib.get_close_matches` (Python stdlib) |
+//! | [`schema_instance`] | the `Value` -> schema-instance conversion |
+//! | [`pipeline`] | `cli/runtime_shim.py` (`validate`/`run`, and `core/concurrency.py`'s config-parsing errors) |
+//! | [`project_root`] | `core/prompt_files.py::default_project_root` |
+//! | [`compile`] (`containers`/`leaves`) | `core/compiler.py` |
+//! | [`state_ns`] | `core/state_ns.py` |
+//! | [`groups`] | `core/compiler.py`'s `unknown_concurrency_group_errors` (an effect's `group:` reference; the `max_concurrency`/`concurrency_groups` config-parsing errors are [`pipeline`]'s) |
+//! | [`cycles`] | `core/cycle_check.py` |
+//! | [`compose`] | `core/prompt_compose.py` (composition checks) |
+//! | [`prompt_files`] | `core/prompt_files.py` |
+//! | [`overrides`] (#518) | `core/compiler.py::apply_effect_overrides`/`_overlay_effect`/`_disable_subtree` |
+//! | [`digest`] | `core/prompt_compose.py::document_content_digest` |
+//! | [`lint`] (#428) | `core/lint.py::lint_orchestration` |
 //!
 //! # Known divergences
 //!
@@ -68,14 +68,14 @@
 //!   `runtime.persistence` validation (`resolve_complexity_settings`/
 //!   `build_persistence_backend`'s own pre-structural checks) is
 //!   [`electricity_config::validate_complexity`]/[`electricity_config::
-//!   validate_persistence`]'s own port (issue #431's lane D1) -- neither
+//!   validate_persistence`]'s own port (issue #431) -- neither
 //!   backend subsystem itself (complexity routing/decomposition,
 //!   persistence backends) has an IR representation *in this crate*,
 //!   so only their *validation* is ported here, not their behaviour.
 //!   Complexity scoring/routing/decomposition's own behaviour runs in
 //!   `electricity_vm::complexity::score_and_route` and `electricity_vm::
-//!   decompose::maybe_decompose`, called from `exec/prompt.rs` (lanes
-//!   K2/#516 and L2b/#522);
+//!   decompose::maybe_decompose`, called from `exec/prompt.rs` (issues
+//!   #516 and #522);
 //!   persistence (`--resume`, state-snapshot backends) has no run
 //!   behaviour anywhere yet -- `runtime.persistence` is still refused
 //!   outright (M2-G).
@@ -96,12 +96,12 @@
 //!   cycle edge through it), where Circuitry's own `load_orch` raises
 //!   an uncaught `UnicodeDecodeError` ([`cycles`]'s own module docs).
 //! - [`compile::coerce::py_int`]/[`compile::coerce::py_float`]: a value
-//!   of the wrong Python type (one schema validation -- lane B -- would
+//!   of the wrong Python type (one schema validation would
 //!   already have rejected) coerces to `0`/`0.0` rather than raising,
 //!   so this compiler never panics on it ([`compile::coerce`]'s own
 //!   module docs).
 //! - A handful of narrower whitespace/Unicode divergences, declined as
-//!   out of scope for this lane (PR #415's review): the
+//!   out of scope (PR #415): the
 //!   `\x1c`-`\x1f` control characters Python's `str.strip()`/`.isspace()`
 //!   treat as whitespace but Rust's `char::is_whitespace` does not
 //!   ([`compose`]'s own module docs); [`compile::names`]'s own
@@ -113,7 +113,7 @@
 //!   own `isinstance(str)` guard exactly, but still a narrower overall
 //!   behavior than Circuitry's, since nothing later reports that leaf
 //!   either; a declared `use.inputs: {}` and an absent `inputs` compile
-//!   identically here, where Circuitry's schema instance (lane B)
+//!   identically here, where Circuitry's schema instance
 //!   distinguishes the two; and an unknown chat-message `role` value
 //!   (unreachable today -- the schema's `role` is a closed enum).
 //! - [`prompt_files`]'s confinement-root resolve: `core/prompt_files.py::
@@ -263,7 +263,7 @@ pub enum RunCheckError {
     Composition(Vec<String>),
     /// A `use` cycle: `Cycle: a → b → a`, already formatted.
     Cycle(String),
-    /// Lane A stub: the pipeline step that would have produced one of
+    /// The pipeline step that would have produced one of
     /// the variants above isn't implemented yet.
     NotImplemented(String),
 }
@@ -297,7 +297,7 @@ impl std::error::Error for RunCheckError {}
 /// Options shared by [`check_report`] and [`check_for_run`] — the
 /// `skip_preflight`/`trust_document` flags `cli/runtime_shim.py`'s
 /// `validate`/`run` both take, plus what the pipeline needs from the
-/// *config file* itself (issue #408's lane B section): its own
+/// *config file* itself (issue #408's Scope section): its own
 /// `runtime:` block, merged under the document's own (document wins
 /// key by key — electricity trusts every document, DESIGN.md §11).
 /// `None` — the default, and what every golden corpus case runs
@@ -322,7 +322,7 @@ pub struct CheckOptions {
     /// [`pipeline::check_interface_inputs_error`] reduces to its old,
     /// always-empty-input-namespace behavior when this is empty.
     pub inputs: indexmap::IndexMap<String, String>,
-    /// A loaded `--profile`'s own `inputs:` (issue #495, lane R) --
+    /// A loaded `--profile`'s own `inputs:` (issue #495) --
     /// the base layer under *inputs* in the `input` namespace: a
     /// profile key comes first in key order, an `-e` value for the
     /// same key wins but keeps the profile key's position, and an

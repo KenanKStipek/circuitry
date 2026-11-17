@@ -29,21 +29,20 @@ serde_json = { version = "1", features = ["arbitrary_precision"] }
 # syntax by `electricity-pyre` first (below), never compiled raw.
 fancy-regex = "0.14"
 # The exact CPython-3.11 Python-`re`-to-`fancy-regex` pattern translator
-# (#448 lane D2, issue #479), shared with `electricity-tools::regex` --
+# (issue #448, issue #479), shared with `electricity-tools::regex` --
 # `pattern`/`patternProperties`/`propertyNames.pattern`/the
 # `additionalProperties`+`patternProperties` filter all compile through
 # it rather than this crate's own, narrower ad hoc `\w`/`\s`/`\d`/`$`
-# rewrites (PR #502's round-4 fix).
+# rewrites, which handled fewer patterns correctly (PR #502).
 electricity-pyre = { path = "../electricity-pyre" }
 # `validate_prompt_schema`'s own Python-`jsonschema`-style message text
-# (issue #498 ruling 6, tightened by PR #502's review and its own
-# follow-up) -- `py_repr`/`py_float_repr` for rendering a
+# (issue #498, refined by PR #502 and after) -- `py_repr`/`py_float_repr` for rendering a
 # failing instance/limit/schema value the same way Python's `%r`/`repr()`
 # would, from the original, order-preserving tree rather than a lossy
 # `serde_json::Value`.
 electricity-value = { path = "../electricity-value" }
 # `engine.rs`'s own exact big-int arithmetic for `multipleOf`/`minimum`/
-# `maximum`/etc. (issue #498 ruling 6's own follow-up) --
+# `maximum`/etc. (issue #498 and its own follow-up) --
 # the same version `electricity-value`'s own `IntValue::Big` already
 # pulls in, so this unifies rather than duplicating it.
 num-bigint = "0.5"

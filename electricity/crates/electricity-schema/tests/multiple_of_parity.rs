@@ -1,5 +1,5 @@
 //! Issue #507's own items 3-5: `multipleOf`'s own metaschema and
-//! divisor-arithmetic parity gaps left after PR #502's round-7 fix.
+//! divisor-arithmetic parity gaps left after PR #502.
 //! Every case here is pinned against real `cof run` (`jsonschema`
 //! 4.26, CPython 3.11, confirmed directly with this workspace's own
 //! `.venv`).

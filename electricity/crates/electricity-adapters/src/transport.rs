@@ -22,8 +22,7 @@
 //! branches port directly off `curl_support.py`'s own `if proc.
 //! returncode != 0:` shape.
 //!
-//! Cancellation belongs to lane G (#498's own "Interaction with other
-//! lanes" ruling): the caller races the whole `generate()` call
+//! Cancellation belongs to the caller (issue #498): it races the whole `generate()` call
 //! (which runs through this module) against its own cancellation
 //! token and drops the future to abort -- dropping the future this
 //! module returns drops the `send` future inside it, which is what

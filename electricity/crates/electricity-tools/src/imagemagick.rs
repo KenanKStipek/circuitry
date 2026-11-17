@@ -1,5 +1,4 @@
-//! `plugins/imagemagick.py`, ported -- signature only (M1 gate seam
-//! round 2, item S9); lane C fills the body (`make_plugin`'s own
+//! `plugins/imagemagick.py`, ported (`make_plugin`'s own
 //! binary candidates, `("magick", "convert")`).
 
 use crate::subprocess_tool::GenericSubprocessTool;
@@ -11,8 +10,8 @@ use electricity_value::Value;
 /// be infallible, but
 /// Python's own `plugin_env_override` raises on a malformed `runtime.
 /// plugins.imagemagick.env`, so a real body here needs `?`, not a
-/// function lane C would have to widen the return type of first).
-/// Signature only; lane C fills the body.
+/// function whose return type a later change would have to widen
+/// first).
 pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
     Ok(Box::new(GenericSubprocessTool {
         name: "imagemagick".to_string(),

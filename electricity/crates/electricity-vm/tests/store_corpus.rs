@@ -4,7 +4,7 @@
 //! byte-for-byte -- including key *order*, since `Value`'s own `PartialEq`
 //! (Python dict `==` semantics) doesn't check it (`electricity-value`'s
 //! crate docs), and a `meta` key's order is part of `--out`'s own contract
-//! (issue #431's Lane B section). An `"alias"` case additionally checks
+//! (issue #431). An `"alias"` case additionally checks
 //! `Store::saved` against Circuitry's own real `compact_last_aliases`.
 //!
 //! The corpus itself uses the tagged `{"t": ..., "v": ...}` encoding

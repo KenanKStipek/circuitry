@@ -1,10 +1,10 @@
-//! `adapters/factory.py::configured_timeout_seconds` (issue #495, lane
-//! R): `runtime.adapters.<adapter_name>.timeout_seconds` for one
+//! `adapters/factory.py::configured_timeout_seconds` (issue #495):
+//! `runtime.adapters.<adapter_name>.timeout_seconds` for one
 //! adapter, or `None` when nothing usable is configured. Lives in this
-//! crate (rather than `electricity` (lib), where the rest of lane R's
-//! own driver sits) so lane G can reuse it for its own per-attempt
-//! `_attempt_timeout_seconds` -- `electricity-vm` already depends on
-//! `electricity-config`.
+//! crate (rather than `electricity` (lib), where the rest of preflight's
+//! own driver sits) so the `prompt` effect can reuse it for its own
+//! per-attempt `_attempt_timeout_seconds` -- `electricity-vm` already
+//! depends on `electricity-config`.
 
 use electricity_value::Value;
 

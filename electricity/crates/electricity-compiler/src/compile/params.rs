@@ -1,4 +1,4 @@
-//! Lane C: builds [`ParamNode`] trees for a tool effect's `params`
+//! Builds [`ParamNode`] trees for a tool effect's `params`
 //! (`_check_param_leaves`/`_check_security_sensitive_param_leaf`,
 //! `core/compiler.py`) and a `use` effect's `inputs`
 //! (`_compile_use`'s own, shallower template/reference checks).

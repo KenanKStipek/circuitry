@@ -1,4 +1,4 @@
-//! Lane A: `Region`, `Condition`, `ExpectCondition` and `LoopSpec` —
+//! `Region`, `Condition`, `ExpectCondition` and `LoopSpec` —
 //! control-flow containers (issue #408's Scope section; DESIGN.md §5.1).
 
 use crate::op::Op;
@@ -118,8 +118,7 @@ pub enum Region {
         /// gives the enclosing `Op::name`, carried here too so a
         /// caller holding only this `Region` (not the enclosing `Op`)
         /// still knows whether each pass needs a `Frame::with_pass`
-        /// path at all (M1 gate seam round 2, item S8) -- lane H's
-        /// own seam, since `groups.rs::collect_region_groups` and the
+        /// path at all, since `groups.rs::collect_region_groups` and the
         /// refusal walker's own `walk_region` both already recurse
         /// into `body` with no `Op` in hand. `Region::Loop` carries no
         /// `LoopId` of its own; a named loop's own `Frame::with_pass`

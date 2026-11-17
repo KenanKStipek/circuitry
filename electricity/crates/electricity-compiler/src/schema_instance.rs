@@ -1,4 +1,4 @@
-//! Lane B: converts a loaded [`electricity_value::Value`] into the
+//! Converts a loaded [`electricity_value::Value`] into the
 //! `serde_json::Value` shape `electricity-schema` validates
 //! (`structural.rs`'s JSON Schema step), keeping Python's verdicts for
 //! dates, bytes, NaN/infinity, and non-string keys such as `yes:` or

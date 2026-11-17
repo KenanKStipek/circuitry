@@ -1,5 +1,5 @@
-//! Lane B2: `if`/`conditional` in `mode: cel` -- container-only tests
-//! (issue #431's Lane B section).
+//! `if`/`conditional` in `mode: cel` -- container-only tests
+//! (issue #431's Scope section).
 
 mod support;
 
@@ -18,7 +18,7 @@ use support::{
 };
 
 /// A `generate` that always answers `"yes"`, with token counts --
-/// issue #513's review: lets a model `if`'s own container-level
+/// issue #513: lets a model `if`'s own container-level
 /// `record_totals` hook be exercised end to end, not just probed for
 /// reaching `NoopAdapter`'s own failure.
 struct YesAdapter;
@@ -110,7 +110,7 @@ async fn run_with_adapter(
     (store, observer, result)
 }
 
-/// Issue #513's review: a named model `if`'s own successful
+/// Issue #513: a named model `if`'s own successful
 /// pass calls `record_totals` exactly once.
 #[tokio::test]
 async fn a_named_model_if_calls_record_totals_once_on_success() {
@@ -391,7 +391,7 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
 
 #[tokio::test]
 async fn a_refused_branch_inside_a_named_if_still_writes_meta_and_fires_the_end_event() {
-    // Ruling R1 on PR #462: `VmError::Refused` is fatal
+    // PR #462: `VmError::Refused` is fatal
     // for *control* (never absorbed by `on_error`, never retried) but
     // recorded exactly like an ordinary failure for *recording*
     // purposes -- `value`/`meta.error` (the refusal text, with no name
@@ -548,7 +548,7 @@ async fn on_error_skip_writes_a_null_result_for_a_broken_condition() {
     // `cli/events.py::EventLog.on_complete` reads `meta.error`, not
     // whatever `decide_and_run` itself returned -- `on_error: skip`
     // absorbs the condition error into `Ok(())`, but the `end` event
-    // must still carry it (`ok: false`, PR #440's review of issue #431).
+    // must still carry it (`ok: false`, PR #440 of issue #431).
     assert!(
         observer
             .events()
@@ -1154,8 +1154,7 @@ async fn a_shadowing_steps_bare_name_is_invisible_without_the_branchs_own_names(
 
 #[tokio::test]
 async fn an_ifs_second_branch_step_sees_a_sibling_two_dynamic_levels_under_its_own_sibling() {
-    // Probe E (a second-review follow-up on PR
-    // #440's F2 fix, `a4ff2cd`): `process` (a named `dynamic`) runs an
+    // Probe E (PR #440, commit `a4ff2cd`): `process` (a named `dynamic`) runs an
     // unnamed `if` whose branch is `[prep, pipeline]`. `pipeline`'s own
     // `outline` step writes two `dynamic` levels under `process` --
     // reachable, from `check` (`pipeline`'s *second* step), only through
@@ -1235,7 +1234,7 @@ async fn an_ifs_second_branch_step_sees_a_sibling_two_dynamic_levels_under_its_o
 async fn a_tool_params_template_resolves_the_same_sibling_path_as_probe_e() {
     // Same shape as the probe-E test above, but through a Mustache
     // template param on a real `tool` leaf rather than a CEL `if`'s own
-    // condition -- the review's own concern: "a template `{{prime.
+    // condition: "a template `{{prime.
     // process.pipeline.outline.value}}` in a tool param silently
     // renders ''. That is a realistic document." A missing path here
     // renders empty, and `json`'s own `parse` mode fails on an empty
@@ -1382,7 +1381,7 @@ async fn a_model_mode_if_reaches_condition_models_real_dispatch() {
 
 #[tokio::test]
 async fn a_disabled_branch_step_writes_a_skip_node_and_its_own_effect_record_is_marked() {
-    // Issue #518 (lane J2): `ConditionalRuntime._effect_record` --
+    // Issue #518: `ConditionalRuntime._effect_record` --
     // `{index, type, name, disabled: true}` for a disabled branch step,
     // and the step's own node is a skip node (never real `json` tool
     // dispatch -- `x` would fail with `TOOL_FAIL_TEXT` otherwise).

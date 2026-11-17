@@ -1,6 +1,6 @@
 //! `plugins/http.py::HttpPlugin`, ported -- a single HTTP request/
 //! response over the shared client ([`crate::http_client`]), with
-//! urllib's own redirect rule and error shapes (issue #485, lane E).
+//! urllib's own redirect rule and error shapes (issue #485).
 //! The proxy convention is Circuitry's own now (issue #778), not
 //! urllib's (`http_client::resolve_proxy`/`resolve_proxy_target`
 //! below). See [`http_url`] for the small `urllib.parse` subset
@@ -464,8 +464,7 @@ fn python_bytes_ctor(value: &Value) -> Result<Vec<u8>, ToolError> {
 }
 
 // ---------------------------------------------------------------------
-// `http_error_excerpt` -- corrected signature (issue #485's own "stub
-// signatures are this lane's to change").
+// `http_error_excerpt` -- corrected signature (issue #485).
 // ---------------------------------------------------------------------
 
 /// `plugins/base.py::http_error_excerpt(body: str, *, max_chars=500)`

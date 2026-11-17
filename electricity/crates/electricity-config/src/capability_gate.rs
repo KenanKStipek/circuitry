@@ -1,16 +1,16 @@
 //! `circuitry.capability_gate`, ported -- the run's own consented
 //! capability ceiling, and the check a `tool`/`use`/decomposition
 //! call makes against it before running (vm-lanes.md named this seam
-//! with no stub of its own -- lane R installs the ceiling once
+//! with no stub of its own -- the ceiling is installed once
 //! preflight/consent lands;
-//! [`require_within_ceiling`] is this crate's one stub, lane L2's own
-//! decomposition call site, `core/decompose.py::_check_capability_ceiling`).
+//! [`require_within_ceiling`] is this crate's one stub, for
+//! decomposition's own call site, `core/decompose.py::_check_capability_ceiling`).
 //!
 //! [`capability_ceiling`]/[`capabilities_beyond_ceiling`] are real and
 //! complete now: both are pure reads/set-differences of
-//! *runtime_config*, nothing left for any lane to fill in.
-//! [`require_within_ceiling`] is signature only -- lane R/L2's own
-//! exact raise-vs-refuse wiring decides what a electricity run does
+//! *runtime_config*, nothing left to fill in.
+//! [`require_within_ceiling`] is signature only -- preflight's and
+//! decomposition's own exact raise-vs-refuse wiring decides what a electricity run does
 //! with a [`CapabilityConsentError`] (M0-H has no consent flow of its
 //! own at all yet; `cli/document_consent.py`'s own interactive prompt
 //! is out of electricity's scope, not just unbuilt).
@@ -70,7 +70,7 @@ pub fn capabilities_beyond_ceiling(
 }
 
 /// `circuitry.capability_gate.require_within_ceiling` -- signature
-/// only; lane R/L2 fills the body (the exact message text:
+/// only; a later caller fills the body (the exact message text:
 /// `"{label} needs {beyond}, beyond this document's consented
 /// capabilities ({ceiling})."`, Python's own sorted, comma-joined
 /// lists).

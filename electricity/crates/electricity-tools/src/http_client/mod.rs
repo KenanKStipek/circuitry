@@ -1,7 +1,7 @@
 //! The shared HTTP client (#448's decisions: one client stack, rustls
 //! with the system trust store, HTTP/1.1 only, no automatic
-//! decompression, no streaming) -- lane E (issue #485) fills every
-//! body. Shared with lane F2's own model-provider adapters, which run
+//! decompression, no streaming) -- issue #485 fills every
+//! body. Shared with the model-provider adapters, which run
 //! raw HTTP to the providers through the same client rather than curl.
 //!
 //! Stack decision (issue #485's own "Settled questions"): `hyper` plus
@@ -30,7 +30,7 @@
 //!
 //! One connection per request (never pooled: this crate's own model is
 //! "one request, maybe a redirect hop, done" -- `hyper-util`'s pooling
-//! client (`client-legacy`) solves a problem this lane doesn't have),
+//! client (`client-legacy`) solves a problem this crate doesn't have),
 //! driven by a task [`send`] spawns and leaves wrapped in an
 //! [`AbortOnDrop`] guard for the lifetime of the call: dropping the
 //! future `send` returns (`execute_tool`'s own `token.cancelled()`
@@ -105,7 +105,7 @@ pub struct ProxyTarget {
 }
 
 /// A request already fully built by the caller -- urllib's own
-/// `Request` (`src/http.rs`) or, eventually, lane F2's own raw-HTTP
+/// `Request` (`src/http.rs`) or, eventually, a raw-HTTP
 /// adapter call: *target* is exactly the request-target this module
 /// puts on the wire (origin-form `/path?query`, or absolute-form when
 /// proxied over plain HTTP -- see [`ConnectTarget::proxy`]), *headers*
@@ -157,8 +157,8 @@ pub struct RawResponse {
 
 /// How a timeout applies -- urllib's own per-operation deadline
 /// (restarting for connect, then again for every read) versus curl's
-/// own `--max-time` (one deadline for the whole call, lane F2's own
-/// future caller).
+/// own `--max-time` (one deadline for the whole call, a future
+/// adapter caller's own).
 #[derive(Debug, Clone, Copy)]
 pub enum TimeoutModel {
     PerOperation(Duration),
@@ -166,14 +166,14 @@ pub enum TimeoutModel {
 }
 
 /// Which phase/cause a [`SendError::Connect`] failure stems from --
-/// lane F2's own seam (issue #503's scope table: curl gives DNS
+/// an adapter's own seam (issue #503's scope table: curl gives DNS
 /// failure, connection refused/unreachable, a connect/handshake
 /// timeout, a TLS handshake failure and a rejected TLS certificate
 /// five different exit codes, so an adapter's own curl-exit mapping
 /// needs to tell them apart; the `http` tool never did, since urllib's
 /// own `URLError` text is all it ever surfaced). Carried *alongside*
 /// [`SendError::Connect`]'s own `Display` text, never derived from it
-/// by parsing (issue #503's own ruling: "don't re-derive the kind by
+/// by parsing (issue #503: "don't re-derive the kind by
 /// parsing error text") -- `Display` and the `http` tool's own output
 /// stay byte-for-byte unchanged by this addition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,8 +210,8 @@ pub enum ConnectKind {
 /// for (or reading) the response rather than while connecting/sending.
 #[derive(Debug, Clone)]
 pub enum SendError {
-    /// Formatted as CPython's own `OSError`/`ssl` text would be, by
-    /// *location* (ruling 5): `[Errno N] <strerror>` for an OS error,
+    /// Formatted as CPython's own `OSError`/`ssl` text would be, compared
+    /// by *location*: `[Errno N] <strerror>` for an OS error,
     /// the raw TLS error text otherwise. *kind* (issue #503's own
     /// seam) lets a caller map this to curl's own differently-coded
     /// exit status without re-parsing `text`.
@@ -267,7 +267,7 @@ impl std::fmt::Display for SendError {
 /// text is built from, via the `libc` crate already in this
 /// workspace's dependency tree (shared with `fs.rs`'s own OS-error
 /// formatter, which this function deliberately mirrors rather than
-/// importing across a lane boundary: `fs.rs` is D1's own file).
+/// reusing directly: `fs.rs`'s own copy is private to that module).
 fn os_strerror(code: i32) -> String {
     // Safety: `strerror` always returns a valid, null-terminated
     // pointer into a statically-owned (or thread-local, platform-
@@ -281,7 +281,7 @@ fn os_strerror(code: i32) -> String {
 /// `[Errno N] <strerror>` -- CPython's own `OSError.__str__` for an
 /// error that carries an `errno` (`io::Error::raw_os_error`); anything
 /// else (no OS errno at all -- a `rustls`/protocol-level failure) just
-/// keeps Rust's own `Display` text, compared by location (ruling 5),
+/// keeps Rust's own `Display` text, compared by location,
 /// never exactly, same as an OS error's own `strerror` text already is.
 fn format_connect_error(err: &std::io::Error) -> String {
     match err.raw_os_error() {
@@ -605,8 +605,8 @@ async fn connect_tunnel(
 /// own per-phase deadlines of the same duration -- each phase alone
 /// can never exceed the total, and this outer wrapper is what catches
 /// several phases each individually under the limit but summing past
-/// it (issue #485; this lane's own caller,
-/// `src/http.rs`, never builds `Total`, only lane F2's adapters do).
+/// it (issue #485; this module's own current caller,
+/// `src/http.rs`, never builds `Total`, only the adapters do).
 pub async fn send(
     client: &HttpClient,
     target: &ConnectTarget,
@@ -874,7 +874,7 @@ async fn send_inner(
     // (so there is no original casing left to preserve anyway) and its
     // `HeaderMap::iter()` groups a repeated name's values together at
     // that name's first slot rather than their true interleaved wire
-    // position (confirmed directly; this lane's own notes warn not to
+    // position (confirmed directly; don't
     // rely on it) -- harmless for *this* dedup, which only ever needs
     // "first position, last value", never the interleaving itself.
     let mut headers: Vec<(String, String)> = Vec::new();

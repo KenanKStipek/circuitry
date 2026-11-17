@@ -6,7 +6,7 @@
 //!
 //! [`cfg_value_or`]/[`require_str`]/[`resolve_truthy_str`]/[`string_list`]
 //! (issue #520 part B) widen this module for the `claude_code`/`pi`
-//! adapters' own config rule (B5): a *truthy non-string* config value
+//! adapters' own config rule: a *truthy non-string* config value
 //! (`binary: 5`, `thinking: true`) is never replaced by the default
 //! the way [`cfg_str_or`] would -- Python keeps it verbatim and fails
 //! only once something actually tries to use it as a string (`shutil.
@@ -67,7 +67,7 @@ pub fn cfg_str_or(cfg: &Value, key: &str, default: &str) -> String {
 /// truthy non-string value is kept exactly as configured, never
 /// coerced to a string the way [`cfg_str_or`] would. Two independent
 /// uses share this: `binary`/`default_model`/`thinking` (issue #520
-/// part B, B5) resolve -- or raise Python's own `TypeError` -- only
+/// part B) resolve -- or raise Python's own `TypeError` -- only
 /// where actually used ([`require_str`]/[`resolve_truthy_str`]);
 /// `base_url`/`endpoint` (issue #515) resolve via
 /// [`rstrip_base_url`] at each adapter's own later Python call site,
@@ -100,7 +100,7 @@ pub fn type_error(value: &Value) -> AdapterError {
 }
 
 /// A config string that is always used, regardless of truthiness
-/// (`binary`, B5) -- *value* is already the result of [`cfg_value_or`],
+/// (`binary`) -- *value* is already the result of [`cfg_value_or`],
 /// so it is guaranteed non-falsy; a non-`Value::Str` here is therefore
 /// always a truthy non-string, and [`type_error`] applies.
 pub fn require_str(value: &Value) -> Result<&str, AdapterError> {
@@ -111,7 +111,7 @@ pub fn require_str(value: &Value) -> Result<&str, AdapterError> {
 }
 
 /// A config string that is used only when truthy (`default_model`,
-/// `thinking`, B5): Python's own `if model:`/`if thinking:` inside
+/// `thinking`): Python's own `if model:`/`if thinking:` inside
 /// `claude_command`/`pi_command` -- a falsy value (including a falsy
 /// *non*-string: `0`, `False`, `[]`) resolves to `""` (no flag added),
 /// and only a truthy non-string raises [`type_error`] (the same

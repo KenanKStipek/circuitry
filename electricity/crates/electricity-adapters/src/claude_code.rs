@@ -26,7 +26,7 @@ use electricity_vm::retry::RetryInfo;
 
 /// `adapters/claude_code.py::ClaudeCodeAdapter`. `binary`/`default_model`
 /// are kept as the raw post-`cfg.get(...) or default` [`Value`]
-/// (`crate::config`'s own doc comment, B5) rather than a plain
+/// (`crate::config`'s own doc comment) rather than a plain
 /// `String`: a truthy non-string config value must survive to the
 /// moment it is actually used as a string, not fall back to the
 /// default name and start a real CLI.
@@ -205,7 +205,7 @@ mod tests {
 
     /// The directory [`capture_cwd_script`] reported, asserted non-empty
     /// and gone -- `TempDirGuard`'s own `Drop` removes it on every way
-    /// out of `generate` (B2's own doc comment).
+    /// out of `generate` (`TempDirGuard`'s own doc comment).
     fn assert_captured_dir_removed(capture: &std::path::Path) {
         let captured = std::fs::read_to_string(capture).unwrap();
         let captured_dir = captured.trim();

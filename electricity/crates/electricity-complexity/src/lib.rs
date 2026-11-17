@@ -1,20 +1,20 @@
 //! A pure-library port of `core/complexity.py` (the scorer) and
-//! `core/router.py::route_model` (electricity M1 lane K1, issue #505).
+//! `core/router.py::route_model` (issue #505).
 //!
 //! Nothing here calls a model, reads config, or touches a store --
 //! [`score`] is a pure function of its [`ScoreInput`], deterministic and
 //! side-effect-free, exactly like the reference. Wiring this into a real
 //! run (`electricity-vm`'s `execute_prompt`, building the `definition`
 //! mapping from a `PromptOp`, the display depth, `meta.complexity`
-//! placement, `Supported::complexity`) is lane K2's job entirely --
+//! placement, `Supported::complexity`) is a separate job entirely --
 //! nothing in this crate is reachable from a running orchestration yet.
 //!
-//! # K2's calling contract
+//! # The calling contract
 //!
 //! - **The `definition` mapping.** `ScoreInput::definition` is Python's
 //!   mapping form: a [`Value::Dict`] carrying whichever of `template`,
 //!   `messages`, `prompt_type`, `schema`, `params` and `description` the
-//!   prompt effect declares. K2 builds this from `PromptOp`: the raw
+//!   prompt effect declares. The caller builds this from `PromptOp`: the raw
 //!   template source or `messages[].content`, `prompt_type`, `schema`,
 //!   the **literal** `params` (unevaluated CEL/template text, not a
 //!   rendered value), and `description`. A key your caller hasn't
@@ -25,7 +25,7 @@
 //!   display_depth}` in the reference's own `_score_and_route` (the
 //!   effect's nesting depth as the runtime displays it, not the length
 //!   of some internal path); `loop_depth`/`reflector_generated` default
-//!   to the top-level case until a later lane plumbs them through.
+//!   to the top-level case until a later caller plumbs them through.
 //! - **`Err` means "no score", never "the effect fails".** [`score`]'s
 //!   failure type is [`ScoreError`], carrying a `PyExc` naming which
 //!   Python exception class the reference would have raised for the
@@ -111,7 +111,7 @@ pub const SIGNAL_NAMES: [&str; 7] = [
 /// DEFAULT_WEIGHTS`), used only by a direct library call with
 /// `weights: None`. The runtime always passes `electricity-config`'s
 /// own, different, default table instead (`ScoringSettings::default`) --
-/// both tables exist on purpose (issue #505's own ruling).
+/// both tables exist on purpose (issue #505).
 pub const DEFAULT_WEIGHTS: [(&str, f64); 7] = [
     ("prompt_size", 0.28),
     ("state_references", 0.18),

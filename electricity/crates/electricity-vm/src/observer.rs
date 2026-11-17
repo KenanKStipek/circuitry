@@ -1,5 +1,5 @@
 //! `RunObserver`: the VM's own effect start/complete, dispatch, write,
-//! and warning hooks -- what `--events`/`--live-state` (lane D) and a
+//! and warning hooks -- what `--events`/`--live-state` and a
 //! run-time plugin's `on_effect_start`/`on_effect_complete` (out of
 //! scope for M0-H) both hang off of.
 
@@ -8,8 +8,8 @@ use electricity_bytecode::{EffectPath, ReportLevel};
 use electricity_value::Value;
 
 /// An opaque per-call identifier [`RunObserver::effect_start`] hands
-/// back and [`RunObserver::effect_complete`] takes (issue #449's gate
-/// lane item 7) -- `--events` pairs a `start` line with its `end` line;
+/// back and [`RunObserver::effect_complete`] takes (issue #449,
+/// item 7) -- `--events` pairs a `start` line with its `end` line;
 /// Python gets that pairing for free from a per-thread call stack
 /// (`cli/events.py`), but this VM runs concurrent tree branches (and,
 /// from M1-H, concurrent/unnamed loop passes writing the same path) on
@@ -33,7 +33,7 @@ pub type InstanceId = u64;
 pub trait RunObserver {
     /// A named effect is about to run (DESIGN.md's own "balanced start/
     /// complete hooks on every exit path; no hooks for an unnamed `if`"
-    /// rule, issue #431's Lane B section) -- returns this call's own
+    /// rule, issue #431) -- returns this call's own
     /// [`InstanceId`], which the matching [`RunObserver::effect_complete`]
     /// call must be given back.
     fn effect_start(&self, _path: &EffectPath) -> InstanceId {
@@ -47,7 +47,7 @@ pub trait RunObserver {
     /// `meta.completed_at`, Python-truthy, decided by the caller from
     /// whichever `Store`/`NodeRef` it already has in scope
     /// ([`crate::exec::completed_at_is_truthy`]'s own doc comment,
-    /// issue #506 lane L1's review round 2) -- `true` for every effect
+    /// issue #506) -- `true` for every effect
     /// type's every exit but a successful `reflector`'s (which never
     /// writes one at all) and a cancellation a container lets fall
     /// through to this call without refreshing it; `electricity`
@@ -67,18 +67,18 @@ pub trait RunObserver {
 
     /// A tree `dynamic`/`each` loop is about to dispatch -- `--events`'s
     /// own `dispatch` event (`branches`: `n` itself, `concurrency`:
-    /// `min(max_workers, n)`; PR #440's review of issue #431 --
-    /// this pairing was backwards).
+    /// `min(max_workers, n)`; PR #440 fixed this pairing, which used to
+    /// be backwards).
     fn dispatch(&self, _path: &EffectPath, _branches: usize, _concurrency: usize) {}
 
     /// The store changed in a way a live-state mirror should eventually
-    /// reflect -- coalesced by the caller (lane D's own `LiveStateMirror`,
+    /// reflect -- coalesced by the caller (`LiveStateMirror`,
     /// not this trait), never a promise of one write per call.
     fn write(&self) {}
 
     /// A run-time warning with no effect of its own to attach it to --
     /// Circuitry's own stderr `WARNING: ...` lines (issue #442). Adding
-    /// the hook itself is this gate lane's job (issue #449 item 7); the
+    /// the hook itself is issue #449's job (item 7); the
     /// CLI's own stderr writer that turns a call here into a printed
     /// line is #442's own PR, built on top of this seam once it lands.
     fn warning(&self, _message: &str) {}
@@ -151,7 +151,7 @@ pub trait RunObserver {
     /// *node_path* no longer needs this tree's own overlay -- it has
     /// merged. *branches* must be the exact same [`NodeRef`]s this
     /// tree's own [`RunObserver::register_tree_branches`] call passed
-    /// (not merely the same *node_path*): PR #549's review --
+    /// (not merely the same *node_path*): PR #549 --
     /// an unnamed tree loop that is a direct branch of another tree
     /// registers at the *same* path as the outer tree's own container
     /// (an unnamed loop/dynamic branch appends no name segment of its
@@ -183,7 +183,7 @@ pub trait RunObserver {
     }
 
     /// Hands a completing effect's own `meta` snapshot to the run's
-    /// totals (issue #498 ruling 7) -- `cli/runtime_shim.py::
+    /// totals (issue #498) -- `cli/runtime_shim.py::
     /// _TotalsAccumulator.observe`'s own `tokens_sent`/`tokens_received`/
     /// `cost_usd` accumulation, driven by the same stream
     /// [`RunObserver::effect_complete`] already carries (`effects_run`
@@ -193,7 +193,7 @@ pub trait RunObserver {
     /// `effect_complete`, on every pass (success or failure) that
     /// reaches a `meta` write at all; `exec::conditional`/`exec::loop_`
     /// call it the same way for a named model `if`/loop's own
-    /// completing pass (lane G2, #513). Default no-op, like every
+    /// completing pass (#513). Default no-op, like every
     /// other hook here -- only `electricity` (lib)'s own `Observer`
     /// implements it for real.
     fn record_totals(&self, _meta: &Value) {}
@@ -236,7 +236,7 @@ pub struct ProgressData {
     pub tokens_sent_estimate: i64,
 }
 
-/// A [`RunObserver`] that does nothing -- every lane A test (and any
+/// A [`RunObserver`] that does nothing -- every test (and any
 /// caller that doesn't need `--events`/`--live-state`) uses this instead
 /// of writing its own no-op type.
 pub struct NullObserver;

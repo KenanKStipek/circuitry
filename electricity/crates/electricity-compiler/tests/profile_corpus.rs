@@ -183,7 +183,7 @@ fn assert_error_matches(mode: &str, expected: &str, actual: &ProfileError, path:
 /// Schema-failure comparison: the header and each line's own location
 /// are exact; the message past the location, and multi-error line
 /// order, are third-party `jsonschema` text (compared as a *sorted*
-/// `Vec` of locations, not a set -- see the M1-J1 ruling: line *order*
+/// `Vec` of locations, not a set -- see issue #488: line *order*
 /// isn't comparable across engines, but the line *count* is, so a
 /// spurious extra error at a location a real one also occupies must
 /// still fail this).

@@ -303,7 +303,7 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
         // key like `"A=B"`); checking validity first means such a key
         // is always rejected with the warning below, never silently
         // matched against an existing variable through that lookup
-        // (#473 review).
+        // (#473).
         //
         // `std::env::set_var` panics on a key that is empty or
         // contains `=`/NUL, or a value containing NUL -- `cof`'s own
@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn an_invalid_key_still_warns_even_when_its_truncated_prefix_matches_a_real_variable() {
-        // #473 review: `std::env::var_os` calls libc `getenv`, and
+        // #473: `std::env::var_os` calls libc `getenv`, and
         // macOS's `getenv` cuts a name at its first `=` before searching
         // -- so there `var_os("A=B")` matches a real `A` once one is set.
         // glibc and musl never match such a name. The validity check now

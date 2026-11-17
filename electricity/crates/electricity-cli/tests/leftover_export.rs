@@ -6,8 +6,8 @@
 //! loads a `scripted` adapter at all -- the export must stay absent on
 //! every one of those, the common case this hook must never affect.
 //!
-//! No document can make the adapter actually load until lane G flips
-//! `prompt`, so proving the hook carries *real* content on every exit
+//! No document can make the adapter actually load until `prompt`
+//! support lands, so proving the hook carries *real* content on every exit
 //! path needs a different instance to register -- the `test-tools`-
 //! only hook `register_test_only_scripted_adapter` (`main.rs`) builds
 //! one directly and calls `check()` on it, the same lazy-load-then-

@@ -1,4 +1,4 @@
-//! Lane A: `Program`, `DocumentInfo` (issue #408's Scope section).
+//! `Program`, `DocumentInfo` (issue #408's Scope section).
 
 use crate::op::Op;
 use electricity_value::Value;
@@ -60,7 +60,7 @@ pub struct Program {
     /// confinement root at all, so `compile_document` (which sees
     /// neither the path as given nor the document's raw bytes the
     /// digest needs) cannot build one. `check_report`/`check_for_run`
-    /// (lane B's `pipeline` module, which read both before calling
+    /// (`pipeline`'s own module, which reads both before calling
     /// `compile_document`) fill this in for a real file; it stays
     /// `None` for a document with no file of its own.
     pub document: Option<DocumentInfo>,

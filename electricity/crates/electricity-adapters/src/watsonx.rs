@@ -1,7 +1,7 @@
 //! `adapters/watsonx.py::WatsonXAdapter`, ported -- the two-step IAM
 //! token exchange plus the `/ml/v1/text/generation` call, over
 //! [`crate::transport`]. Rust tests only (the IAM URL is hard-coded in
-//! the reference); no conformance case (issue #503's own ruling).
+//! the reference); no conformance case (issue #503).
 
 use crate::config::{
     cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url, value_is_truthy,

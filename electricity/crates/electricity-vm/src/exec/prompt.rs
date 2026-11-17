@@ -7,7 +7,7 @@
 //! loop, `on_error`, and the run's token/cost totals. Model-mode
 //! `if`/`while`/`expect` (G2), complexity scoring/routing (K2) and
 //! decomposition (L2) are out of scope -- the one call-site placeholder
-//! each of those lanes fills is marked below.
+//! for each is marked below.
 
 pub(crate) mod answers;
 mod decode;
@@ -97,9 +97,9 @@ fn warnings_list(store: &Store, node: &NodeRef) -> Vec<Value> {
 fn push_warning(store: &Store, meta_node: &NodeRef, name: &str, warning: String) {
     // `logger.warning("prompt %r: %s", name, w)` -- Python's `%r` is
     // `repr(name)`, never Rust's own `{:?}` (double-quoted) Debug form.
-    // Ruling 8: `log::warn!` carries this, the same as every other
+    // `log::warn!` carries this, the same as every other
     // `_add_warnings` line -- there is no second, `RunObserver::warning`
-    // channel for it (review of PR #502, P2 note b: once that hook is
+    // channel for it (PR #502: once that hook is
     // wired to stderr, a second call here would print every prompt
     // warning twice).
     let name_repr = Value::Str(name.to_string()).py_repr();
@@ -213,7 +213,7 @@ fn build_attempts(
     attempts
 }
 
-/// Issue #498 ruling 4: *name* (already resolved through its alias
+/// Issue #498: *name* (already resolved through its alias
 /// target, if any -- #656) is Circuitry-known (`electricity_vm::
 /// adapter_names::ADAPTER_NAMES`) but this build has no builder for it
 /// at all -- never an ordinary "unknown adapter" failure, a fatal
@@ -379,9 +379,9 @@ enum PassOutcome {
 enum HardStop {
     /// `AllowlistError` -- a denied `provider:`/fallback; still recorded
     /// like an ordinary failure by the *caller* (the previous pass's
-    /// own `attempts_meta`, per the ruling below), just never retried.
+    /// own `attempts_meta`, per the explanation below), just never retried.
     Allowlist(String),
-    /// Ruling 4: a `prompt` inside a `use` child named an adapter this
+    /// A `prompt` inside a `use` child named an adapter this
     /// build has no builder for at all -- fatal, never recorded as an
     /// attempt, never absorbed by `on_error`.
     Refused(VmError),
@@ -440,7 +440,7 @@ fn validate_schema(
         // A malformed schema itself (`jsonschema.SchemaError`) is
         // never `_decode_failure_status`'s `schema_invalid` -- its
         // default `"failed"`, and never forced-retryable either
-        // (issue #498 ruling 6).
+        // (issue #498).
         electricity_schema::PromptSchemaCheck::SchemaError(message) => {
             Err((message, "failed", electricity_tools::PyExc::RuntimeError))
         }
@@ -1206,8 +1206,8 @@ pub(crate) async fn execute_prompt(
     };
 
     // `resolved_model = defn.model or self.model` (`prompt.py:513`) --
-    // Python's `or` is falsy for `""` too, not just `None` (review of
-    // PR #502, P2 note a): a document that writes `model: ""` still
+    // Python's `or` is falsy for `""` too, not just `None` (PR #502): a
+    // document that writes `model: ""` still
     // falls back to the run's own default model, `model_reason:
     // "default"`.
     let explicit_model = prompt.model.as_deref().filter(|m| !m.is_empty());

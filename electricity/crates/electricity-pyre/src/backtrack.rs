@@ -8,8 +8,8 @@
 //! `\bzebra\b` findall with no match, 20,000 lines of `item N value
 //! M`, `\s+$` on 1.2 MB -- all fail against `fancy-regex`'s default
 //! even though `cof` succeeds instantly). Shared by
-//! `electricity-tools::regex` (moved out from under it, PR #502's
-//! round-5 fix) and `electricity-schema::engine` (`pattern`/
+//! `electricity-tools::regex` (moved out from under it, PR #502)
+//! and `electricity-schema::engine` (`pattern`/
 //! `patternProperties` -- issue #498's own follow-up),
 //! the two places either crate needs a backtrack-limit
 //! sized to the text actually being matched rather than the crate's
@@ -26,15 +26,16 @@
 //!   `(PER_CHAR * (input_len + 1))` is this limit's own scaling term.
 //! - **`FLOOR` = 10,000,000.** CPython's own baseline for a
 //!   catastrophic pattern on a *small* input --
-//!   `(a+)+(?=b)` against 18-20 `a`s, which the review's own R8 names
-//!   -- needs 1,048,576-4,194,304 backtracks to fail in `fancy-regex`;
+//!   `(a+)+(?=b)` against 18-20 `a`s --
+//!   needs 1,048,576-4,194,304 backtracks to fail in `fancy-regex`;
 //!   10,000,000 clears that with more than 2x headroom (measured: 18
 //!   `a`s at the exact limit this constant would compute, ~22ms;
 //!   CPython itself returns `[]` in low-single-digit milliseconds, so
 //!   this is still "like CPython", not just "eventually"). At the same
 //!   time, a genuinely catastrophic pattern on a small input --
 //!   `(a+)+` against 30 `a`s with no match -- still fails in ~223ms at
-//!   this exact FLOOR, nowhere near the ~2s budget R8 sets.
+//!   this exact FLOOR, nowhere near the ~2s per-pattern budget this
+//!   sizing targets.
 //!
 //! *input_len* is the input text's own byte length, never smaller
 //! than its char count, so this never under-provisions for multi-byte

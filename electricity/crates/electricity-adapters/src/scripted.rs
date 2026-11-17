@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 // ---------------------------------------------------------------------
 // Path handling: `Path(replies_file).expanduser()`, and `str(Path(...))`
 // -- duplicated from `electricity-tools::fs`'s own `expand_user_path`/
-// `split_components`/`render_path` (that crate isn't this lane's to
-// edit, and isn't a dependency of this one).
+// `split_components`/`render_path` (that crate isn't a dependency of
+// this one).
 // ---------------------------------------------------------------------
 
 struct ResolvedPath {
@@ -105,8 +105,8 @@ fn os_error_text(err: &io::Error, display: &str) -> String {
 // UTF-8 decoding with CPython's exact `UnicodeDecodeError.__str__` --
 // duplicated from `electricity-compiler::prompt_files`/
 // `electricity-tools::fs`'s own `describe_utf8_error`/
-// `find_utf8_error`/`utf8_lead_shape` (neither crate is this lane's to
-// edit, and neither is a dependency of this one).
+// `find_utf8_error`/`utf8_lead_shape` (neither crate is a dependency
+// of this one).
 // ---------------------------------------------------------------------
 
 fn describe_utf8_error(bytes: &[u8]) -> String {
@@ -179,8 +179,7 @@ fn decode_utf8_strict(bytes: &[u8]) -> Result<String, String> {
 /// CR-only replies file reports the identical `(char N)`/`line N`
 /// position CPython's own `json.loads`/YAML loader would -- duplicated
 /// from `electricity-compiler::load`'s own `translate_universal_
-/// newlines` (that crate isn't this lane's to edit, and isn't a
-/// dependency of this one).
+/// newlines` (that crate isn't a dependency of this one).
 fn translate_universal_newlines(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -199,7 +198,7 @@ fn translate_universal_newlines(text: &str) -> String {
 
 // ---------------------------------------------------------------------
 // Python truthiness -- duplicated from `electricity-tools::fs`'s own
-// `py_truthy` (same reason as above: not this lane's crate to edit).
+// `py_truthy` (same reason as above: not a dependency of this crate).
 // ---------------------------------------------------------------------
 
 fn py_truthy(value: &Value) -> bool {
@@ -878,7 +877,7 @@ impl Adapter for ScriptedAdapter {
     /// no way to carry a raised exception separately from an ordinary
     /// `ok: false` result, so this reproduces `call_check`'s own text
     /// for every non-`ScriptedRepliesError` failure here directly,
-    /// rather than leaving lane R's own fold to guess which kind it is.
+    /// rather than leaving preflight's own fold to guess which kind it is.
     async fn check(&self) -> CheckResult {
         match self.ensure_loaded() {
             Ok(_) => CheckResult {
@@ -1290,7 +1289,7 @@ mod tests {
 
     #[test]
     fn an_error_replys_sibling_keys_are_not_checked() {
-        // Ruling (issue #478): Python doesn't check an error reply's
+        // Issue #478: Python doesn't check an error reply's
         // *other* sibling keys, only `error`'s own nested keys --
         // `{error: {...}, tokens_sent: 5}` loads silently.
         let mut entry = Dict::new();

@@ -1,4 +1,4 @@
-//! Lane C: ports `core/state_ns.py` -- the root-namespace contract for
+//! Ports `core/state_ns.py` -- the root-namespace contract for
 //! orchestration state. Checks a by-reference `{from: <path>}` leaf's
 //! path, a loop `each.in` path, and a `mode: cel` expression's
 //! `state.<key>` paths (via [`electricity_cel::state_paths`]) against

@@ -486,7 +486,7 @@ fn html_escape(s: &str) -> String {
 /// directly (confirmed: `renderer.py`'s `'no escape'` branch has no such
 /// check).
 ///
-/// *escape* (#397/#406, lane P) toggles only the final HTML-escape step:
+/// *escape* (#397/#406) toggles only the final HTML-escape step:
 /// `escape: false` makes `{{x}}` insert its value exactly as
 /// `{{{x}}}`/`{{&x}}` already do, with the `"."`-plus-`True` quirk above
 /// still applying regardless -- it belongs to this tag *type*

@@ -12,12 +12,12 @@ fn bin() -> PathBuf {
 }
 
 /// A document that fails at run time regardless of whether
-/// `electricity_vm::execute_root` is still lane B's own stub or the
+/// `electricity_vm::execute_root` is still a stub or the
 /// real interpreter (issue #431's golden run corpus's own
 /// `json_parse_failure` case: `prime.broken: JsonPlugin: parse mode
 /// requires params['input'] as a string.`) -- unlike `effects: []`
-/// (which the stub also fails today, but will *succeed* once lane B2
-/// lands), every test below that only needs an ordinary ``--out``-
+/// (which the stub also fails today, but will *succeed* once the real
+/// interpreter lands), every test below that only needs an ordinary ``--out``-
 /// writing failure, not any particular error text, uses this instead
 /// (PR #441).
 const FAILURE_DOC: &str = "\
@@ -85,7 +85,7 @@ fn help_prints_usage_and_preview_notice_and_exits_zero() {
 /// `electricity <config.json> <doc>` runs the document check first
 /// (issue #431's run-wiring table). An empty document is one of the
 /// few checks fully resolvable without a real VM, so its exact text
-/// -- not just a marker naming an unimplemented lane -- is a stable
+/// -- not just a marker naming an unsupported effect type -- is a stable
 /// thing to assert here. An ordinary run failure's own error lives in
 /// the stdout JSON payload, never on stderr (PR #441:
 /// `cli/app.py::run`'s own non-TTY failure path prints no `Error:`
@@ -222,7 +222,7 @@ fn known_run_flag_in_first_position_is_a_run_request() {
         ])
         .output()
         .unwrap();
-    // `--profile` is now a real path (issue #495, lane R): `p` doesn't
+    // `--profile` is now a real path (issue #495): `p` doesn't
     // exist relative to this process's own cwd, so the run fails with
     // electricity's own not-found text (DESIGN §6.11) -- exit 1, the
     // ordinary run-failure JSON payload on stdout, not stderr (PR #441).
@@ -353,7 +353,7 @@ fn dump_ir_without_e_on_a_required_input_fails_with_the_missing_input_message() 
 
 /// A document that only declares content the M0-H VM actually runs is
 /// never refused -- [`FAILURE_DOC`] fails at run time regardless of
-/// whether `execute_root` is still lane B's own stub or the real
+/// whether `execute_root` is still a stub or the real
 /// interpreter, so this is an *ordinary* failure, not the preview
 /// refusal: `--out`/`--events`/`--live-state` are written, same as any
 /// other failed run (issue #431's run-wiring step 20).
@@ -444,7 +444,7 @@ fn live_state_is_byte_identical_to_out_without_pretty() {
 
 /// The same four flags, but written `--flag=value` instead of `--flag
 /// value` -- `cof`'s own Click parser accepts both forms for a value
-/// flag (ruling on PR #432's review).
+/// flag (PR #432).
 #[test]
 fn run_request_with_every_new_flag_in_equals_form_also_writes_out() {
     let (mut cmd, home) = command("run-new-flags-equals");
@@ -516,10 +516,10 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
 
 /// A document naming the `mcp` provider (an M2 plugin, not yet ported
 /// to electricity) is refused the same way as any other unsupported
-/// content, with no file written at all. This probe used to name a
+/// content, with no file written at all. This test used to name a
 /// `loop`'s own `while:` in `mode: model`, then `validate_yaml`
-/// (before lanes G2/#513 and L2a/#521 each in turn made their own
-/// probe's provider runnable); it was swapped again to a provider that
+/// (before #513 and #521 each in turn made their own
+/// test's provider runnable); it was swapped again to a provider that
 /// stays refused until the M2 plugin bridge, keeping the "refused,
 /// nothing written" assertion covered.
 #[test]
@@ -565,13 +565,13 @@ fn an_mcp_provider_is_refused_with_no_files_written() {
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, with no file written at all, even though the rest of the
 /// document (`json`/`dynamic` only) is otherwise fully supported --
-/// `litellm` (a Python-SDK-only adapter, out of scope for lane F2,
+/// `litellm` (a Python-SDK-only adapter, out of scope for
 /// issue #503) has no electricity-side adapter build at all, so
-/// settled ruling 3's own stateless refusal (`unbuildable_known_adapter`)
-/// fires before preflight (issue #495, lane R) is ever reached, not
+/// the stateless refusal (`unbuildable_known_adapter`)
+/// fires before preflight (issue #495) is ever reached, not
 /// because preflight itself is unported. `openai` used to be this
-/// test's own example; it became a real, buildable adapter in lane F2,
-/// so it now reaches a real preflight failure instead (see the Python
+/// test's own example; it became a real, buildable adapter in that
+/// same change, so it now reaches a real preflight failure instead (see the Python
 /// conformance case `document-adapter-preflight-not-ready`).
 #[test]
 fn a_document_level_adapter_is_refused_with_no_files_written() {
@@ -910,7 +910,7 @@ fn a_failure_before_the_profile_is_ever_loaded_writes_only_the_plain_out_flag() 
 /// Issue #778's own step 5: a `$defs` chain of 10000 single-hop
 /// `$ref`s in a `prompt` effect's own `schema:` is refused at compile
 /// time now, well under 200 hops -- `core/compiler.py`'s own match on
-/// `cof run`, confirmed directly. This replaces the round-7
+/// `cof run`, confirmed directly. This replaces the
 /// regression this test used to cover (the same chain used to
 /// overflow electricity's real main-thread native stack before
 /// `validate_prompt_schema` moved to a dedicated large-stack thread);
@@ -1398,8 +1398,7 @@ fn run_subcommand_unknown_flag_is_a_usage_error() {
 }
 
 /// `cof run` has no `-V`/`--version`/`-h` of its own -- each is itself
-/// an unrecognized option there, unlike the legacy form (issue #728's
-/// own review).
+/// an unrecognized option there, unlike the legacy form (issue #728).
 #[test]
 fn run_subcommand_rejects_short_version_and_help_flags() {
     for flag in ["-V", "--version", "-h"] {
@@ -1706,7 +1705,7 @@ fn run_subcommand_last_refuses_a_stash_with_redacted_secrets() {
 
 /// The legacy form's own first positional already is the config path
 /// -- `--config`/`-c` there is rejected as redundant rather than
-/// silently ignored (issue #728's own review).
+/// silently ignored (issue #728).
 #[test]
 fn legacy_form_rejects_an_explicit_config_flag() {
     let (mut cmd, home) = command("legacy-rejects-config-flag");

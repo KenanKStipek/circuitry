@@ -4,8 +4,8 @@
 //! Pattern text is built with a port of CPython 3.11's `re.escape`, then
 //! translated through `electricity-pyre` the same way `electricity-tools`'s
 //! `regex` plugin does -- the only two places this workspace turns Python
-//! `re` syntax into `fancy-regex` syntax (issue #505's own "Reuse, don't
-//! re-implement" ruling). Compiled patterns are cached by their *Python*
+//! `re` syntax into `fancy-regex` syntax (issue #505: "Reuse, don't
+//! re-implement"). Compiled patterns are cached by their *Python*
 //! pattern text, mirroring `re`'s own internal cache, since the same stem
 //! (e.g. every orchestration's shared default table) is matched repeatedly
 //! across many `score()` calls.

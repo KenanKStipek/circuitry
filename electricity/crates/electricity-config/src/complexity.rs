@@ -1,5 +1,5 @@
 //! `cli/complexity_config.py`'s own `runtime.complexity` validation --
-//! the block's shape and defaults, plus (since issue #505's K1 lane)
+//! the block's shape and defaults, plus (since issue #505)
 //! the *resolved* `scoring.weights`/`keywords` tables
 //! `electricity-complexity::runtime_tables` reads directly. Scoring,
 //! routing and decomposition *behaviour* -- picking a model, splitting
@@ -58,7 +58,7 @@ const SIGNAL_NAMES: [&str; 7] = [
 /// `core/complexity.py::DEFAULT_WEIGHTS`, the scorer's own 0.28/0.18/...
 /// table used only by a direct library call with `weights=None`;
 /// `_score_and_route` always passes this config table instead, issue
-/// #505's own ruling). `SIGNAL_NAMES` order.
+/// #505). `SIGNAL_NAMES` order.
 const DEFAULT_WEIGHT_VALUES: [(&str, f64); 7] = [
     ("prompt_size", 1.0),
     ("state_references", 1.5),

@@ -1,4 +1,4 @@
-//! Lane J2 (issue #518): a loaded profile's per-effect `model`/
+//! Issue #518: a loaded profile's per-effect `model`/
 //! `provider`/`enabled`/`routing` overlay, applied directly onto a
 //! compiled [`electricity_bytecode::Program`] -- `core/compiler.py`'s
 //! `apply_effect_overrides`/`_overlay_effect`/`_disable_subtree`
@@ -9,8 +9,8 @@
 //! Unlike Python, which threads a dotted-path string alongside each
 //! `*Definition` it visits (`_overlay_effect`'s own `path`/`own_path`
 //! parameters), this walk never builds one of its own: every compiled
-//! [`Op`] already carries its own fully-resolved [`EffectPath`]
-//! (lane A), so a key is read straight off `op.path` wherever the walk
+//! [`Op`] already carries its own fully-resolved [`EffectPath`],
+//! so a key is read straight off `op.path` wherever the walk
 //! already is.
 //!
 //! The caller (`electricity`'s own run wiring) only calls

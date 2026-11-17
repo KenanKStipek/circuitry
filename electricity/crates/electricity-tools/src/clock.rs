@@ -22,8 +22,8 @@ struct UnknownZone;
 /// 0.1.3's own docs: it never evaluates the file's trailing POSIX-TZ
 /// rule string, so a "slim" tzdata build -- explicit transitions ending
 /// years ago, everything past them left to that rule -- would pin the
-/// zone at its last explicit transition's offset forever; issue #460's
-/// own fix pass). `jiff`'s own `TimeZone::get` searches `TZDIR`/
+/// zone at its last explicit transition's offset forever; issue #460).
+/// `jiff`'s own `TimeZone::get` searches `TZDIR`/
 /// the usual zoneinfo search path first, falling back to its bundled
 /// database, matching `zoneinfo.TZPATH`'s own search order closely
 /// enough that every name this preview needs to resolve, it does.
@@ -174,8 +174,8 @@ fn platform_strftime(format: &str, naive: &NaiveDateTime) -> String {
 }
 
 /// `ClockPlugin::execute`'s own body, taking *now* as a parameter
-/// instead of reading a live clock -- the injection point #460's lane
-/// D1 ruling asks for ("a module-level function..., never a global
+/// instead of reading a live clock -- the injection point #460 asks
+/// for ("a module-level function..., never a global
 /// mutable"), so a test (or the corpus-replay test) calls this
 /// directly with a fixed instant rather than overriding a thread-local
 /// or a process-wide global.

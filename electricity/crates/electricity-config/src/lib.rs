@@ -1,5 +1,5 @@
 //! electricity-config: `config.json` -> effective settings for an
-//! electricity run (issue #431's Scope section, lane D1). Ports:
+//! electricity run (issue #431's Scope section). Ports:
 //!
 //! - [`resolve_config`]: `cli/config.py::resolve_config`'s explicit-path
 //!   branch -- `SANE_DEFAULTS` deep-merged with the named file, then the
@@ -17,15 +17,15 @@
 //!   module docs).
 //! - [`validate_complexity`]/[`validate_persistence`]: the two
 //!   pre-checks `electricity-compiler`'s own crate docs listed as a
-//!   known divergence until this lane landed --
+//!   known divergence until now --
 //!   [`complexity::resolve_complexity_settings`] and
 //!   [`persistence::validate_persistence_block`]'s own validation,
 //!   raising Circuitry's own text for a malformed `runtime.complexity`/
 //!   `runtime.persistence` block.
 //! - [`allowlist::check_allowlist`]/[`allowlist::allowlists`]/
 //!   [`allowlist::capability_allow`]: the `enabled_adapters`/
-//!   `enabled_tools`/`enabled_plugins` allowlist seam issue #431's lane
-//!   table left this lane to shape ([`allowlist`] module docs).
+//!   `enabled_tools`/`enabled_plugins` allowlist seam issue #431
+//!   left for this crate to shape ([`allowlist`] module docs).
 //! - [`dotenv`]: `python-dotenv`'s own `dotenv_values` parsing and
 //!   `${VAR}` interpolation (issue #468) -- the pure parser only;
 //!   `electricity-cli` owns the path resolution, ownership/mode checks

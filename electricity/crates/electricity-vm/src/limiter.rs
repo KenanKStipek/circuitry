@@ -24,7 +24,7 @@
 //! to grab before missing the other one is released before it returns).
 //! This crate never writes the store itself -- a caller that wants
 //! `meta.waiting_for` writes it from inside its own `report` callback
-//! (`exec::dynamic`/`exec::tool`, lane B/C); cancellation is the same
+//! (`exec::dynamic`/`exec::tool`); cancellation is the same
 //! caller's own `select!` against `token.cancelled()` racing the
 //! `acquire`/`acquire_reporting` future, not something this crate
 //! polls for on its own (`core/concurrency.py::RunConcurrencyLimiter.
@@ -113,8 +113,8 @@ impl Limiter {
     /// counts -- parsing `runtime.max_concurrency`/`runtime.
     /// concurrency_groups` out of a document's own JSON/YAML value, with
     /// Python's own `"Invalid runtime concurrency configuration:\n  -
-    /// ..."` error text, is `electricity-config`'s job (issue #431's
-    /// Lane D section), not this crate's.
+    /// ..."` error text, is `electricity-config`'s job (issue #431),
+    /// not this crate's.
     ///
     /// *max_concurrency* of `None` **or** `Some(0)` both mean no global
     /// cap -- Python's own `Semaphore(max_concurrency) if max_concurrency

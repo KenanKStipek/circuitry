@@ -1,4 +1,4 @@
-//! M1 lane L2b (issue #522): runtime decomposition wired into the
+//! Issue #522: runtime decomposition wired into the
 //! `prompt` effect's own dispatch seam -- integration tests against a
 //! real, compiled document (`execute_root`), the same convention
 //! `tests/prompt_effect.rs`/`tests/use_effect.rs` use. `decompose.rs`'s
@@ -170,10 +170,10 @@ fn decomposing_complexity(threshold: f64, max_depth: i64, max_chunks: i64) -> Co
     settings
 }
 
-/// A genuinely high-scoring template (K1's real scorer, never a
-/// value a test hands it directly -- `maybe_decompose` only ever
-/// reads `meta.complexity`) -- long, repeats several of K1's own
-/// keyword-weighted phrases, scores around 18-19 on a 0-100 scale, well
+/// A genuinely high-scoring template (the real complexity scorer,
+/// never a value a test hands it directly -- `maybe_decompose` only
+/// ever reads `meta.complexity`) -- long, repeats several of the
+/// scorer's own keyword-weighted phrases, scores around 18-19 on a 0-100 scale, well
 /// above a short one-line chunk template's own ~2.7. Used as the one
 /// prompt a test actually wants to trigger on; every chunk inside an
 /// emitted plan stays short on purpose, so it never re-triggers

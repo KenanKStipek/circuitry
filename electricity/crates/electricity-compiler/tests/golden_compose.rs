@@ -2,20 +2,20 @@
 //! golden cases: every message in `core/prompt_files.py` and in
 //! `core/prompt_compose.py`'s compile-time composition checks.
 //!
-//! `load_document` (lane B) and `compile_document` (lane C's
-//! effect-by-effect compile step, now landed) are both implemented.
+//! `load_document` and `compile_document` (the
+//! effect-by-effect compile step) are both implemented.
 //! Every case here still calls this crate's public [`compile_document`]
-//! directly -- parsing the entry file with `electricity-yaml` (a lane
-//! A/merged-crate dependency) the same way `load_document` does, and
+//! directly -- parsing the entry file with `electricity-yaml` (a
+//! merged-crate dependency) the same way `load_document` does, and
 //! building a [`DocumentOrigin::File`] from the entry's own parent
 //! directory (every case's project root -- none of them sit under a
 //! nested `circuitry.config.json`/`config.json`) -- rather than going
-//! through `check_for_run` itself, since that path also runs lane B's
-//! own structural/concurrency checks first, which these cases don't
+//! through `check_for_run` itself, since that path also runs the
+//! structural/concurrency checks first, which these cases don't
 //! exercise. [`compile_document`]'s error carries the exact same text
-//! `RunCheckError::Compile` wraps verbatim, since lane D's own
+//! `RunCheckError::Compile` wraps verbatim, since
 //! `prompt_files::compile_declared_prompts`/`compose::
-//! check_prompt_composition` run first inside it, before lane C's own
+//! check_prompt_composition` run first inside it, before the
 //! effect-by-effect compile step.
 //!
 //! A case whose document fails at the declared-prompts, composition, or
@@ -73,7 +73,7 @@ fn load_case(name: &str) -> Case {
         .unwrap_or_else(|| panic!("no case named {name:?} in golden/compose.json"))
 }
 
-/// Parses *entry* the same way `load_document` (lane B) does, without
+/// Parses *entry* the same way `load_document` does, without
 /// going through its own suffix/empty-file/duplicate-key checks (this
 /// corpus's cases never exercise those).
 fn load_value(entry: &Path) -> electricity_value::Value {
@@ -99,7 +99,7 @@ fn strip_exception_class_name(definition_error: &str) -> &str {
 /// directly, the same call this test makes, unlike `run_error`/
 /// `validate`'s `errors` (the *full* `cof check`/`cof run` pipeline,
 /// which catches a schema-shaped violation -- `prompts: nope`, say --
-/// in its own structural/JSON-Schema pass, lane B's own code, before
+/// in its own structural/JSON-Schema pass, before
 /// `compile_orchestration`/`compile_document` is ever reached).
 fn assert_compile_error_matches(name: &str) {
     let case = load_case(name);
@@ -257,7 +257,7 @@ run_error_case!(
 );
 
 // -- cases whose document passes declared-prompts, composition, and
-// -- lane C's own effect compilation: these assert the same success
+// -- effect compilation: these assert the same success
 // -- outcome Circuitry's own compile_orchestration reports for the
 // -- same document (`run_error` is None in the corpus).
 

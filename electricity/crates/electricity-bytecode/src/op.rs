@@ -1,4 +1,4 @@
-//! Lane A: `Op`, `NodeKind`, `LeafKind`, `OnError` (issue #408's Scope
+//! `Op`, `NodeKind`, `LeafKind`, `OnError` (issue #408's Scope
 //! section; DESIGN.md §5.1).
 
 use crate::effects::{PromptOp, ReflectorOp, ReportOp, ResumeMode, ToolOp, UseOp, YieldOp};
@@ -13,7 +13,7 @@ use serde::Serialize;
 /// confirmed directly against every `*Definition` dataclass's own class
 /// name: `core/{prompt,tool,use,yield_effect,reflector,dynamic,
 /// conditional,loop}.py`). A control node's variant is read off its
-/// [`Region`] shape, not the (lane-D-only) "was this document's `if`/
+/// [`Region`] shape, not the "was this document's `if`/
 /// `loop`/`dynamic` keyword" distinction `compile_document` has already
 /// erased by the time an `Op` exists: [`Region::Block`]/[`Region::
 /// Parallel`] (a `dynamic`'s chain/tree flow) and [`Region::TryFinally`]

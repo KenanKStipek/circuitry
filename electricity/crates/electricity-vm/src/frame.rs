@@ -1,9 +1,9 @@
 //! `core/effect_identity.py`'s `call_path`/`nested_container`, ported as
 //! a cheap-to-clone value rather than a `contextvars.ContextVar` (issue
-//! #449's gate lane items 4/6; PR #454) --
+//! #449, items 4/6; PR #454) --
 //! threaded by [`crate::exec::execute_op`] and every container executor
 //! (including every still-stubbed one, down to the two `condition_model`
-//! stubs) so lane G/G2/H/I's own `prompt`/`loop`/`use` never has to
+//! stubs) so a later `prompt`/`loop`/`use` effect type never has to
 //! widen one of those shared signatures to carry one.
 //!
 //! [`Frame::effect_path`] is the one path every observer hook and
@@ -29,7 +29,7 @@
 //! [`Frame::root`]'s own empty prefix and empty pass map make
 //! [`Frame::effect_path`] return exactly *path* unchanged for the whole
 //! of any M0-shaped run (no `use`, no `loop`), keeping `--events`
-//! output byte-identical until a lane actually calls [`Frame::nested`]/
+//! output byte-identical until a caller actually calls [`Frame::nested`]/
 //! [`Frame::with_pass`].
 
 use electricity_bytecode::{EffectPath, LoopId};
@@ -65,8 +65,8 @@ pub struct Frame {
     /// *name*, which two unrelated `use` effects can share without
     /// that being a cycle, and which the same child document reached
     /// through two different `use` effects would wrongly miss), one
-    /// per level, extended by [`Frame::push_use`], for lane I's own
-    /// cycle detection (M1 gate seam round 2, item S6). A path-`use`'s
+    /// per level, extended by [`Frame::push_use`], for the `use`
+    /// effect's own cycle detection. A path-`use`'s
     /// own identity is its resolved absolute path, verbatim; an inline
     /// `use`'s own identity (documenting `core/use.py::_load_child_orch`'s own exact form)
     /// is `format!("inline:{:016x}", ...)`-shaped but not literally
@@ -75,16 +75,15 @@ pub struct Frame {
     /// rendered, fence-cleaned YAML text, UTF-8 encoded, lowercase
     /// (Python's own `hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]`).
     use_call_stack: Rc<Vec<String>>,
-    /// A reflector's own inner-dynamic path rewrite (issue #506's lane
-    /// L1), pushed by [`Frame::rebased`] -- empty for every frame
+    /// A reflector's own inner-dynamic path rewrite (issue #506),
+    /// pushed by [`Frame::rebased`] -- empty for every frame
     /// outside a reflector's inner dynamic. Each `(from, to)` entry is
     /// already resolved against this frame's own [`Frame::pass_indices`]
     /// at the point [`Frame::rebased`] pushed it (never re-resolved per
     /// lookup). [`Frame::apply_rebase`] applies every entry, *last
     /// pushed first* -- a reflector nested inside another reflector's
     /// own `effects:` pushes a second entry onto the outer's own stack
-    /// rather than replacing it (PR #510's first
-    /// review: a single `Option` here could only ever rewrite the
+    /// rather than replacing it (PR #510: a single `Option` here could only ever rewrite the
     /// innermost reflector's own prefix, losing every outer one's own
     /// rewrite entirely) -- applying the innermost rule first and
     /// re-checking the *result* against each earlier, outer rule in
@@ -181,8 +180,8 @@ pub struct Frame {
     /// `core/prompt.py`'s own container-nesting display depth
     /// (`structure.depth`, a.k.a. the `structural_position` signal) --
     /// issue #516's §4(c) table, superseding the one-value-per-run
-    /// `RunContext::display_depth` lane K1 left behind (that field no
-    /// longer exists -- §4(c)'s own "one source of truth" ruling): every
+    /// `RunContext::display_depth` (that field no
+    /// longer exists -- §4(c)'s own "one source of truth" rule): every
     /// container executor hands a child frame its own depth through
     /// [`crate::complexity`]'s table functions, called right where
     /// that child is dispatched, never derived from [`Frame::prefix`]/
@@ -379,8 +378,8 @@ impl Frame {
         path
     }
 
-    /// A reflector's own inner-dynamic path rewrite (issue #506's lane
-    /// L1): every path this frame is ever asked to resolve that starts
+    /// A reflector's own inner-dynamic path rewrite (issue #506):
+    /// every path this frame is ever asked to resolve that starts
     /// with *from* -- both *from* and *to* given in the same,
     /// not-yet-prefixed coordinate space [`Frame::effect_path`]'s own
     /// *resolved* local reaches right after pass-placeholder
@@ -518,8 +517,8 @@ impl Frame {
     }
 
     /// Every child document identity currently on the call stack,
-    /// outermost first -- lane I's own cycle check: a path-`use`'s
-    /// resolved path or an inline `use`'s own inline form, never a
+    /// outermost first -- the `use` effect's own cycle check: a
+    /// path-`use`'s resolved path or an inline `use`'s own inline form, never a
     /// `use` effect's name.
     pub fn use_call_stack(&self) -> &[String] {
         &self.use_call_stack
@@ -782,8 +781,8 @@ mod tests {
         // <refl>.inner" rule applies at every nesting depth), so IR's
         // own rebased call -- on the frame the outer reflector already
         // built -- must push its own entry onto that frame's own
-        // stack rather than replacing the outer's entry (PR #510's
-        // first review: a single Option field
+        // stack rather than replacing the outer's entry (PR #510: a
+        // single Option field
         // here used to lose the outer rewrite entirely, reporting
         // prime.outer.ir.inner.propose_steps instead of Python's own
         // prime.outer.inner.ir.inner.propose_steps).
@@ -859,7 +858,7 @@ mod tests {
 
     #[test]
     fn two_sibling_tree_branches_using_the_same_child_see_no_false_cycle() {
-        // S6 (M1 gate seam round 2): `core/use.py:856-871`'s own
+        // `core/use.py:856-871`'s own
         // concern -- a *shared*, mutated-in-place call stack would let
         // one tree-flow branch's own push become visible to a sibling
         // branch as a false ancestor. `Frame::push_use` instead extends
@@ -882,8 +881,8 @@ mod tests {
     fn a_real_cycle_is_detected_by_the_identity_already_being_on_the_stack() {
         // A real cycle: the same child document reached a second time
         // on one call path (not two siblings -- one branch nesting into
-        // itself). The identity lane I's own cycle check compares
-        // against is already on `Frame::use_call_stack` by the time the
+        // itself). The identity the `use` effect's own cycle check
+        // compares against is already on `Frame::use_call_stack` by the time the
         // same child is about to be pushed again.
         let root = Frame::root();
         let one_level = root.push_use("a.yml".to_string());

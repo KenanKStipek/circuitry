@@ -1,4 +1,4 @@
-//! Lane C: compiles `dynamic`, `if`/`conditional` and `loop` into
+//! Compiles `dynamic`, `if`/`conditional` and `loop` into
 //! [`electricity_bytecode::Region`] -- names and scopes, duplicate-name
 //! checks per scope, `finally:` sharing the body's scope, and the
 //! `if`/`while` mode checks.
@@ -897,8 +897,8 @@ fn compile_loop(
 
     let region = Region::Loop {
         // The same `validated_name` the enclosing `Op::name` below
-        // gets -- M1 gate seam round 2, item S8: carried on the
-        // `Region` itself too, for a caller (lane H's own tree-flow
+        // gets, carried on the
+        // `Region` itself too, for a caller (the loop's own tree-flow
         // per-pass dispatch, `groups.rs::collect_region_groups`, the
         // refusal walker's own `walk_region`) that recurses into a
         // loop's body with no enclosing `Op` in hand.

@@ -1,4 +1,4 @@
-//! Lane C: `_compile_retries`/`_compile_expect` (`core/compiler.py`) --
+//! `_compile_retries`/`_compile_expect` (`core/compiler.py`) --
 //! shared by `tool`/`use` effects.
 
 use crate::CompileError;

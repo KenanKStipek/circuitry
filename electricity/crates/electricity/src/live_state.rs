@@ -130,8 +130,8 @@ fn write_atomic(path: &Path, payload: &str) -> io::Result<()> {
     result
 }
 
-/// `core/use.py::_grafted_snapshot`'s own seam (M1 lane I
-/// prerequisites, issue #448, item U6): *root* with *node_path*'s own
+/// `core/use.py::_grafted_snapshot`'s own seam (issue #448, item U6):
+/// *root* with *node_path*'s own
 /// existing value overlaid by *child_snapshot*'s mirrored effects --
 /// every key of the child's own `prime` root except `value`/`meta`
 /// (the child document's own effects, not its own top-level result).
@@ -211,7 +211,7 @@ fn overlay_at_path(root: &Value, segments: &[&str], mirrored: &Dict) -> Value {
 ///
 /// A branch that *has* started but not yet finished its own first
 /// effect is a known, deliberate difference from cof, not a match for
-/// it (PR #549's review; `electricity/DESIGN.md` §13, Q11):
+/// it (PR #549; `electricity/DESIGN.md` §13, Q11):
 /// every electricity effect type writes an in-progress `meta` node
 /// (`created_at` set, `completed_at` still `None`) the moment it
 /// starts, the same as a plain chain effect already does, so that
@@ -225,8 +225,8 @@ fn overlay_at_path(root: &Value, segments: &[&str], mirrored: &Dict) -> Value {
 /// started but not finished stays invisible in cof's own mid-run
 /// `--live-state`, visible in electricity's. Matching cof's staler
 /// view here would mean taking a branch snapshot on every write
-/// instead of lazily at publish time, which issue #465's own
-/// performance ruling forbids -- so this divergence is kept, not
+/// instead of lazily at publish time, which issue #465 forbids for
+/// performance reasons -- so this divergence is kept, not
 /// hidden.
 fn tree_overlay_snapshot(
     root: &Value,
@@ -286,8 +286,8 @@ pub struct LiveStateMirror {
     /// own parent's, in whichever order the two kinds actually nest.
     ///
     /// Each path maps to a `Vec`, not a single entry -- more than one
-    /// overlay can legitimately share the exact same path (PR #549's
-    /// review): a `use` child whose own document has a
+    /// overlay can legitimately share the exact same path (PR #549):
+    /// a `use` child whose own document has a
     /// top-level `flow: tree` registers that tree's branches at the
     /// same path the child's own graft already uses (the child frame
     /// maps the child root to the `use` node's own path, and an
@@ -358,7 +358,7 @@ impl LiveStateMirror {
     /// cleared). Matches by `Rc::ptr_eq` (this struct's own `grafts`
     /// field doc comment), not by *node_path* alone: a sibling `use`
     /// child sharing the same path, or a `GraftEntry::Tree` entry
-    /// there (PR #549's review -- a tree nested directly at a
+    /// there (#549 -- a tree nested directly at a
     /// `use` child's own root path must keep overlaying after this
     /// child's own graft is gone), is untouched.
     pub fn clear_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
@@ -379,7 +379,7 @@ impl LiveStateMirror {
     /// [`electricity_vm::RunObserver::register_tree_branches`]'s own
     /// implementation: records *branches* (cloned `Rc`s, cheap) as a
     /// *new* tree overlay at *node_path*, always pushed, never
-    /// replacing an existing entry there (PR #549's review:
+    /// replacing an existing entry there (PR #549:
     /// two sibling trees, or a child graft and a tree, can share a
     /// path). Like [`Self::register_child_graft`] this never marks a
     /// write pending on its own -- it runs once, before any branch has
@@ -400,7 +400,7 @@ impl LiveStateMirror {
     /// *branches*, this exact tree's own `NodeRef`s, not merely its
     /// path) has merged -- a no-op if nothing matching was registered
     /// there (or it was already cleared). Matches by `Rc::ptr_eq` on
-    /// the first branch (PR #549's review): *branches* is
+    /// the first branch (#549): *branches* is
     /// never empty in practice (both callers guard the zero-branch
     /// case before ever registering), and two distinct trees never
     /// share the same `NodeRef` allocation, so this removes exactly
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn a_grafted_child_write_mirrors_under_the_parent_use_node() {
-        // M1 lane I prerequisites (issue #448, item U6): a parent
+        // Issue #448, item U6: a parent
         // store with a `use` node mid-flight (`value: null`, an
         // ordinary `meta`) -- the child's own current snapshot, once
         // grafted, must mirror its own effects under that node without
@@ -1268,7 +1268,7 @@ mod tests {
     /// one of its own branches, registered at `prime.outer.inner`, both
     /// apply, shallowest path first, the same way a nested `use`'s own
     /// graft already composes with its parent's. Unlike an earlier
-    /// version of this test (PR #549's review), the outer
+    /// version of this test (#549), the outer
     /// branch writes something of its own (`note`) *and* an `inner`
     /// skeleton (`value`/`meta`) its own nested tree then overlays onto
     /// -- so shallowest-path-first order is actually load-bearing here:
@@ -1334,7 +1334,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// PR #549's review: a `use` child's own graft and a
+    /// PR #549: a `use` child's own graft and a
     /// tree's own overlay can legitimately share one path (a `use`
     /// child whose document has a top-level `flow: tree`, where the
     /// child frame maps the child root to the `use` node's own path
@@ -1436,7 +1436,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// PR #549's review: an outer tree and an inner,
+    /// PR #549: an outer tree and an inner,
     /// unnamed tree nested one of its branches can register at the
     /// *exact same path* (an unnamed tree loop/dynamic branch appends
     /// no name segment of its own, `exec::loop_::run_each_tree`'s own
@@ -1523,7 +1523,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// PR #549's review: two concurrent *sibling* unnamed
+    /// PR #549: two concurrent *sibling* unnamed
     /// tree loops (neither nested in the other) can also register at
     /// the same path, if both are direct, unnamed branches of the same
     /// enclosing tree -- a shared key between them resolves the same

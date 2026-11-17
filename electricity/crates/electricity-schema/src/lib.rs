@@ -68,8 +68,8 @@
 //! `_validate_profile_schema` writes (`DESIGN.md` §6.11). Both callers are
 //! meant to build that text themselves from [`SchemaError`]'s `location`
 //! and `message` (or [`SchemaError::describe`] for the per-line part) --
-//! the compiler lane (`DESIGN.md` §4 step 2, milestone M0-G) and the
-//! profile-loading lane (`DESIGN.md` §6.11, milestone M1-J1) respectively,
+//! the compiler (`DESIGN.md` §4 step 2, milestone M0-G) and
+//! profile loading (`DESIGN.md` §6.11, milestone M1-J1) respectively,
 //! neither of which exists yet. A byte-exact header also can't be produced
 //! from this crate's output alone even once a caller exists: Python sorts
 //! profile errors by `str(err)` (`cli/profiles.py`), which is third-party
@@ -819,14 +819,14 @@ pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
         .collect()
 }
 
-/// A `prompt` effect's own `schema:` check (issue #498, lane G) --
+/// A `prompt` effect's own `schema:` check (issue #498) --
 /// `core/prompt.py::PromptRuntime._validate_schema`'s own
 /// `jsonschema.validate(value, schema)`, whose validator class is
 /// picked from the schema's own `$schema` keyword (defaulting to the
 /// latest draft -- `jsonschema.validate`'s own `validator_for` default),
 /// matched here by [`is_2020_12_or_unset`]'s own exact-URI lookup against
 /// Python's own `_META_SCHEMAS`, never [`jsonschema::validator_for`]'s
-/// prefix-shaped equivalent (PR #502's round-4 fix: any
+/// prefix-shaped equivalent (PR #502: any
 /// `$schema` value *not* one of the handful Python itself registers
 /// falls back to the latest draft there too, not just an exact 2020-12
 /// match). Unlike [`orchestration_errors`]/[`profile_errors`],
@@ -840,11 +840,10 @@ pub enum PromptSchemaCheck {
     Valid,
     /// `jsonschema.ValidationError.message` text -- matched exactly
     /// against Python's own `jsonschema` output for the keyword
-    /// families [`python_message::python_message`] covers (issue #498
-    /// ruling 6, tightened by PR #502's review,
-    /// ruling 2), `oneOf`/`anyOf` included (`engine::render`'s own
-    /// text, not the `jsonschema` crate's `Display` -- PR #502's
-    /// round-6 fix); the remaining gaps are narrower ones named in
+    /// families [`python_message::python_message`] covers (issue #498,
+    /// tightened by PR #502), `oneOf`/`anyOf` included (`engine::render`'s own
+    /// text, not the `jsonschema` crate's `Display` -- PR #502); the
+    /// remaining gaps are narrower ones named in
     /// `DESIGN.md` §13. The `"Schema validation failed: "` prefix is
     /// the caller's, as it is in `core/prompt.py`.
     Invalid(String),
@@ -856,7 +855,7 @@ pub enum PromptSchemaCheck {
 }
 
 /// The dedicated validation thread [`validate_prompt_schema`] runs
-/// [`validate_prompt_schema_impl`] on (round-7 fix) -- sized against a
+/// [`validate_prompt_schema_impl`] on -- sized against a
 /// deliberately pathological case, not a typical one: a single-hop-
 /// per-level `$ref` chain just short of [`engine::MAX_RECURSION_DEPTH`]
 /// (so neither [`engine::evaluate`] nor
@@ -899,9 +898,9 @@ const FALLBACK_STACK_GUARD_BYTES: usize = 1024 * 1024;
 /// follow-up): the crate's own schema-compile step can
 /// fail on a document the engine understands perfectly well (a `$ref`
 /// an instance never actually reaches, lazily resolved exactly as
-/// Python does -- probe-schema7 c15; a YAML `maximum: .inf` instance
-/// that round-trips through `serde_json::Value` as `null` -- c20), and
-/// its own regex dialect is ECMA-262, not Python's (c2-c4; `DESIGN.md`
+/// Python does; a YAML `maximum: .inf` instance
+/// that round-trips through `serde_json::Value` as `null`), and
+/// its own regex dialect is ECMA-262, not Python's (`DESIGN.md`
 /// §13's own `pattern` section). The crate decides only when that gate
 /// is false (an unsupported keyword -- `engine`'s own module docs name
 /// exactly which ones -- or a pre-2020-12 draft), built from *schema*
@@ -909,7 +908,7 @@ const FALLBACK_STACK_GUARD_BYTES: usize = 1024 * 1024;
 /// already an accepted, documented divergence (`DESIGN.md` §13).
 ///
 /// Runs [`validate_prompt_schema_impl`] on a dedicated, scoped thread
-/// with its own large stack (round-7 fix, issue #498's own
+/// with its own large stack (issue #498's own
 /// follow-up: a `$ref` chain thousands of hops deep -- well under
 /// [`engine::MAX_RECURSION_DEPTH`] -- overflowed the caller's own
 /// ordinary thread stack, an immediate process abort with no state
@@ -1076,7 +1075,7 @@ fn validate_prompt_schema_impl(
     let fully_supported =
         is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema);
     let result = if engine::recursion_exceeded_peek() {
-        // Round-7 fix: the support walk itself already hit its own hop
+        // The support walk itself already hit its own hop
         // cap (`engine::MAX_RECURSION_DEPTH`) resolving *schema*'s own
         // `$ref` graph -- never because of a genuinely unsupported
         // keyword. Falling through to the crate branch below used to
@@ -1091,8 +1090,7 @@ fn validate_prompt_schema_impl(
         // discarded either way once that check fires.
         PromptSchemaCheck::Valid
     } else if fully_supported {
-        // Ruling R6 (follow-up):
-        // the engine is the accept/reject authority whenever it fully
+        // The engine is the accept/reject authority whenever it fully
         // understands the schema, never the crate -- the crate's own
         // `serde_json::Value` can't even represent a `NaN`/`Infinity`
         // instance (or schema value), its regex classes are ECMA/
@@ -1109,17 +1107,17 @@ fn validate_prompt_schema_impl(
         // fed [`schema_json_for_well_formedness_probe`] rather than
         // [`value_to_json`] (so a schema-literal `Infinity`/`NaN`
         // doesn't trip the crate's own `{"type": "number"}` meta-schema
-        // check the way `null` would -- probe-schema7 c20), with its two
+        // check the way `null` would), with its two
         // other known false positives, each ignored by its own `kind`
         // rather than by text: a `$ref` the crate resolves eagerly where
         // Python (and this engine) resolve lazily, only once an instance
-        // actually reaches it (probe-schema7 c15, `Referencing`); and
+        // actually reaches it (`Referencing`); and
         // the crate's own build-time meta-schema check that `pattern`'s
         // own value is a `format: "regex"` it accepts -- its own ECMA-262
         // regex engine, not Python's `re`, and `should_validate_formats
         // (false)` only suppresses *instance*-level format checks, never
         // this meta-schema one -- vetoing a pattern that's genuinely
-        // Python-valid, e.g. `^a\Z` (probe-schema6 c3, `Format`). Safe to
+        // Python-valid, e.g. `^a\Z` (`Format`). Safe to
         // ignore unconditionally on this branch: [`schema_is_fully_
         // supported`] (via `python_regex_is_valid`) already confirmed
         // every pattern in *schema* compiles under Python's own `re`
@@ -1226,7 +1224,7 @@ fn validate_prompt_schema_impl(
     // (likely nonsense, built from a truncated walk) is discarded in
     // favour of the same shape a real, uncaught Python `RecursionError`
     // reaches `core/prompt.py` as: a generic, non-retryable failure,
-    // never `schema_invalid`. F11 (follow-up): `multipleOf`
+    // never `schema_invalid`. `multipleOf`
     // against a `NaN`/`Infinity` instance with a `float` divisor is the
     // same shape, with that exception's own text instead.
     if engine::take_recursion_exceeded() {
@@ -1531,7 +1529,7 @@ fn value_to_json(value: &electricity_value::Value) -> Value {
 /// accept/reject directly from the original `Value`, `Infinity` included
 /// -- so turning it into `null` here would only ever trip the crate's
 /// own meta-schema check (`"maximum": {"type": "number"}`) on a schema
-/// Python itself accepts just fine (probe-schema7 c20). A harmless,
+/// Python itself accepts just fine. A harmless,
 /// sign-preserving finite stand-in keeps that check meaningful for
 /// everything else (`{"type": 5}`, still genuinely malformed) without
 /// that false positive -- `multipleOf`'s own meta-schema entry
@@ -2293,7 +2291,7 @@ mod tests {
 
     #[test]
     fn a_real_object_carrying_the_marker_key_and_an_unrelated_second_key_is_not_a_marker() {
-        // F7 (second-round review): the marker key alone, or paired with
+        // The marker key alone, or paired with
         // exactly `NON_JSON_SCALAR_NUMBER_LIKE`, is a marker -- any other
         // second key means it's a real document object that happens to
         // reuse the marker's own property name, not a stand-in.

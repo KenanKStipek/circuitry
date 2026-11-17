@@ -271,7 +271,7 @@ pub fn construct_float(text: &str) -> Option<f64> {
 /// this branch), or the matched digits parse but describe a calendar
 /// date/time CPython's own `datetime.date`/`datetime.time`
 /// constructors reject (`day is out of range for month`, ...) --
-/// `validate_yaml` (issue #521's lane L2a, the only caller that
+/// `validate_yaml` (issue #521, the only caller that
 /// distinguishes it) re-raises this one as a bare, uncaught Python
 /// `ValueError`, exactly as `core/yaml_load.py::load_yaml` does,
 /// rather than returning it as an ordinary parse error.

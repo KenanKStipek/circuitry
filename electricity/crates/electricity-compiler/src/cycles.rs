@@ -1,4 +1,4 @@
-//! Lane C: ports `core/cycle_check.py`'s `detect_cycles` -- a static
+//! Ports `core/cycle_check.py`'s `detect_cycles` -- a static
 //! `use` cycle walk over `path:`/`orchestration:` references (`ref:` is
 //! rejected at compile time, DESIGN.md §4, so there is no library
 //! lookup and no `ref:` edge to walk; `inline:` uses are skipped, the
@@ -12,7 +12,7 @@
 //! parent document's directory; an unreadable or unparseable child
 //! counts as an empty document (`{}`), never a hard error.
 //!
-//! Called from `pipeline.rs` (lane B), after a document compiles, in
+//! Called from `pipeline.rs`, after a document compiles, in
 //! both `check_for_run` and `check_report` -- mirroring
 //! `cli/runtime_shim.py`'s own two calls to `core/cycle_check.py`'s
 //! `detect_cycles`, right after the concurrency-group check

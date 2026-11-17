@@ -3,7 +3,7 @@
 //! Circuitry's own `RegexPlugin.execute` (`plugins/regex.py`) -- against
 //! this crate's own port (`electricity_tools::regex::RegexPlugin`).
 //!
-//! Comparison follows issue #479's own ruling 3: Circuitry's own
+//! Comparison follows issue #479: Circuitry's own
 //! messages (every parameter check, `sub`'s own `replacement`/`count`
 //! errors, and `regex: unknown flag ...`) are compared exactly; a
 //! `re.error`-shaped message -- wrapped with the `regex: invalid

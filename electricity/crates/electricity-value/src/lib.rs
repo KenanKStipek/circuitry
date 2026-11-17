@@ -791,8 +791,8 @@ impl Value {
     /// Exceeds the limit (4300 digits) for integer string conversion`
     /// converting an `int` with more than 4300 decimal digits to a string
     /// ([PEP 0, `sys.set_int_max_str_digits`](https://docs.python.org/3.11/library/stdtypes.html#int-max-str-digits)).
-    /// `py_str`/`py_repr` always print the digits; later lanes building
-    /// Python-exact error behavior need to decide whether to reproduce
+    /// `py_str`/`py_repr` always print the digits; reproducing Python-exact
+    /// error behavior here would need deciding whether to reproduce
     /// the limit.
     pub fn py_str(&self) -> String {
         match self {
