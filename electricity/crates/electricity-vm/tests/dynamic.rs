@@ -1332,3 +1332,129 @@ async fn a_disabled_op_writes_a_skip_node_instead_of_dispatching() {
         .expect("expected a Write event right after b's own Complete");
     assert_eq!(write_after_complete, 0);
 }
+
+#[tokio::test]
+async fn a_nested_dynamics_own_child_shadows_an_outer_sibling_of_the_same_name() {
+    // Finding 8/#778 ("the self-entry narrowing"): a non-isolated
+    // nested dynamic's own `ctx_chain` extension is a single detached
+    // entry (its own self-alias, `name -> dyn_node`), never the whole
+    // parent flattened in -- `exec::dynamic::execute_dynamic`'s own
+    // doc comment on why: flattening the parent in full would expose
+    // every one of this dynamic's own siblings as bare top-level
+    // names, so a nested dynamic's own child would then *outrank* the
+    // bare-sibling-reference fallback for any name it shares with one
+    // of those siblings, exactly backwards from nearest-wins. Here
+    // `d`'s own child `sibling` must win a bare `{{sibling.value}}`
+    // read inside `d`, over the root's own unrelated `sibling` --
+    // nearest-wins, resolved through the fallback chain alone (never
+    // a flattened, directly-shadowing top-level key).
+    use electricity_bytecode::ParamNode;
+    use indexmap::IndexMap;
+    use support::json_tool_leaf;
+
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    fn stringify_params(marker: &str) -> IndexMap<Value, ParamNode> {
+        let mut input = IndexMap::new();
+        input.insert(
+            Value::Str("marker".to_string()),
+            ParamNode::Literal(Value::Str(marker.to_string())),
+        );
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("mode".to_string()),
+            ParamNode::Literal(Value::Str("stringify".to_string())),
+        );
+        params.insert(Value::Str("input".to_string()), ParamNode::Map(input));
+        params
+    }
+
+    fn stringify_template_params(template: &str) -> IndexMap<Value, ParamNode> {
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("mode".to_string()),
+            ParamNode::Literal(Value::Str("stringify".to_string())),
+        );
+        params.insert(
+            Value::Str("input".to_string()),
+            ParamNode::Template(electricity_bytecode::TemplateText::new(
+                template.to_string(),
+                true,
+                electricity_bytecode::Escape::None,
+            )),
+        );
+        params
+    }
+
+    let outer_sibling_path = root_path().push_name("sibling");
+    let d_path = root_path().push_name("d");
+    let inner_sibling_path = d_path.clone().push_name("sibling");
+    let reader_path = d_path.clone().push_name("reader");
+
+    let root = chain_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![
+            json_tool_leaf(
+                outer_sibling_path.clone(),
+                "sibling",
+                stringify_params("outer-sibling-value"),
+            ),
+            chain_dynamic(
+                d_path.clone(),
+                "d",
+                OnError::Fail,
+                vec![
+                    json_tool_leaf(
+                        inner_sibling_path.clone(),
+                        "sibling",
+                        stringify_params("inner-sibling-value"),
+                    ),
+                    json_tool_leaf(
+                        reader_path.clone(),
+                        "reader",
+                        stringify_template_params("{{sibling.value}}"),
+                    ),
+                ],
+            ),
+        ],
+    );
+
+    electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+        false,
+    )
+    .await
+    .expect("a plain stringify never fails");
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let d = as_dict(get(prime, "d").unwrap());
+    let reader = as_dict(get(d, "reader").unwrap());
+    let reader_text = match get(reader, "value") {
+        Some(Value::Str(s)) => s.as_str(),
+        other => panic!("expected a string value, got {other:?}"),
+    };
+    assert!(
+        reader_text.contains("inner-sibling-value"),
+        "d's own sibling must win -- a flattened parent would have let the \
+         root's own sibling leak in as a directly-shadowing top-level key \
+         instead: {reader_text:?}"
+    );
+    assert!(
+        !reader_text.contains("outer-sibling-value"),
+        "{reader_text:?}"
+    );
+}
