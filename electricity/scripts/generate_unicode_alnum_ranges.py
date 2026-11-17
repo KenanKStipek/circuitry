@@ -22,8 +22,8 @@ generating electricity's golden corpus, and writes it into the crate as
 generated, checked-in Rust source.
 
 Must be run with the same Python version/Unicode Character Database version
-used to generate the golden corpus (see generate_value_corpus.py) -- CI and
-this repo's own pinned virtualenv both pin Python 3.11.
+used to generate the golden corpus (see generate_value_corpus.py): Python
+3.11, pinned by `electricity/scripts/generator-constraints.txt`, same as CI.
 
 Usage: python3 generate_unicode_alnum_ranges.py [--check]
 Writes: crates/electricity-tools/src/generated/unicode_alnum_ranges.rs

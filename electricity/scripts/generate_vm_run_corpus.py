@@ -12,8 +12,7 @@ Four synthetic cases, each run through a real `cof run --out --events
 - a tree `dynamic` with two parallel `json`-tool children;
 - a failure: a `json` `parse` call given a non-string input.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally;
-`actions/setup-python` 3.11 in CI). Usage:
+Must be run with Python 3.11 (`actions/setup-python` 3.11 in CI). Usage:
     python3 generate_vm_run_corpus.py [--check]
 """
 

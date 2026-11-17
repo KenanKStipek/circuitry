@@ -8,11 +8,10 @@ This is a *document*-level corpus: every case's own root is a `dynamic`
 chain (Circuitry's own implicit `prime` container), so comparing a
 case's own `--out`/`--events` against `electricity::run_orchestration`
 needs the real `exec::dynamic` chain executor, not just
-`execute_tool` -- `tests/tool_run_corpus.rs`'s own comparison
-tests are `#[ignore = "needs lane B2"]` for exactly that reason (issue
-#431's own Lanes note: "whichever of B2/C merges second removes the
-markers and makes them pass exactly"). Generating this corpus itself has
-no such dependency: it only runs the real Python CLI.
+`execute_tool` -- `tests/tool_run_corpus.rs`'s own comparison tests were
+marked `#[ignore]` until that executor existed (issue #431). Generating
+this corpus itself has no such dependency: it only runs the real Python
+CLI.
 
 Two gaps in the function-level corpus
 (`generate_tool_execute_corpus.py`) have no document-level equivalent
@@ -32,7 +31,7 @@ here and are deliberately not duplicated:
   (a mock plugin) is the only way to exercise `execute_tool`'s own
   wiring for it at all.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_tool_run_corpus.py [--check]
 """
 

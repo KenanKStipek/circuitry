@@ -5,7 +5,7 @@ exercised end to end"). The other generators
 (`generate_compiler_{load,compile,compose}_corpus.py`) cover the real
 surface; this one only proves the shared helper works.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_compiler_smoke_corpus.py [--check]
 """
 

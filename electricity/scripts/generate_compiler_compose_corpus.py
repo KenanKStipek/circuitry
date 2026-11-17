@@ -8,7 +8,7 @@ Covers every message in `core/prompt_files.py` and in `core/prompt_
 compose.py`'s compile-time checks, CRLF prompt files, a symlink
 escaping the project, and the digest (including a `../` prompt file).
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-
+Must be run with Python 3.11 (`actions/setup-
 python` 3.11 in CI). Usage: python3 generate_compiler_compose_corpus.py
 [--check]
 """

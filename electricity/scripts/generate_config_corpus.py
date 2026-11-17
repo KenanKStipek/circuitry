@@ -16,7 +16,7 @@ every text field is checked for -- and has -- that directory's own path
 replaced with the literal ``<root>`` before being written out, so the
 committed corpus carries no local path.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, same as every other generator in this directory). Usage:
     python3 generate_config_corpus.py [--check]
 """

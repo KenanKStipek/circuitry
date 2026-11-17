@@ -24,7 +24,7 @@ import, since every other `electricity/scripts/` generator already
 follows that same "self-contained helper, not a cross-directory import"
 convention (`_compiler_corpus.py`).
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, same as every other generator in this directory).
 """
 

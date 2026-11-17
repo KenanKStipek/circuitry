@@ -22,7 +22,7 @@ and 307-to-a-POST shapes, each one's expected `value`/`raw`/`stderr`/
 `ok` (or raised class/message) taken from CPython directly, never
 written down independently of it.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, per every other `generate_*.py`). Usage:
 
     python3 generate_http_corpus.py [--check]

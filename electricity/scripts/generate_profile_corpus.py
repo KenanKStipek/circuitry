@@ -17,7 +17,7 @@ therefore calls Circuitry's own ``parse_profile_document``/
 (the file's own basename with exactly one trailing ``.yml``/``.yaml``
 suffix stripped) rather than through ``discover_profile_path`` -- for a
 given file this is the identical string discovery would have used
-(DESIGN.md §6.11's own ruling), so this is a narrowing of Circuitry's
+(DESIGN.md §6.11), so this is a narrowing of Circuitry's
 real code path, not a reimplementation of it.
 
 Every value that can't be prose-level JSON (a `date`/`bytes`/non-string
@@ -28,7 +28,7 @@ exception class and text, with the generator's own temporary profile
 path replaced by the literal placeholder `{path}` -- the Rust replay
 substitutes its own path at the same position before comparing.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`, as CI does).
 Usage: python3 generate_profile_corpus.py [--check]
 """
@@ -121,7 +121,7 @@ def _error_result(
     - ``"exact"``: Circuitry's own text, byte for byte (after `{path}`
       substitution) -- the default.
     - ``"electricity_own"``: not reproduced from Circuitry at all
-      (not-found/unreadable text, DESIGN.md §6.11's own ruling) --
+      (not-found/unreadable text, DESIGN.md §6.11) --
       the Rust replay checks only that this case fails.
     - ``"location"``: third-party text (a YAML parser's own `str()`) --
       the Rust replay checks only that this case fails with a

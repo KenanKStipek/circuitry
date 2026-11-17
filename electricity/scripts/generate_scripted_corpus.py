@@ -20,7 +20,7 @@ for the duration of one dispatch; this script sets it directly (the same
 context manager without needing a real `Store`) rather than building one
 just to get a call path into scope.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_scripted_corpus.py [--check]
 """
 

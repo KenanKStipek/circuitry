@@ -23,7 +23,7 @@ through a conformance case's `size`/`is_file` extract, not here.
 a small, fixed synthetic environment, so `list`'s own `environ`-order
 recording is deterministic across machines.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_stdlib_tools_corpus.py [--check]
 """
 

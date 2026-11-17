@@ -1674,11 +1674,11 @@ above, and the `except BaseException` around `finally:` in `core/dynamic.py`
 §6.4) handles SIGTERM identically to SIGINT with zero additional branching —
 only the **exit code** differs (§8.4).
 
-**electricity-only: mid-run refusal (issue #448, no Python equivalent).**
+**electricity-only: mid-run refusal (issue #469, no Python equivalent).**
 Circuitry never refuses content — every effect type above either runs or
 raises a real error. electricity's own `use` (§5.3) compiles its child
 document only once the run actually reaches it, so the up-front refusal
-walker can never see that child's content ahead of time. Issue #448's own
+walker can never see that child's content ahead of time. Issue #469's own
 prerequisites narrow that gap for one case only:
 `electricity`'s own run wiring also walks every literal `use: {path:}`
 child statically reachable from the document, compiles each one the same

@@ -9,7 +9,7 @@ corpus rather than copied source, since the two engines encode
 lists/mappings differently (`electricity_value::Value` vs. Python's own
 list/dict).
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`):
 `json.dumps(value, ensure_ascii=False, default=str)` on a container
 drives every measurement here, and that text's own shape is part of

@@ -16,7 +16,7 @@ decision tables electricity's port has to match exactly:
   `curl_failure_message`, and `run_curl`'s own control-character and
   `--config`-size checks).
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, per every other `generate_*.py`). Usage:
 
     python3 generate_adapter_corpus.py [--check]

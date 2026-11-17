@@ -14,7 +14,7 @@ compiler exists) even though their `check_for_run` side -- which checks the
 same configuration *before* structural checks even start -- never
 needed one.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_compiler_load_corpus.py [--check]
 """
 
@@ -806,11 +806,11 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
-        # PR #417's review: a schema `maximum`/`minimum` check
+        # PR #417: a schema `maximum`/`minimum` check
         # against an arbitrary-precision integer, well past `i64`/`u64`
-        # range (the `jsonschema` crate panic that fix
-        # clamps against) -- a 401-digit positive integer violates
-        # `if.threshold`'s own `maximum: 1`.
+        # range (the `jsonschema` crate panics on such a value, so
+        # electricity clamps it first) -- a 401-digit positive integer
+        # violates `if.threshold`'s own `maximum: 1`.
         "name": "if_threshold_huge_int_is_a_maximum_error",
         "files": {
             "doc.yml": (

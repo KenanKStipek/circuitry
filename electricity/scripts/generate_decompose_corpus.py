@@ -12,7 +12,7 @@ missing-result sections need no patch at all -- a cycle is detected
 the missing-result case runs a real, tiny `tool`/`json` orchestration
 end to end (no model call, so no adapter is ever actually invoked).
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`).
 Usage: python3 generate_decompose_corpus.py [--check]
 """
@@ -187,8 +187,8 @@ def build_source_output_cases() -> list[dict[str, Any]]:
 # input it was actually given (`planner_input`'s own round trip) and to
 # hand back a chosen planner state, read back through the real
 # `_planner_outputs`/the bundled planner's own interface (`read_plan`'s
-# own round trip) -- reviewed on PR #524 as the one section the issue
-# names that this corpus was missing entirely.
+# own round trip) -- the one section PR #524 found this corpus was
+# missing entirely.
 # ---------------------------------------------------------------------
 
 
@@ -359,7 +359,8 @@ _YAML_ONE_EFFECT = 'effects:\n  - {type: tool, name: merge, provider: json, para
 _YAML_SHELL = 'effects:\n  - {type: tool, name: merge, provider: shell, params: {cmd: echo}}\n'
 
 # `_validate_plan`'s inline-check branch (step 4, `_validate_inline_yaml`) --
-# every way it can fail, reviewed on PR #524 as missing from this corpus.
+# every way it can fail, added by PR #524 after finding it missing from
+# this corpus.
 _YAML_SCAN_ERROR = "effects: [{a: [1, 2}]"
 _YAML_NON_MAPPING = "- a"
 _YAML_MISSING_EFFECTS_KEY = "name: x"
@@ -494,7 +495,7 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
     )
 
     # The inline check (step 4) -- every way it can fail, run through the
-    # real `_validate_plan` rather than re-typed (PR #524's review):
+    # real `_validate_plan` rather than re-typed (PR #524):
     # a PyYAML scan error, a non-mapping document, a document
     # missing the required `effects` key, a near-miss key (a Circuitry-own
     # structural error), and the "two loaders" hazard's own duplicate key

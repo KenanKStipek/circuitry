@@ -4,7 +4,7 @@
 by actually running Circuitry's own real plugin
 (`plugins/regex.py::RegexPlugin`).
 
-Priority order (per the issue's own test plan and rulings): `sub` with
+Priority order (per the issue's own test plan): `sub` with
 a `replacement` (including backreferences and a bad template's bare
 `re.error` text); `\\w`/`\\s`/`\\d` with Python 3.11's exact Unicode
 membership; anchors (`^`/`$`/`\\A`/`\\Z`) with and without MULTILINE;
@@ -12,7 +12,7 @@ membership; anchors (`^`/`$`/`\\A`/`\\Z`) with and without MULTILINE;
 `match` result shapes. Lookarounds, VERBOSE and IGNORECASE corners come
 after these, with lighter coverage.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, same as every other `generate_*_corpus.py`).
 
 Usage: python3 generate_regex_corpus.py [--check]

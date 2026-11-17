@@ -8,8 +8,7 @@ Deliberately out of scope (covered instead by
 `generate_compiler_compose_corpus.py`): `prompts:`, `{{> name}}`
 partials, and anything else from the compile-time half of #406.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally;
-`actions/setup-python` 3.11 in CI). Usage:
+Must be run with Python 3.11 (`actions/setup-python` 3.11 in CI). Usage:
     python3 generate_compiler_compile_corpus.py [--check]
 """
 

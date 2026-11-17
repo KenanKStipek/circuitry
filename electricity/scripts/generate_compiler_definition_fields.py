@@ -19,7 +19,7 @@ dataclass nested inside one of their own field types (`MessageDef`,
 `LoopWhileDef`, `LoopEachDef`), so a new field on one of those is caught
 the same way.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, same as every other `electricity/scripts/generate_*.py`).
 Usage: python3 generate_compiler_definition_fields.py [--check]
 """

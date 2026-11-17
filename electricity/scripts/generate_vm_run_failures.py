@@ -15,7 +15,7 @@ included); this generator is about the *run-level* `--out` shape each
 of those failures (and the structural/compile/group ones that crate
 doesn't reach at all) actually leaves behind, not the error text alone.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage:
     python3 generate_vm_run_failures.py [--check]
 """

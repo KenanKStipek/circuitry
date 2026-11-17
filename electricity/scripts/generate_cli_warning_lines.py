@@ -45,7 +45,7 @@ electricity's `fail!` returns immediately with neither. Neither engine
 changed Python behaviour; this is tracked as a follow-up, not fixed
 here.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, same as every other generator in this directory). Usage:
     python3 generate_cli_warning_lines.py [--check]
 """

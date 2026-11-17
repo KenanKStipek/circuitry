@@ -6,10 +6,10 @@ over a synthetic value written for this corpus. Every
 case defaults to `sort_keys=True` (reflector's own call); the mapping-key-
 order cases alone (`key_order_cases`, below) are each recorded *twice* --
 once `sort_keys=True`, once `sort_keys=False` -- since that is the one knob
-ordering can actually depend on, so the one corpus serves M1-L2's
-`safe_dump(sort_keys=False)` too without doubling every other case for a
-knob that can't change their output (PR #510's first
-review: an earlier draft of this docstring overstated this).
+ordering can actually depend on, so the one corpus serves the orchestration-
+decomposition feature's own `safe_dump(sort_keys=False)` too, without
+doubling every other case for a knob that can't change their output
+(PR #510).
 
 Must be run with Python 3.11 and the pinned `PyYAML==6.0.3`
 (`generator-constraints.txt`): PyYAML's own emitter output -- the exact
@@ -21,8 +21,7 @@ True` path is `try: mapping = sorted(mapping) except TypeError: pass` --
 confirmed directly against this installed PyYAML, a dict with mismatched
 key types dumps successfully, in its *original* insertion order, never
 raising. This corpus pins that fallback (`mixed_key_type_cases`), not a
-raised error -- a correction to an earlier draft of the issue's own prose,
-which assumed `sorted()` propagates the `TypeError`.
+raised error: `sorted()` does not propagate the `TypeError`.
 
 Usage: python3 generate_yaml_dump_corpus.py [--check]
 """

@@ -15,8 +15,9 @@ own (different) Unicode tables:
 table of their own.
 
 Must be run with the same Python version/Unicode Character Database
-version used to generate the other regex corpora -- CI and this repo's
-own pinned virtualenv both pin Python 3.11 (Unicode 14.0).
+version used to generate the other regex corpora: Python 3.11, pinned
+by `electricity/scripts/generator-constraints.txt`, same as CI (Unicode
+14.0).
 
 Usage: python3 generate_regex_unicode_tables.py [--check]
 Writes: crates/electricity-pyre/src/regex_unicode.rs

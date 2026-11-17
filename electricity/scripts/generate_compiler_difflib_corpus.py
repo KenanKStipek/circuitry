@@ -19,7 +19,7 @@ exists only to pin that a long word still produces *no* match rather than
 to exercise autojunk itself--, a word that scores exactly at the edge of
 the cutoff, and a word scoring just under it.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_compiler_difflib_corpus.py [--check]
 """
 

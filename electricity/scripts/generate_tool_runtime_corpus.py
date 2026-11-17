@@ -4,8 +4,8 @@
 own real functions (`plugins/json.py::JsonPlugin`, `cli/redaction.py::redact`).
 
 Every expected value here comes from actually running the Python code, not
-from a hand-typed literal -- this is the corpus issue #431's review asked
-for: it would have caught, among others, the `{from:}`-resolves-to-null
+from a hand-typed literal -- this is the corpus issue #431 asked for: it
+would have caught, among others, the `{from:}`-resolves-to-null
 regression and the `json` extract-path `i64`-overflow panic this PR's other
 commits fix, had it existed beforehand.
 
@@ -19,7 +19,7 @@ preview -- `encoded[:_RAW_META_MAX_BYTES].decode("utf-8", errors="ignore")`
 -- against hand-built byte strings that straddle the cut with a multi-byte
 codepoint, which is the real behaviour under test.
 
-Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_tool_runtime_corpus.py [--check]
 """
 

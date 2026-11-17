@@ -150,8 +150,8 @@ def cases() -> list[dict]:
             {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
             {"a": "ok"},
         ),
-        # Multi-error tie-break shapes (follow-up to PR #502's
-        # review): Python's own `jsonschema.exceptions.
+        # Multi-error tie-break shapes (follow-up to PR #502): Python's own
+        # `jsonschema.exceptions.
         # by_relevance` compares the error's own *path* element-by-element
         # as a real, second tie-break component -- not just path *length*
         # -- so two same-depth violations don't necessarily resolve to
@@ -194,11 +194,11 @@ def cases() -> list[dict]:
             {"oneOf": [{"type": "number"}, {"minimum": 0}]},
             5,
         ),
-        # Every schema/instance pair the
-        # probe-schema/probe-schema2/probe-schema3 scripts exercised,
-        # transcribed verbatim (including the ones that already matched at
-        # review time, for regression coverage against a future change --
-        # not just the ones that diverged).
+        # Every schema/instance pair exercised while comparing the
+        # engine's verdicts directly against Python's `jsonschema`,
+        # transcribed verbatim (including the ones that already matched,
+        # for regression coverage against a future change -- not just the
+        # ones that diverged).
         _case('probe_schema_c0', {'type': 'object', 'properties': {'a': {'type': 'string'}}, 'required': ['a']}, {'b': 1}),
         _case('probe_schema_c1', {'type': 'object', 'properties': {'a': {'type': 'string'}}, 'required': ['a']}, {'a': 5}),
         _case('probe_schema_c2', {'type': 'object', 'properties': {'a': {'type': 'string'}}, 'required': ['a', 'b']}, {}),
@@ -478,7 +478,7 @@ def cases() -> list[dict]:
         _case('probe_schema5_c7', {'properties': {'a': {'type': 'string'}, 'z': {'multipleOf': 3}}}, {'a': 1, 'z': 1e+17}),
         _case('probe_schema5_c8', {'patternProperties': {}, 'additionalProperties': False}, {'x': 1}),
         _case('probe_schema5_c9', {'properties': {'a': {'type': 'string'}, 'z': {'maximum': 9007199254740992}}}, {'a': 1, 'z': 9007199254740993}),
-        # PR #502's round-4 fix: a schema that is itself
+        # PR #502: a schema that is itself
         # recursive (a `$ref` cycle back to an ancestor) is a real,
         # finite-instance-terminating shape -- a tree (`recursive_tree_
         # ref_*`) or a linked list (`recursive_self_ref_*`) -- that
@@ -530,9 +530,8 @@ def cases() -> list[dict]:
             },
             {"v": 1, "c": {"v": 1, "c": {"v": "bad"}}},
         ),
-        # PR #502's round-4 fix: a parallel review of the engine found
-        # more wrong verdicts, confirmed against real
-        # `cof run` by probe-schema7's own c0-c20 (NaN/Infinity instances
+        # PR #502: comparing the engine's verdicts directly against
+        # real `cof run` found more wrong verdicts (NaN/Infinity instances
         # aren't representable in plain JSON, so those live in
         # `prompt_schema_tests` -- Rust unit tests -- instead).
         _case(
@@ -613,8 +612,7 @@ def cases() -> list[dict]:
             # / 0.5)` overflows (`instance / dB` is itself `inf`), caught
             # only to retry via `Fraction(1e308) / Fraction(0.5)`, exact
             # and never overflowing -- `1e308`'s own exact binary value
-            # really is a multiple of `0.5` (issue #498's own
-            # follow-up, probe-schema9 c6).
+            # really is a multiple of `0.5` (issue #498).
             "multiple_of_a_large_float_instance_overflows_to_the_fraction_fallback",
             {"multipleOf": 0.5},
             1e308,
