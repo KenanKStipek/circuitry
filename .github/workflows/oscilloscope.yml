@@ -125,7 +125,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.os }}
-    # Issue #431's lane E2: same hard ceiling as e2e-cof, for the
+    # Issue #431: same hard ceiling as e2e-cof, for the
     # same reason -- a hang in the build or in electricity itself
     # still gets killed rather than running to the workflow default.
     timeout-minutes: 15
