@@ -12,6 +12,7 @@ from __future__ import annotations
 import http.server
 import json
 import shutil
+import socket
 import subprocess
 from dataclasses import dataclass
 from typing import Any
@@ -206,6 +207,52 @@ def test_ollama_curl_failure_message_has_no_argv(
     with pytest.raises(RuntimeError) as exc:
         OllamaAdapter(streams=False).generate(model="phi3", prompt="x")
     assert "cmd=" not in str(exc.value)
+
+
+def test_ollama_refused_port_never_echoes_a_password_hidden_past_the_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `base_url` whose authority ends at `:443` (a valid port on its
+    own) hides a second `@` -- and a real host, `localhost:11434` --
+    behind it: the "not reachable" hint and the failure's own `url=`
+    field must both name only the part after the LAST `@`, never the
+    port-shaped credential fragment (`443/ss`) in between (issue #778).
+    """
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
+
+    monkeypatch.setattr("subprocess.Popen", fake_run)
+    adapter = OllamaAdapter(base_url="http://127.0.0.1:443/ss@localhost:11434", streams=False)
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="phi3", prompt="x")
+    message = str(exc.value)
+    assert "443/" not in message
+    assert "ss" not in message
+    assert "localhost:11434" in message
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_ollama_schemeless_base_url_with_a_closed_port_never_echoes_its_password() -> None:
+    """Real curl, a real closed port, no mock: a `base_url` with no
+    `scheme://` at all (`alice:s3cret@localhost:<port>`, the same shape
+    curl's own `--config` convention accepts) hides a password behind
+    an authority `_urlsplit` reads with no netloc of its own (issue
+    #778) -- the daemon-down hint and the failure's own `url=` field
+    must both still never echo `s3cret`.
+    """
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    adapter = OllamaAdapter(base_url=f"alice:s3cret@localhost:{port}", streams=False)
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="phi3", prompt="x")
+    message = str(exc.value)
+    assert "s3cret" not in message
+    assert "alice" not in message
+    assert "not reachable" in message
 
 
 # ---------------------------------------------------------------------------

@@ -322,6 +322,67 @@ async fn redirects_strip_auth_never_follows_to_http() {
 }
 
 #[tokio::test]
+async fn redirects_follow_to_a_file_scheme_is_refused_with_the_shared_scheme_text() {
+    // Issue #778: a followed redirect to any scheme other than
+    // http/https is refused with the shared scheme-refusal text --
+    // not only `ftp`, and not urllib's own "Redirection to url ... is
+    // not allowed" (which `plugins/http.py::_RedirectPolicy.
+    // http_error_302` no longer inherits).
+    let addr = respond_once(
+        b"HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/start")))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "unsupported URL scheme 'file' in 'file:///etc/passwd': only http or https is supported"
+    );
+}
+
+#[tokio::test]
+async fn a_url_with_no_scheme_never_names_a_password_in_the_scheme_refusal() {
+    // Issue #778: `alice:pw@host/x` has no `://` at all, so the
+    // scheme refusal must still redact it -- the same way a
+    // schemeless proxy value already is -- never echoing `pw`.
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str("alice:pw@host/x".to_string()))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.message.contains("pw"), "{}", err.message);
+    assert_eq!(
+        err.message,
+        "unsupported URL scheme 'alice' in 'host/x': only http or https is supported"
+    );
+}
+
+#[tokio::test]
+async fn redirects_never_to_a_file_scheme_is_refused_on_its_own_terms() {
+    // The mirror case: under `redirects: never`, a disallowed-scheme
+    // target is refused by the mode itself (a `ToolResult`, never
+    // raised) -- the shared scheme check never even runs, since the
+    // target was never going to be followed either way.
+    let addr = respond_once(
+        b"HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let result = execute_redirect(addr, vec![("redirects", Value::Str("never".to_string()))]).await;
+    assert!(!result.ok);
+    assert_eq!(
+        result.stderr.as_deref(),
+        Some("HTTP 302: Found: redirect not followed (redirects: never)")
+    );
+}
+
+#[tokio::test]
 async fn a_secret_header_defaults_redirects_to_strip_auth_not_follow() {
     // Issue #725: `ToolCall::secret_headers` makes the default `strip_auth`
     // (never `follow`) when `params.redirects` is absent -- proven here by
@@ -563,6 +624,53 @@ async fn a_connection_refused_raises_the_wrapped_runtime_error() {
             .starts_with(&format!("HTTP request to {url} failed:"))
     );
     assert_eq!(err.cause, electricity_tools::ErrorCause::NoReply);
+}
+
+#[tokio::test]
+async fn a_connection_refused_never_names_a_password_in_the_url() {
+    // `send_error_to_tool_error`'s own `original_url`
+    // (what becomes `HTTP request to {url} failed: ...`) is redacted
+    // the same way cof's `plugins/http.py` already redacts its own
+    // `redact_request_url(url)`.
+    let addr = closed_port();
+    let token = CancellationToken::new();
+    let url = format!("http://alice:s3cr3t@{addr}/");
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(url))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.message.contains("alice"), "{}", err.message);
+    assert!(!err.message.contains("s3cr3t"), "{}", err.message);
+    assert!(
+        err.message
+            .starts_with(&format!("HTTP request to http://{addr}/ failed:"))
+    );
+}
+
+#[tokio::test]
+async fn a_connection_refused_never_names_a_password_hidden_behind_a_slash() {
+    // `urlsplit`'s own netloc for this ends at the first `/`, so it
+    // never sees the `@` that follows -- the rest of the password
+    // must still never reach the connection-failure message (issue
+    // #778).
+    let addr = closed_port();
+    let token = CancellationToken::new();
+    let url = format!("http://{addr}/secret@elsewhere");
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(url))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.message.contains("secret"), "{}", err.message);
+    assert!(
+        err.message
+            .starts_with("HTTP request to http://elsewhere failed:")
+    );
 }
 
 /// A `save_to_temp_dir`'s own directory, removed on `Drop` -- unlike a

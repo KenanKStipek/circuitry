@@ -110,7 +110,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
-| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the deciding attempt's chain survives into the top-level `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier attempt's own chain and classification are kept in `meta.attempts` instead, never left on the node's own top-level fields; see [Every attempt](#every-attempt-metaattempts) |
+| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one, parsed per RFC 9110 §10.2.3 on both engines (all-ASCII-digits means that many seconds; otherwise an HTTP-date — IMF-fixdate, or the obsolete RFC 850/asctime forms — minus now, floored at 0; anything else, including a sign, a fraction, `inf`/`nan` or an unparseable date, is ignored and the computed backoff applies instead). `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the deciding attempt's chain survives into the top-level `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier attempt's own chain and classification are kept in `meta.attempts` instead, never left on the node's own top-level fields; see [Every attempt](#every-attempt-metaattempts) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
 | `split` | object | no | — | `{enabled?: bool, budget_tokens?: int, max_parts?: int, separator?: string, merge?: {template: string}}` — the size trigger's per-effect overlay (see [Complexity Configuration](./complexity-config.md#splitting)). `budget_tokens` splits this effect even with `runtime.complexity.splitting.enabled: false`; `enabled: false` always opts it out. `merge.template` is required for any `prompt_type` other than `text` or an array (`array`, or `json` with an array schema), whose parts the runtime joins/concatenates natively |
@@ -931,7 +931,7 @@ time.
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
 <a id="tool-retries"></a>
-**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's. When more than one attempt ran, `meta.attempts` keeps every one; see [Every attempt](#every-attempt-metaattempts).
+**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. A `Retry-After` response header, when the plugin can read one, overrides the computed wait the same way a prompt's does — parsed per RFC 9110 §10.2.3 on both engines (see `retries` above). Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's. When more than one attempt ran, `meta.attempts` keeps every one; see [Every attempt](#every-attempt-metaattempts).
 
 <a id="tool-expect"></a>
 **`expect`.** An output check run once an attempt otherwise succeeds. Either a CEL expression — a bare string is shorthand for `{mode: cel, expr: <string>}` — evaluated over this effect's own `value` and `meta` (bound directly, not under `state.`) plus `state` (bound the usual way), e.g. `expect: "has(value.prompt_id)"`; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, and records its tokens. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>`, after which `retries` and `on_error` apply exactly like any other failure — an expect failure is always worth retrying, since (unlike an HTTP status) it carries no classification of its own. The outcome lands at `meta.expect` (`{mode, result, expr|template, error?, tokens_sent?, tokens_received?, tokens_cached_in?, tokens_cache_write?}`, the last two present only when the reply carried them).
@@ -1298,6 +1298,70 @@ The default is `strip_auth` when a header came from a secret and `follow`
 otherwise. `fail_on_error: false` turns a refused redirect back into a
 success, the 3xx response on `value` and `meta.status_code`, as it does for
 a 4xx.
+
+#### Proxy, ports and schemes (`http`, every curl-based adapter, `cyberdiner`, `systemone`)
+
+Circuitry decides the proxy itself, on both engines, for every surface
+that makes an outbound request: the `http` tool, every curl-based
+adapter and tool (`ollama`, `openai`, `openai`-compatible providers,
+`anthropic`, `replicate`, `watsonx`, `web_search`, `weather`, and
+`comfyui`'s JSON calls), the `cyberdiner` adapter, and the `systemone`
+tool for a non-loopback `base_url` — never curl's or urllib's own
+environment reading:
+
+- An `http://` URL uses `http_proxy`, lowercase only; uppercase
+  `HTTP_PROXY` is never read. An `https://` URL uses `https_proxy`, then
+  `HTTPS_PROXY`. Either falls back to `all_proxy`, then `ALL_PROXY`.
+- `no_proxy` (then `NO_PROXY`) is a comma-separated list: `*` bypasses
+  everything; a named entry matches a host exactly or as a domain suffix
+  (a leading dot is optional); an IP entry matches only that exact IP
+  (never by suffix, and CIDR is not supported; a bracketed IPv6 entry,
+  `[::1]:8080`, is not supported either way); a `host:port` entry (the
+  host part not itself an IP) matches only that host on that exact
+  port — a URL naming no port of its own still has one implicitly (80
+  for `http://`, 443 for `https://`), so `example.com:443` matches a
+  portless `https://example.com/`.
+- A proxy value with no `scheme://` prefix means `http://`; a proxy value
+  naming no port (or an empty one) uses port 80 explicitly — never curl's
+  own default of 1080. Userinfo in it becomes `Basic` proxy
+  authentication whenever a user is present, an empty password included;
+  it is percent-decoded first. Any other proxy scheme is refused.
+- `systemone` never proxies a loopback `base_url` (`localhost`,
+  `127.0.0.0/8`, `::1`) at all, whatever the environment says — its own
+  rule, since it always talks to a local service; a non-loopback one
+  (`allow_remote: true`) follows every rule above like any other surface.
+- Neither engine reads macOS's (or any other OS's) own system proxy
+  settings — only these environment variables.
+
+A port is parsed strictly wherever a URL is parsed — the `http` tool's own
+`url`, an adapter's `base_url`, a proxy value: after the host (or after `]`
+for an IPv6 literal) comes `:` and one or more ASCII digits, a value from 1
+to 65535; an empty port means the scheme's own default. Anything else
+(`+9`, `0_9`, ` 9`, `0`, `65536`, non-digits) is refused before any
+request, naming the URL with any userinfo removed.
+
+The `http` tool, every curl-based adapter's error and preflight `host:`
+text, and cyberdiner's, systemone's and surrealdb's own errors each
+apply one more rule first when they name a request URL: when the URL's
+path, query or fragment itself contains an `@` (``http://host/path@evil``,
+say — a password hidden behind the parsed authority's own boundary, or
+just an ordinary path like Mastodon's `/@user`), the text names only the
+part *after* the last `@` in the whole URL, never the parsed host —
+even though that part was never actually contacted. A bare userinfo
+`@` (`http://user:pass@host/`) is unaffected: only the credential is
+removed, and the real host is still named. Either way, a credential-
+like query parameter (a key containing `key`, `token`, `secret`,
+`auth`, `password` or `pwd`) is masked to `***` in what's left. Any
+other surface that may still name a request URL raw is tracked in a
+follow-up issue.
+
+The `http` tool refuses any scheme other than `http`/`https` — before any
+I/O and before touching any local file (so a `file://` URL is never read
+as one, and a `data:`/`ftp://` URL is never decoded/fetched either) — and
+so does a followed redirect target, whatever its scheme (not only
+`ftp://`). A curl-based adapter's `base_url` gets the same refusal: curl
+would otherwise attempt a scheme electricity's own transport never
+speaks.
 
 #### Saving a response body to a file (`http`'s `save_to`)
 

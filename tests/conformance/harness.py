@@ -205,6 +205,32 @@ PROXY_ENV_VARS = (
     "REQUEST_METHOD",
 )
 
+#: The `PROXY_ENV_VARS` names that actually carry a proxy *URL* a client
+#: could be routed through -- `no_proxy`/`NO_PROXY` (a bypass list, never
+#: a destination) and `REQUEST_METHOD` (the CGI guard) are excluded, since
+#: `_proxy_value_is_loopback_or_mock_port` below has nothing to check on
+#: those.
+_PROXY_URL_ENV_VARS = frozenset(PROXY_ENV_VARS) - {"no_proxy", "NO_PROXY", "REQUEST_METHOD"}
+
+#: A proxy-URL `case.json` 'env' value may only ever point at the loopback
+#: mock server (`MOCK_HTTP_PORT_PLACEHOLDER`, substituted for its real port
+#: right before the subprocess runs, same as `cli_args`) or a closed
+#: loopback port (`127.0.0.1:1`, for a 'this proxy must be ignored' case) --
+#: never a real host a case subprocess could actually be routed through
+#: -- no conformance case may ever let a subprocess reach a real network
+#: service (issue #778 step 7's own conformance cases).
+#: Optional `scheme://` and `user[:pass]@` prefixes are allowed, since a
+#: case may be proving exactly that a schemeless or userinfo-bearing proxy
+#: value is still accepted.
+_LOOPBACK_PROXY_VALUE_RE = re.compile(
+    r"^(?:https?://)?(?:[^@/\s]+@)?127\.0\.0\.1(?::(?:[0-9]+|__MOCK_HTTP_PORT__))?/?$"
+)
+
+
+def _proxy_value_is_loopback_or_mock_port(value: str) -> bool:
+    return bool(_LOOPBACK_PROXY_VALUE_RE.match(value))
+
+
 DEFAULT_TIMEOUT_SECONDS = 30
 
 
@@ -352,6 +378,17 @@ def load_case(case_dir: Path) -> dict[str, Any]:
                 "or a CIRCUITRY_* config override -- a case subprocess must never see a live "
                 "credential, and `_sandboxed_env` already drops every CIRCUITRY_* variable "
                 "the caller's own shell might export, so 'env' may not reintroduce one"
+            )
+        bad_proxy_values = sorted(
+            k
+            for k, v in env.items()
+            if k in _PROXY_URL_ENV_VARS and not _proxy_value_is_loopback_or_mock_port(v)
+        )
+        if bad_proxy_values:
+            raise ValueError(
+                f"{case_dir.name}: case.json 'env' proxy variable(s) {bad_proxy_values} must "
+                "point at 127.0.0.1 (optionally with __MOCK_HTTP_PORT__ or a literal port) -- "
+                "a case subprocess must never be routed through a real proxy"
             )
 
     if not isinstance(metadata["electricity_preview_ok"], bool):
@@ -707,6 +744,19 @@ def assert_no_leftover_replies(
         )
 
 
+def materialize_env(
+    env: dict[str, str] | None, *, mock_http_port: int | None
+) -> dict[str, str] | None:
+    """*env* (`case.json`'s own 'env') with `MOCK_HTTP_PORT_PLACEHOLDER`
+    substituted for the mock server's real port in every value -- the one
+    way a proxy-pointing 'env' value (`_PROXY_URL_ENV_VARS`) can name the
+    port, the same substitution `materialize_cli_args` already does for
+    `cli_args`."""
+    if env is None or mock_http_port is None:
+        return env
+    return {k: v.replace(MOCK_HTTP_PORT_PLACEHOLDER, str(mock_http_port)) for k, v in env.items()}
+
+
 def materialize_cli_args(
     cli_args: list[Any], *, mock_http_port: int | None, case_dir: Path | None = None
 ) -> list[str]:
@@ -846,7 +896,7 @@ def run_case(
             case_dir,
             home_dir,
             leftover_replies_path=leftover_replies_path,
-            extra_env=metadata.get("env"),
+            extra_env=materialize_env(metadata.get("env"), mock_http_port=mock_http_port),
             fake_credentials=metadata.get("fake_credentials"),
         ),
         capture_output=True,

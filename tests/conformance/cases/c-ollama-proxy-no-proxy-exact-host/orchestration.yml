@@ -1,0 +1,6 @@
+name: c-ollama-proxy-no-proxy-exact-host
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

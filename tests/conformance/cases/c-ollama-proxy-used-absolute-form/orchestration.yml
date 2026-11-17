@@ -1,0 +1,6 @@
+name: c-ollama-proxy-used-absolute-form
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

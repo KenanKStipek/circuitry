@@ -1,0 +1,16 @@
+- request:
+    method: GET
+    path: /retry-after-inf
+  response:
+    status: 503
+    reason: Service Unavailable
+    headers:
+      Retry-After: "inf"
+    body: "slow down forever"
+- request:
+    method: GET
+    path: /retry-after-inf
+  response:
+    status: 200
+    reason: OK
+    body: "ok after ignoring inf"

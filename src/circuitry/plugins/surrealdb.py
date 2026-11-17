@@ -281,7 +281,7 @@ def _authenticate(
         if _is_connection_error(exc):
             raise RuntimeError(_unreachable(url, exc)) from exc
         raise RuntimeError(
-            f"surrealdb: authentication rejected by {url} ({exc}). Check "
+            f"surrealdb: authentication rejected by {redact_host_url(url)} ({exc}). Check "
             "SURREAL_TOKEN, or SURREAL_USER / SURREAL_PASS, and that the user "
             "has access to the configured namespace and database."
         ) from exc
@@ -289,7 +289,7 @@ def _authenticate(
 
 def _unreachable(url: str, exc: BaseException) -> str:
     return (
-        f"surrealdb: cannot connect to {url} ({exc}). Is the server running "
+        f"surrealdb: cannot connect to {redact_host_url(url)} ({exc}). Is the server running "
         "and is runtime.plugins.surrealdb.url correct? Start one locally with: "
         "surreal start --user root --pass root"
     )
@@ -297,7 +297,7 @@ def _unreachable(url: str, exc: BaseException) -> str:
 
 def _timed_out(url: str, exc: BaseException) -> str:
     return (
-        f"surrealdb: {url} timed out ({exc}). The request may still be "
+        f"surrealdb: {redact_host_url(url)} timed out ({exc}). The request may still be "
         "running on the server; a slow query may need more time than this "
         "client allows."
     )
@@ -358,7 +358,9 @@ class SurrealDBPlugin:
                 raise RuntimeError(_timed_out(self.url, exc)) from exc
             if _is_connection_error(exc):
                 raise RuntimeError(_unreachable(self.url, exc)) from exc
-            raise RuntimeError(f"surrealdb: could not open {self.url} ({exc}).") from exc
+            raise RuntimeError(
+                f"surrealdb: could not open {redact_host_url(self.url)} ({exc})."
+            ) from exc
 
         try:
             _authenticate(db, creds, url=self.url, namespace=namespace, database=database)

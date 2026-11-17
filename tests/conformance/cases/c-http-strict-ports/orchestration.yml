@@ -1,0 +1,49 @@
+name: c-http-strict-ports
+model: m
+effects:
+  - type: tool
+    name: plus_sign
+    provider: http
+    on_error: continue
+    params:
+      url: "http://host:+9/x"
+  - type: tool
+    name: digit_grouping
+    provider: http
+    on_error: continue
+    params:
+      url: "http://host:0_9/x"
+  - type: tool
+    name: leading_space
+    provider: http
+    on_error: continue
+    params:
+      url: "http://host: 9/x"
+  - type: tool
+    name: non_digit
+    provider: http
+    on_error: continue
+    params:
+      url: "http://host:abc/x"
+  - type: tool
+    name: zero
+    provider: http
+    on_error: continue
+    params:
+      url: "http://host:0/x"
+  - type: tool
+    name: over_max
+    provider: http
+    on_error: continue
+    params:
+      url: "http://host:65536/x"
+  - type: tool
+    name: proxy_url_port
+    provider: http
+    on_error: continue
+    params:
+      url: "http://example.invalid/proxy-port-test"
+  - type: prompt
+    name: adapter_base_url_port
+    on_error: continue
+    template: "say hello"

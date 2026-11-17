@@ -1,0 +1,30 @@
+name: c-http-refused-schemes
+model: m
+interface:
+  inputs:
+    secret_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: ftp_scheme
+    provider: http
+    on_error: continue
+    params:
+      url: "ftp://example.invalid/x"
+  - type: tool
+    name: file_scheme
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.secret_url}}"
+  - type: tool
+    name: data_scheme
+    provider: http
+    on_error: continue
+    params:
+      url: "data:text/plain;base64,aGVsbG8="
+  - type: prompt
+    name: adapter_base_url_scheme
+    on_error: continue
+    template: "say hello"

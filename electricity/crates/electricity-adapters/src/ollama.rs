@@ -174,9 +174,10 @@ fn ollama_hint(
 ) -> String {
     match returncode {
         7 => format!(
-            "Ollama at {base_url} is not reachable. Start it (`ollama serve`), or set \
+            "Ollama at {} is not reachable. Start it (`ollama serve`), or set \
              `runtime.adapters.{name}.base_url` in your config. Run `cof doctor` to verify \
-             connectivity."
+             connectivity.",
+            redact_host_url(base_url)
         ),
         28 => format!(
             "The model didn't finish within {timeout_seconds}s. Raise \
@@ -900,6 +901,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_refused_port_never_echoes_a_password_hidden_past_the_authority() {
+        // A `base_url` whose authority ends at a closed port (a valid
+        // port on its own) hides a second `@` -- and a real host --
+        // behind it: the "not reachable" hint and the failure's own
+        // `url=` field must both name only the part after the LAST `@`,
+        // never the port-shaped credential fragment in between (issue
+        // #778).
+        let addr = crate::test_support::closed_port();
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://{addr}/ss@x")),
+            streams: false,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("ss"), "{}", err.message);
+        assert!(!err.message.contains(&format!("{addr}")), "{}", err.message);
+        assert!(err.message.contains("Ollama at http://x is not reachable"));
+        assert!(err.message.contains("url=http://x"));
+    }
+
+    #[tokio::test]
+    async fn generate_schemeless_base_url_with_a_closed_port_never_echoes_its_password() {
+        // A `base_url` with no `scheme://` at all (`alice:s3cret@<addr>`,
+        // the same shape curl's own `--config` convention accepts) has
+        // no netloc of its own for `urlsplit` to find any userinfo in
+        // (issue #778) -- the daemon-down hint and the failure's own
+        // `url=` field must both still never echo `s3cret`.
+        let addr = crate::test_support::closed_port();
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("alice:s3cret@{addr}")),
+            streams: false,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("s3cret"), "{}", err.message);
+        assert!(!err.message.contains("alice"), "{}", err.message);
+        assert!(err.message.contains("not reachable"), "{}", err.message);
+    }
+
+    #[tokio::test]
     async fn generate_fails_like_python_for_a_non_string_base_url() {
         // `runtime.adapters.ollama.base_url: 5` must
         // not silently fall back to the default URL -- Python keeps the
@@ -1113,6 +1174,29 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(result.missing, vec![format!("host:http://{addr}")]);
         assert!(!result.missing.iter().any(|m| m.contains("secret")));
+    }
+
+    #[tokio::test]
+    async fn check_masks_a_password_hidden_behind_a_slash_in_the_missing_host_text() {
+        // `urlsplit`'s own netloc for this ends at the first `/`, so a
+        // plain `redact_url` leaves the rest of the password (`ss`)
+        // untouched -- `redact_host_url` now routes through
+        // `http_conventions::redact_request_url` instead (issue #778).
+        let addr = crate::test_support::closed_port();
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://user:pa/ss@{addr}")),
+            streams: false,
+        };
+        let result = adapter.check().await;
+        assert!(!result.ok);
+        assert_eq!(result.missing, vec![format!("host:http://{addr}")]);
+        assert!(
+            !result
+                .missing
+                .iter()
+                .any(|m| m.contains("pa") || m.contains("ss"))
+        );
     }
 
     #[tokio::test]

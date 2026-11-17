@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #778 step 7 (userinfo in a proxy URL becomes Basic proxy auth for a curl-based adapter too)",
+  "description": "`http_proxy` carries synthetic `user:pass` userinfo; the mock server, acting as the proxy, must receive a `Proxy-Authorization: Basic ...` header built from it -- written into curl's own `--config` file (`curl_support.py`/`transport.rs`), never argv.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "env": {"http_proxy": "http://proxyuser:proxypass@127.0.0.1:__MOCK_HTTP_PORT__", "no_proxy": ""}
+}

@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #778 step 7 (a proxy value with no scheme:// prefix means http:// for a curl-based adapter too)",
+  "description": "`http_proxy` is set to a bare `host:port` with no `http://` prefix; it must still be used exactly as if it had one. Ollama's own base_url names a `.invalid` host a direct connection could never reach.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "env": {"http_proxy": "127.0.0.1:__MOCK_HTTP_PORT__", "no_proxy": ""}
+}

@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import http_conventions
 from ..core.prompt_files import _WITHIN_INPUT_PATH, path_is_inside
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool, http_error_excerpt
@@ -90,7 +91,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 def is_loopback_host(host: str) -> bool:
     """True for the literal hosts ``localhost``, ``127.0.0.0/8`` and ``::1``.
 
-    Any other name is remote; no DNS lookup decides it.
+    Any other name is remote; no DNS lookup decides it. systemone's own
+    rule, not the shared proxy rule's: a loopback server is never
+    proxied at all, whatever ``*_proxy``/``no_proxy`` says, since it is
+    always a local service this process is talking to directly (issue
+    #778) -- a non-loopback one (``allow_remote: true``) follows the
+    shared proxy rule like every other surface.
     """
     if host.lower() == "localhost":
         return True
@@ -761,17 +767,22 @@ class SystemOnePlugin:
         questions: dict[str, Any],
         timeout_seconds: int,
     ) -> ToolResult:
+        display_server = http_conventions.redact_request_url(server)
         request = urllib.request.Request(server + ENDPOINT_PATH, data=payload, method="POST")
         request.add_header("Content-Type", "application/json")
         request.add_header("Accept", "application/json")
         if key is not None:
             request.add_header("Authorization", f"Bearer {key}")
 
-        handlers: list[Any] = [_NoRedirect]
+        # A loopback server is never proxied at all -- systemone's own
+        # rule, since it talks to a local service, documented alongside
+        # `is_loopback_host` below -- and a non-loopback one
+        # (``allow_remote: true``) follows the shared proxy rule, never
+        # urllib's own default proxy-reading convention (issue #778).
+        opener = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
         hostname = urllib.parse.urlsplit(server).hostname or ""
-        if is_loopback_host(hostname):
-            handlers.append(urllib.request.ProxyHandler({}))
-        opener = urllib.request.build_opener(*handlers)
+        if not is_loopback_host(hostname):
+            http_conventions.apply_request_proxy(request)
 
         def scrub(text: str) -> str:
             return text.replace(key, "[redacted]") if key else text
@@ -806,15 +817,20 @@ class SystemOnePlugin:
         except urllib.error.URLError as exc:
             if isinstance(exc.reason, TimeoutError):
                 raise RuntimeError(
-                    f"systemone request to {server} timed out after {int(timeout_seconds)}s"
+                    f"systemone request to {display_server} timed out after "
+                    f"{int(timeout_seconds)}s"
                 ) from exc
-            raise RuntimeError(f"systemone server not reachable at {server}") from exc
+            raise RuntimeError(
+                f"systemone server not reachable at {display_server}"
+            ) from exc
         except TimeoutError as exc:
             raise RuntimeError(
-                f"systemone request to {server} timed out after {int(timeout_seconds)}s"
+                f"systemone request to {display_server} timed out after {int(timeout_seconds)}s"
             ) from exc
         except (ConnectionError, http.client.HTTPException) as exc:
-            raise RuntimeError(f"systemone server at {server} dropped the connection") from exc
+            raise RuntimeError(
+                f"systemone server at {display_server} dropped the connection"
+            ) from exc
 
         raw["status"] = status
         retry_after = headers.get("retry-after")
@@ -826,7 +842,7 @@ class SystemOnePlugin:
             raw["error_kind"] = _error_kind(status, text)
             if 300 <= status < 400:
                 message = (
-                    f"systemone server at {server} answered HTTP {status}; "
+                    f"systemone server at {display_server} answered HTTP {status}; "
                     "a redirect is never followed"
                 )
             else:

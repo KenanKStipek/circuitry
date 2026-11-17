@@ -6,11 +6,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from ..core.cancellation import run_tracked
+from .. import http_conventions
 from ..curl_support import (
     curl_error_code,
     curl_failure_message,
     parse_error_body,
+    probe_head,
     redact_host_url,
     run_curl,
     run_curl_streaming,
@@ -179,7 +180,7 @@ class OllamaAdapter:
         hint = ""
         if proc.returncode == 7:
             hint = (
-                f"Ollama at {self.base_url} is not reachable. "
+                f"Ollama at {redact_host_url(self.base_url)} is not reachable. "
                 "Start it (`ollama serve`), or set "
                 f"`runtime.adapters.{self.name}.base_url` in your config. "
                 "Run `cof doctor` to verify connectivity."
@@ -358,11 +359,15 @@ class OllamaAdapter:
         :mod:`circuitry.adapters.models`): it exists to fill a picker, so
         an unreachable daemon is an empty list, not an error. stdlib
         urllib and a short timeout — nothing here is worth blocking a UI
-        or requiring ``curl`` for.
+        or requiring ``curl`` for. Checked and proxied the same way every
+        other request this adapter makes is (issue #778) -- never
+        urllib's own default opener.
         """
         url = self.base_url.rstrip("/") + "/api/tags"
         try:
-            with urllib.request.urlopen(url, timeout=timeout_seconds) as resp:
+            http_conventions.check_url(url)
+            req = urllib.request.Request(url)
+            with http_conventions.open_with_proxy_rule(req, timeout=timeout_seconds) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace"))
         except Exception:
             return []
@@ -423,17 +428,15 @@ class OllamaAdapter:
             # Probe the Ollama daemon. Failure here is non-fatal at validate
             # time; doctor surfaces it as actionable.
             try:
-                proc = run_tracked(
-                    [
-                        "curl",
-                        "-q",
-                        "--silent",
-                        "--max-time",
-                        "2",
-                        "--head",
-                        self.base_url.rstrip("/") + "/api/tags",
-                    ],
-                )
+                # Routed through the same `--config` plumbing as every
+                # other curl call this adapter makes -- never a bare
+                # `--proxy <url>` on argv, where `ps` would show a proxy
+                # credential, and a schemeless `base_url`
+                # (`localhost:11434`) normalized the same way
+                # `_build_config_and_cmd` normalizes one for `run_curl`,
+                # rather than checked raw (issue #778).
+                url = self.base_url.rstrip("/") + "/api/tags"
+                proc = probe_head(url, timeout_seconds=2)
                 if proc.returncode != 0:
                     missing.append(f"host:{redact_host_url(self.base_url)}")
             except Exception:

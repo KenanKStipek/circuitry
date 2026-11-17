@@ -4,7 +4,9 @@
 //! `curl` binary: this module sends the request itself, through
 //! [`electricity_tools::http_client::send`], and reproduces what
 //! Circuitry observably does with curl's own result -- the header
-//! set on the wire, curl's proxy-environment convention, its
+//! set on the wire, Circuitry's own proxy convention (issue #778,
+//! shared with the `http` tool via `electricity_tools::http_client::
+//! resolve_proxy_checked`, never curl's own environment reading), its
 //! `--max-time` as one total deadline, its exit-code mapping, and
 //! `run_tracked(text=True)`'s own strict-UTF-8/universal-newline body
 //! decode.
@@ -114,8 +116,11 @@ fn escape_config_value(value: &str) -> String {
 }
 
 /// `_curl_config_file`'s own byte count, for the size check only --
-/// electricity never actually writes this text anywhere.
-fn curl_config_bytes(url: &str, headers: &[(String, String)]) -> usize {
+/// electricity never actually writes this text anywhere. *proxy_url*
+/// is the raw text `_curl_config_file`'s own `proxy =`/`noproxy =`
+/// line(s) would carry -- cof writes one or the other on *every*
+/// call, proxy configured or not, so this must too (issue #778).
+fn curl_config_bytes(url: &str, headers: &[(String, String)], proxy_url: Option<&str>) -> usize {
     let mut text = format!("url = \"{}\"\n", escape_config_value(url));
     for (name, value) in headers {
         text.push_str(&format!(
@@ -123,16 +128,27 @@ fn curl_config_bytes(url: &str, headers: &[(String, String)]) -> usize {
             escape_config_value(value)
         ));
     }
+    match proxy_url {
+        Some(value) => {
+            text.push_str(&format!("proxy = \"{}\"\n", escape_config_value(value)));
+            text.push_str("noproxy = \"\"\n");
+        }
+        None => text.push_str("noproxy = \"*\"\n"),
+    }
     text.len()
 }
 
-fn validate_request(url: &str, headers: &[(String, String)]) -> Result<(), TransportFailure> {
+fn validate_request(
+    url: &str,
+    headers: &[(String, String)],
+    proxy_url: Option<&str>,
+) -> Result<(), TransportFailure> {
     validate_no_control_chars(url, "url")?;
     for (name, value) in headers {
         validate_no_control_chars(name, "header name")?;
         validate_no_control_chars(value, "header value")?;
     }
-    let config_bytes = curl_config_bytes(url, headers);
+    let config_bytes = curl_config_bytes(url, headers, proxy_url);
     if config_bytes > MAX_CONFIG_BYTES {
         return Err(TransportFailure::Validation(format!(
             "url + headers are {config_bytes} bytes, over the {MAX_CONFIG_BYTES}-byte limit \
@@ -165,13 +181,14 @@ pub(crate) fn default_port(scheme: &str) -> u16 {
 
 /// A URL for use in electricity's own refusal text -- never the raw
 /// value, which can carry userinfo or a credential-looking query
-/// parameter from a misconfigured `base_url`/proxy: the same two
-/// maskers [`crate::curl_text::curl_failure_message`] itself applies
-/// to a successful request's own failure text, applied here too since
-/// these errors happen *before* a [`CurlOutcome`] exists at all and
-/// so never reach that function.
+/// parameter from a misconfigured `base_url`/proxy: the same one
+/// function -- [`electricity_tools::http_conventions::redact_request_
+/// url`] -- every other refusal/warning/event/state/hint text that
+/// names a request URL on either engine uses, applied here too since
+/// these errors happen *before* a [`CurlOutcome`] exists at all and so
+/// never reach [`crate::curl_text::curl_failure_message`].
 pub(crate) fn redact_url_for_error(url: &str) -> String {
-    crate::curl_text::strip_url_userinfo(&crate::curl_text::mask_credential_query_params(url))
+    electricity_tools::http_conventions::redact_request_url(url)
 }
 
 pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
@@ -190,12 +207,14 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
         .split_once("://")
         .expect("normalized always contains \"://\"");
     let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
-        return Err(TransportFailure::Validation(format!(
-            "electricity: unsupported URL scheme '{scheme}'"
-        )));
-    }
-    let split_at = rest.find(['/', '?']);
+    // Refused before any I/O, the same way the `http` tool refuses a
+    // non-http(s) `base_url` -- one shared check, one shared text.
+    electricity_tools::http_conventions::check_scheme(&scheme, &normalized, &["http", "https"])
+        .map_err(TransportFailure::Validation)?;
+    // The authority ends at `/`, `?` or `#` (issue #778) -- a bare
+    // fragment with no path/query of its own (`http://h:80#x`) must
+    // not be read as part of the port.
+    let split_at = rest.find(['/', '?', '#']);
     let (authority, path_and_query) = match split_at {
         Some(idx) => (&rest[..idx], &rest[idx..]),
         None => (rest, ""),
@@ -211,30 +230,43 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
         Some(idx) => (Some(&authority[..idx]), &authority[idx + 1..]),
         None => (None, authority),
     };
+    // curl (and the `http` tool's own `split_proxy_url`) percent-
+    // decodes userinfo before using it -- whether it names the
+    // request's own credentials or a proxy's (issue #778).
     let userinfo = userinfo_raw.map(|raw| match raw.split_once(':') {
-        Some((user, pass)) => (user.to_string(), pass.to_string()),
-        None => (raw.to_string(), String::new()),
+        Some((user, pass)) => (
+            electricity_tools::http::http_url::unquote(user),
+            electricity_tools::http::http_url::unquote(pass),
+        ),
+        None => (
+            electricity_tools::http::http_url::unquote(raw),
+            String::new(),
+        ),
     });
-    let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
+    // The port is parsed strictly -- a value `u16::parse` would
+    // reject outright (`99999`) used to silently fall back to the
+    // scheme's own default port instead of being refused. *authority*
+    // (userinfo still attached, when present), never *hostport* --
+    // `strict_port` needs the whole authority to tell a genuine
+    // userinfo apart from a password hidden behind the authority's
+    // own `/`/`?`/`#` boundary (issue #778).
+    let port = electricity_tools::http_conventions::strict_port(authority, &normalized)
+        .map_err(TransportFailure::Validation)?;
+    let host = if let Some(rest) = hostport.strip_prefix('[') {
         match rest.split_once(']') {
-            Some((addr, after)) => (
-                addr.to_string(),
-                after.strip_prefix(':').and_then(|p| p.parse::<u16>().ok()),
-            ),
-            None => (hostport.to_string(), None),
+            Some((addr, _)) => addr.to_string(),
+            None => hostport.to_string(),
         }
     } else {
-        match hostport.rsplit_once(':') {
-            Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
-                (h.to_string(), p.parse::<u16>().ok())
-            }
-            _ => (hostport.to_string(), None),
+        match hostport.rfind(':') {
+            Some(idx) => hostport[..idx].to_string(),
+            None => hostport.to_string(),
         }
     };
     if host.is_empty() {
         return Err(TransportFailure::Validation(format!(
             "electricity: unsupported URL: {}",
-            redact_url_for_error(url)
+            redact_url_for_error(&normalized)
         )));
     }
     Ok(ParsedUrl {
@@ -247,96 +279,103 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
 }
 
 // ---------------------------------------------------------------------
-// curl's own proxy-environment convention (issue #503's "Settled
-// questions": lower-case-only `http_proxy`, curl ignores `HTTP_PROXY`;
-// `https_proxy`/`HTTPS_PROXY`; `all_proxy`/`ALL_PROXY` as the
-// fallback; `no_proxy`/`NO_PROXY`, `*` or comma-separated host
-// suffixes) -- distinct from `electricity_tools::http_client::
-// resolve_proxy`, which is urllib's own convention and stays the
-// `http` tool's alone.
+// Circuitry's own proxy rule (issue #778) -- one resolver,
+// `electricity_tools::http_client::resolve_proxy_checked`, shared with
+// the `http` tool rather than a second, separate copy of the
+// convention kept here.
 // ---------------------------------------------------------------------
 
-fn env_first(env: &[(String, String)], names: &[&str]) -> Option<String> {
-    for name in names {
-        if let Some((_, value)) = env.iter().find(|(k, _)| k == name) {
-            if !value.is_empty() {
-                return Some(value.clone());
-            }
-        }
-    }
-    None
-}
-
-fn curl_no_proxy_bypasses(no_proxy: &str, host: &str) -> bool {
-    if no_proxy.trim() == "*" {
-        return true;
-    }
-    let host_lower = host.to_ascii_lowercase();
-    no_proxy.split(',').any(|raw_entry| {
-        let entry = raw_entry
-            .trim()
-            .trim_start_matches('.')
-            .to_ascii_lowercase();
-        !entry.is_empty() && (host_lower == entry || host_lower.ends_with(&format!(".{entry}")))
-    })
-}
-
-/// curl's own proxy value for *scheme*/*host*, `None` when unset or
-/// `no_proxy` bypasses *host* -- *env* is an explicit snapshot (this
-/// lane's own environment-isolation rule: every caller that cares
-/// about proxy behaviour sets or clears every `*_proxy`/`*_PROXY`
-/// variable explicitly rather than relying on the real process
-/// environment inside a test).
-fn curl_proxy_value(scheme: &str, host: &str, env: &[(String, String)]) -> Option<String> {
-    let no_proxy = env_first(env, &["no_proxy", "NO_PROXY"]).unwrap_or_default();
-    if curl_no_proxy_bypasses(&no_proxy, host) {
-        return None;
-    }
-    let scheme_specific = match scheme {
-        "http" => env_first(env, &["http_proxy"]),
-        "https" => env_first(env, &["https_proxy", "HTTPS_PROXY"]),
-        _ => None,
-    };
-    scheme_specific.or_else(|| env_first(env, &["all_proxy", "ALL_PROXY"]))
-}
-
 /// The real process environment, read once per request -- the public
-/// entry point every adapter call uses; [`curl_proxy_value`] above is
-/// the pure, test-driven form.
+/// entry point every adapter call uses; [`resolve_curl_proxy_from`]
+/// below is the pure, test-driven form.
 pub(crate) fn resolve_curl_proxy(
     scheme: &str,
     host: &str,
+    port: Option<u16>,
 ) -> Result<Option<ProxyTarget>, TransportFailure> {
     let env: Vec<(String, String)> = std::env::vars().collect();
-    resolve_curl_proxy_from(scheme, host, &env)
+    resolve_curl_proxy_from(scheme, host, port, &env)
+}
+
+/// The extra headers curl itself sends for a plain (non-CONNECT)
+/// proxied `http` request: `Proxy-Authorization` (built from the
+/// proxy URL's own userinfo, exactly the way the request URL's own
+/// userinfo becomes `Authorization`) and `Proxy-Connection: Keep-
+/// Alive`. Neither is ever sent for an `https` request, which tunnels
+/// through `CONNECT` instead -- a tunneled request sends its own
+/// `basic_auth` on the `CONNECT` line itself (`http_client::send`'s
+/// own doc comment on [`ProxyTarget::basic_auth`]), and has no proxy-
+/// facing keep-alive of its own. A pure function, not inlined at its
+/// one call site, so a unit test can check it directly without going
+/// through [`resolve_curl_proxy`]'s own real-environment read (issue
+/// #778 step 7: this crate reproduces what curl observably puts on
+/// the wire, not merely what Circuitry's own adapter code configured).
+pub(crate) fn proxy_wire_headers(
+    proxy: &Option<ProxyTarget>,
+    scheme: Scheme,
+) -> Vec<(String, String)> {
+    if scheme != Scheme::Http {
+        return Vec::new();
+    }
+    let Some(proxy) = proxy else {
+        return Vec::new();
+    };
+    let mut headers = Vec::new();
+    if let Some(basic_auth) = &proxy.basic_auth {
+        headers.push((
+            "Proxy-Authorization".to_string(),
+            format!("Basic {basic_auth}"),
+        ));
+    }
+    headers.push(("Proxy-Connection".to_string(), "Keep-Alive".to_string()));
+    headers
+}
+
+/// [`proxy_wire_headers`], minus `Proxy-Connection: Keep-Alive` --
+/// cyberdiner's own wire headers must match cof's exactly (issue
+/// #778): cof's cyberdiner sends a plain (non-CONNECT) proxied request
+/// through urllib, which (unlike curl) never adds that header on its
+/// own.
+pub(crate) fn cyberdiner_proxy_headers(
+    proxy: &Option<ProxyTarget>,
+    scheme: Scheme,
+) -> Vec<(String, String)> {
+    proxy_wire_headers(proxy, scheme)
+        .into_iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("Proxy-Connection"))
+        .collect()
+}
+
+/// The raw proxy URL text [`electricity_tools::http_client::
+/// resolve_proxy_checked_with_port`] itself resolves for
+/// *scheme*/*host*(:*port*) -- never [`ProxyTarget`]'s own parsed
+/// form, which [`resolve_curl_proxy`] already decodes userinfo out of
+/// for `basic_auth`. Used only for the `--config` byte count check
+/// ([`curl_config_bytes`]), which (like cof's own `_curl_config_file`)
+/// counts the `proxy =`/`noproxy =` line(s) it would write, not the
+/// request's own parsed proxy target (issue #778).
+fn resolve_curl_proxy_url_text(
+    scheme: &str,
+    host: &str,
+    port: Option<u16>,
+) -> Result<Option<String>, TransportFailure> {
+    let env: Vec<(String, String)> = std::env::vars().collect();
+    electricity_tools::http_client::resolve_proxy_checked_with_port(scheme, host, port, &env)
+        .map_err(TransportFailure::Validation)
 }
 
 fn resolve_curl_proxy_from(
     scheme: &str,
     host: &str,
+    port: Option<u16>,
     env: &[(String, String)],
 ) -> Result<Option<ProxyTarget>, TransportFailure> {
-    let Some(value) = curl_proxy_value(scheme, host, env) else {
+    let Some(value) =
+        electricity_tools::http_client::resolve_proxy_checked_with_port(scheme, host, port, env)
+            .map_err(TransportFailure::Validation)?
+    else {
         return Ok(None);
     };
-    // curl's own convention: a proxy value with no `scheme://` prefix
-    // (`http_proxy=proxy.corp:3128`) defaults to `http://`, same as a
-    // value that spells it out.
-    let value = if value.contains("://") {
-        value
-    } else {
-        format!("http://{value}")
-    };
-    let proxy_scheme = value
-        .split_once("://")
-        .map(|(scheme, _)| scheme.to_ascii_lowercase())
-        .unwrap_or_default();
-    if proxy_scheme != "http" {
-        return Err(TransportFailure::Validation(format!(
-            "electricity: unsupported proxy scheme '{proxy_scheme}'; only http:// proxies are \
-             supported"
-        )));
-    }
     let parsed = parse_url(&value)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
     let basic_auth = parsed.userinfo.map(|(user, password)| {
@@ -523,10 +562,15 @@ fn prepare_request(
     headers: &[(String, String)],
     body: Option<&str>,
 ) -> Result<(ConnectTarget, RawRequest), TransportFailure> {
-    validate_request(url, headers)?;
+    // Scheme and port checked first, matching
+    // `curl_support.py::_build_config_and_cmd`'s own order
+    // (`http_conventions.check_url` before the config, including its
+    // own control-character/size checks, is ever built) (issue #778).
     let parsed = parse_url(url)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
-    let proxy = resolve_curl_proxy(&parsed.scheme, &parsed.host)?;
+    let proxy = resolve_curl_proxy(&parsed.scheme, &parsed.host, parsed.port)?;
+    let proxy_url_text = resolve_curl_proxy_url_text(&parsed.scheme, &parsed.host, parsed.port)?;
+    validate_request(url, headers, proxy_url_text.as_deref())?;
     let scheme_enum = if parsed.scheme == "https" {
         Scheme::Https
     } else {
@@ -560,6 +604,7 @@ fn prepare_request(
         "User-Agent".to_string(),
         format!("electricity/{}", env!("CARGO_PKG_VERSION")),
     ));
+    wire_headers.extend(proxy_wire_headers(&proxy, scheme_enum));
 
     let wire_target = match (&proxy, scheme_enum) {
         (Some(_), Scheme::Http) => {
@@ -747,7 +792,7 @@ pub async fn head_probe(url: &str, timeout: Duration) -> bool {
     } else {
         Scheme::Http
     };
-    let Ok(proxy) = resolve_curl_proxy(&parsed.scheme, &parsed.host) else {
+    let Ok(proxy) = resolve_curl_proxy(&parsed.scheme, &parsed.host, parsed.port) else {
         return false;
     };
     let Ok(client) = http_client::build_client() else {
@@ -1100,6 +1145,7 @@ mod tests {
         let err = validate_request(
             "http://example.com/",
             &[("X".to_string(), "a\nb".to_string())],
+            None,
         )
         .unwrap_err();
         assert_eq!(
@@ -1113,7 +1159,8 @@ mod tests {
     #[test]
     fn an_oversized_config_is_refused_before_any_io() {
         let huge = "x".repeat(70_000);
-        let err = validate_request("http://example.com/", &[("X".to_string(), huge)]).unwrap_err();
+        let err =
+            validate_request("http://example.com/", &[("X".to_string(), huge)], None).unwrap_err();
         match err {
             TransportFailure::Validation(text) => {
                 assert!(text.contains("over the 60000-byte limit"));
@@ -1123,64 +1170,49 @@ mod tests {
     }
 
     #[test]
-    fn curl_proxy_convention_ignores_uppercase_http_proxy() {
-        let env = vec![("HTTP_PROXY".to_string(), "http://proxy:1".to_string())];
-        assert_eq!(curl_proxy_value("http", "example.com", &env), None);
-    }
-
-    #[test]
-    fn curl_proxy_convention_accepts_lowercase_http_proxy() {
-        let env = vec![("http_proxy".to_string(), "http://proxy:1".to_string())];
-        assert_eq!(
-            curl_proxy_value("http", "example.com", &env),
-            Some("http://proxy:1".to_string())
+    fn config_size_cases_match_cof() {
+        // Replays `generate_adapter_corpus.py`'s own `config_size_cases`
+        // (issue #778): `curl_config_bytes` must count the `proxy =`/
+        // `noproxy =` line(s) `_curl_config_file` itself writes, on
+        // every case -- including the ones with no proxy configured,
+        // where cof still writes a `noproxy = "*"` line.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/golden/adapter_corpus.json"
         );
-    }
-
-    #[test]
-    fn curl_proxy_convention_accepts_either_case_for_https() {
-        let env = vec![("HTTPS_PROXY".to_string(), "http://proxy:1".to_string())];
-        assert_eq!(
-            curl_proxy_value("https", "example.com", &env),
-            Some("http://proxy:1".to_string())
-        );
-    }
-
-    #[test]
-    fn curl_proxy_convention_falls_back_to_all_proxy() {
-        let env = vec![("all_proxy".to_string(), "http://proxy:2".to_string())];
-        assert_eq!(
-            curl_proxy_value("https", "example.com", &env),
-            Some("http://proxy:2".to_string())
-        );
-    }
-
-    #[test]
-    fn curl_no_proxy_star_bypasses_everything() {
-        let env = vec![
-            ("http_proxy".to_string(), "http://proxy:1".to_string()),
-            ("no_proxy".to_string(), "*".to_string()),
-        ];
-        assert_eq!(curl_proxy_value("http", "example.com", &env), None);
-    }
-
-    #[test]
-    fn curl_no_proxy_matches_a_suffix() {
-        let env = vec![
-            ("http_proxy".to_string(), "http://proxy:1".to_string()),
-            ("no_proxy".to_string(), "example.com".to_string()),
-        ];
-        assert_eq!(curl_proxy_value("http", "api.example.com", &env), None);
-        assert_eq!(
-            curl_proxy_value("http", "other.com", &env),
-            Some("http://proxy:1".to_string())
-        );
+        let text = std::fs::read_to_string(path).expect("adapter_corpus.json must exist");
+        let corpus: serde_json::Value =
+            serde_json::from_str(&text).expect("adapter_corpus.json must be valid JSON");
+        for case in corpus["config_size_cases"].as_array().unwrap() {
+            let headers: Vec<(String, String)> = case["headers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|pair| {
+                    let pair = pair.as_array().unwrap();
+                    (
+                        pair[0].as_str().unwrap().to_string(),
+                        pair[1].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect();
+            let proxy_url = case["proxy_url"].as_str();
+            let expected_bytes = case["config_bytes"].as_u64().unwrap() as usize;
+            let expected_over = case["over_limit"].as_bool().unwrap();
+            let actual_bytes = curl_config_bytes("http://example.com/x", &headers, proxy_url);
+            assert_eq!(actual_bytes, expected_bytes, "case: {case:?}");
+            assert_eq!(
+                actual_bytes > MAX_CONFIG_BYTES,
+                expected_over,
+                "case: {case:?}"
+            );
+        }
     }
 
     #[test]
     fn a_non_http_proxy_scheme_is_refused_before_any_io() {
         let env = vec![("http_proxy".to_string(), "socks5://proxy:1".to_string())];
-        let err = resolve_curl_proxy_from("http", "example.com", &env).unwrap_err();
+        let err = resolve_curl_proxy_from("http", "example.com", None, &env).unwrap_err();
         match err {
             TransportFailure::Validation(text) => {
                 assert!(text.contains("unsupported proxy scheme"));
@@ -1190,18 +1222,32 @@ mod tests {
     }
 
     #[test]
+    fn the_authority_ends_at_a_fragment_too() {
+        // A bare fragment right after the port (`http://h:80#x`) must
+        // not be read as part of the port text -- `cof`
+        // (`urllib.parse.urlsplit`) already stops the authority there
+        // (issue #778).
+        let parsed = parse_url("http://h:80#x").unwrap();
+        assert_eq!(parsed.host, "h");
+        assert_eq!(parsed.port, Some(80));
+    }
+
+    #[test]
     fn a_non_http_proxy_scheme_refusal_never_names_the_credential() {
         let env = vec![(
             "all_proxy".to_string(),
             "socks5://user:s3cr3t@proxy:1080".to_string(),
         )];
-        let err = resolve_curl_proxy_from("http", "example.com", &env).unwrap_err();
+        let err = resolve_curl_proxy_from("http", "example.com", None, &env).unwrap_err();
         match err {
             TransportFailure::Validation(text) => {
-                assert!(text.contains("unsupported proxy scheme 'socks5'"));
+                assert_eq!(
+                    text,
+                    "unsupported proxy scheme 'socks5' in 'socks5://proxy:1080': only \
+                     http:// proxies are supported"
+                );
                 assert!(!text.contains("s3cr3t"));
                 assert!(!text.contains("user"));
-                assert!(!text.contains("proxy:1080"));
             }
             other => panic!("expected Validation, got {other:?}"),
         }
@@ -1210,11 +1256,48 @@ mod tests {
     #[test]
     fn a_scheme_less_proxy_value_defaults_to_http_like_curl() {
         let env = vec![("http_proxy".to_string(), "proxy.corp:3128".to_string())];
-        let target = resolve_curl_proxy_from("http", "example.com", &env)
+        let target = resolve_curl_proxy_from("http", "example.com", None, &env)
             .unwrap()
             .unwrap();
         assert_eq!(target.host, "proxy.corp");
         assert_eq!(target.port, 3128);
+    }
+
+    #[test]
+    fn proxy_wire_headers_adds_keep_alive_only_for_a_proxied_plain_http_request() {
+        let proxy = Some(ProxyTarget {
+            host: "proxy.corp".to_string(),
+            port: 3128,
+            basic_auth: None,
+        });
+        assert_eq!(
+            proxy_wire_headers(&proxy, Scheme::Http),
+            vec![("Proxy-Connection".to_string(), "Keep-Alive".to_string())]
+        );
+        assert_eq!(proxy_wire_headers(&proxy, Scheme::Https), Vec::new());
+        assert_eq!(proxy_wire_headers(&None, Scheme::Http), Vec::new());
+    }
+
+    #[test]
+    fn proxy_wire_headers_adds_proxy_authorization_from_the_proxy_urls_own_userinfo() {
+        let proxy = Some(ProxyTarget {
+            host: "proxy.corp".to_string(),
+            port: 3128,
+            basic_auth: Some("cHJveHl1c2VyOnByb3h5cGFzcw==".to_string()),
+        });
+        assert_eq!(
+            proxy_wire_headers(&proxy, Scheme::Http),
+            vec![
+                (
+                    "Proxy-Authorization".to_string(),
+                    "Basic cHJveHl1c2VyOnByb3h5cGFzcw==".to_string()
+                ),
+                ("Proxy-Connection".to_string(), "Keep-Alive".to_string())
+            ]
+        );
+        // Never on the `https` path -- that request tunnels through
+        // `CONNECT` instead, which sends `basic_auth` on its own line.
+        assert_eq!(proxy_wire_headers(&proxy, Scheme::Https), Vec::new());
     }
 
     #[test]
@@ -1261,12 +1344,28 @@ mod tests {
             "http_proxy".to_string(),
             "http://user:pass@proxy:3128".to_string(),
         )];
-        let target = resolve_curl_proxy_from("http", "example.com", &env)
+        let target = resolve_curl_proxy_from("http", "example.com", None, &env)
             .unwrap()
             .unwrap();
         assert_eq!(target.host, "proxy");
         assert_eq!(target.port, 3128);
         assert_eq!(target.basic_auth, Some("dXNlcjpwYXNz".to_string()));
+    }
+
+    #[test]
+    fn percent_encoded_proxy_userinfo_is_decoded_before_basic_auth() {
+        // curl percent-decodes a proxy URL's userinfo before building
+        // `Proxy-Authorization` (issue #778).
+        let env = vec![(
+            "http_proxy".to_string(),
+            "http://us%40er:pa%3Ass@proxy:3128".to_string(),
+        )];
+        let target = resolve_curl_proxy_from("http", "example.com", None, &env)
+            .unwrap()
+            .unwrap();
+        use base64::Engine;
+        let expected = base64::engine::general_purpose::STANDARD.encode("us@er:pa:ss");
+        assert_eq!(target.basic_auth, Some(expected));
     }
 
     #[tokio::test]

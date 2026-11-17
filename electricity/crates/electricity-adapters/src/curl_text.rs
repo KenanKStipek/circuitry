@@ -1,13 +1,17 @@
 //! `curl_support.py`'s own failure-message/masking helpers, ported --
-//! `curl_failure_message`, `parse_error_body`, the three maskers, and
-//! the curl exit-code-to-[`RetryInfo`] mapping. Every adapter in this
-//! crate that calls [`crate::transport::run_curl`] builds its own
-//! failure message through [`curl_failure_message`], never directly:
-//! this is the one place a secret gets masked out of a message before
-//! it is ever returned (issue #503's own "Security" section -- no
-//! request/response body, header value or key is ever logged, and
-//! every failure text passes through this module's own masking before
-//! `exec/prompt.rs`'s `redact()` ever sees it).
+//! `curl_failure_message`, `parse_error_body`, and the curl exit-code-
+//! to-[`RetryInfo`] mapping. Every adapter in this crate that calls
+//! [`crate::transport::run_curl`] builds its own failure message
+//! through [`curl_failure_message`], never directly: this is the one
+//! place a secret gets masked out of a message before it is ever
+//! returned (issue #503's own "Security" section -- no request/
+//! response body, header value or key is ever logged, and every
+//! failure text passes through this module's own masking before
+//! `exec/prompt.rs`'s `redact()` ever sees it). A request URL is named
+//! only through [`electricity_tools::http_conventions::redact_request_
+//! url`] (issue #778) -- never the weaker userinfo/query maskers that
+//! function itself is built from, which stay private to
+//! `electricity-tools::http_conventions`.
 
 use crate::transport::CurlOutcome;
 use electricity_value::Value;
@@ -99,147 +103,31 @@ fn mask_secrets(text: &str, secrets: &[&str]) -> String {
     out
 }
 
-/// `curl_support.py::_CREDENTIAL_QUERY_KEY_RE` -- a case-insensitive
-/// *search* (not a full match) for any of these words anywhere in a
-/// query key.
-fn looks_like_credential_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    ["key", "token", "secret", "auth", "password", "pwd"]
-        .iter()
-        .any(|needle| lower.contains(needle))
-}
-
-/// `urllib.parse.parse_qsl(keep_blank_values=True)` -- `&`-separated
-/// `name=value` pairs (a bare `name` with no `=` keeps an empty
-/// value), each percent-decoded with `+` read as a space (the
-/// `application/x-www-form-urlencoded` convention `parse_qsl` uses by
-/// default, `plus` left `True`).
-fn parse_qsl(query: &str) -> Vec<(String, String)> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| match pair.split_once('=') {
-            Some((k, v)) => (percent_decode_plus(k), percent_decode_plus(v)),
-            None => (percent_decode_plus(pair), String::new()),
-        })
-        .collect()
-}
-
-fn percent_decode_plus(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                    Some(byte) => {
-                        out.push(byte);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            other => {
-                out.push(other);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// `curl_support.py::_mask_credential_query_params` -- masks the
-/// value of any query-string key matching [`looks_like_credential_key`],
-/// then re-encodes the **whole** query with
-/// [`electricity_value::pycompat::urlencode`] even when nothing
-/// matched (so `%2A%2A%2A` for the mask, a space becomes `+`, exactly
-/// mirrors `urllib.parse.urlencode`'s own default `quote_plus`
-/// encoding).
-pub(crate) fn mask_credential_query_params(url: &str) -> String {
-    let Some(query_start) = url.find('?') else {
-        return url.to_string();
-    };
-    let (before_query, rest) = url.split_at(query_start);
-    let query_and_fragment = &rest[1..];
-    let (query, fragment) = match query_and_fragment.find('#') {
-        Some(idx) => (&query_and_fragment[..idx], Some(&query_and_fragment[idx..])),
-        None => (query_and_fragment, None),
-    };
-    let pairs = parse_qsl(query);
-    let masked: Vec<(String, Value)> = pairs
-        .into_iter()
-        .map(|(k, v)| {
-            let value = if looks_like_credential_key(&k) {
-                "***".to_string()
-            } else {
-                v
-            };
-            (k, Value::Str(value))
-        })
-        .collect();
-    let new_query = electricity_value::pycompat::urlencode(&masked, false).unwrap_or_default();
-    let mut result = format!("{before_query}?{new_query}");
-    if let Some(fragment) = fragment {
-        result.push_str(fragment);
-    }
-    result
-}
-
-/// `curl_support.py::_URL_USERINFO_RE` -- `://user[:pass]@` becomes
-/// `://`, wherever it occurs in the text (hints included), never
-/// requiring the whole string to be a URL.
-pub(crate) fn strip_url_userinfo(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    loop {
-        let Some(scheme_idx) = rest.find("://") else {
-            out.push_str(rest);
-            break;
-        };
-        let after_scheme = &rest[scheme_idx + 3..];
-        let stop = after_scheme
-            .find(|c: char| c.is_whitespace() || c == '/' || c == '@')
-            .unwrap_or(after_scheme.len());
-        let candidate = &after_scheme[..stop];
-        if after_scheme.as_bytes().get(stop) == Some(&b'@') && !candidate.is_empty() {
-            out.push_str(&rest[..scheme_idx + 3]);
-            rest = &after_scheme[stop + 1..];
-        } else {
-            out.push_str(&rest[..scheme_idx + 3]);
-            rest = after_scheme;
-        }
-    }
-    out
-}
-
 /// `curl_support.py::redact_host_url` -- masks a URL for a preflight
 /// `host:{url}` requirement text: userinfo stripped, then any
 /// credential-like query parameter masked, the same two masks
 /// [`curl_failure_message`] already applies to a request URL. Shared
 /// by every `check()` that reports `host:{base_url}` -- `ollama`'s own
-/// (`ollama.rs`) and `cyberdiner`'s.
+/// (`ollama.rs`) and `cyberdiner`'s. Uses
+/// `http_conventions::redact_request_url`, not `redact_url` directly:
+/// a password hidden behind a `/`, `?` or `#` in `url` (issue #778)
+/// must not reach this preflight text either.
 pub fn redact_host_url(url: &str) -> String {
-    strip_url_userinfo(&mask_credential_query_params(url))
+    electricity_tools::http_conventions::redact_request_url(url)
 }
 
 /// `curl_support.py::curl_failure_message` -- renders a curl failure
 /// without ever including the request body/headers. *secrets* are the
 /// raw credential values this request sent; masked out of *stdout*/
 /// *stderr* before the body is parsed, and out of the final message
-/// (and its embedded URL/hint) again afterward, so a secret split by
-/// truncation can't survive as a partial match.
+/// again afterward, so a secret split by truncation can't survive as a
+/// partial match. *url* is named through [`electricity_tools::
+/// http_conventions::redact_request_url`] -- the one function that
+/// redacts a request URL for error text on either engine -- so a
+/// password hidden anywhere in it, including behind a `/`, `?` or `#`,
+/// never reaches the message. *hint* is never redacted here: a caller
+/// that builds one naming a URL (`ollama.rs::ollama_hint`) must redact
+/// it itself before passing it in, through the same function.
 #[allow(clippy::too_many_arguments)]
 pub fn curl_failure_message(
     source: &str,
@@ -267,14 +155,13 @@ pub fn curl_failure_message(
     };
     let mut message = format!(
         "{source} request failed (curl exit {returncode}){model_part} url={}: {detail}",
-        mask_credential_query_params(url)
+        electricity_tools::http_conventions::redact_request_url(url)
     );
     if !hint.is_empty() {
         message.push(' ');
         message.push_str(hint);
     }
-    message = mask_secrets(&message, &secrets);
-    strip_url_userinfo(&message)
+    mask_secrets(&message, &secrets)
 }
 
 /// `adapters/_retry.py::classify_curl_exit`, re-shaped around
@@ -405,30 +292,6 @@ mod tests {
     }
 
     #[test]
-    fn mask_credential_query_params_masks_matching_keys_only() {
-        let url = "https://api.example.com/search?key=secret&q=weather";
-        assert_eq!(
-            mask_credential_query_params(url),
-            "https://api.example.com/search?key=%2A%2A%2A&q=weather"
-        );
-    }
-
-    #[test]
-    fn mask_credential_query_params_leaves_a_url_with_no_query_unchanged() {
-        let url = "https://api.example.com/search";
-        assert_eq!(mask_credential_query_params(url), url);
-    }
-
-    #[test]
-    fn strip_url_userinfo_removes_credentials_wherever_they_occur() {
-        let text = "connect to http://user:pass@127.0.0.1:1 failed";
-        assert_eq!(
-            strip_url_userinfo(text),
-            "connect to http://127.0.0.1:1 failed"
-        );
-    }
-
-    #[test]
     fn redact_host_url_strips_userinfo_for_a_preflight_host_text() {
         assert_eq!(
             redact_host_url("http://user:canarypw@example.test:11434"),
@@ -450,6 +313,20 @@ mod tests {
             redact_host_url("http://localhost:11434"),
             "http://localhost:11434"
         );
+    }
+
+    #[test]
+    fn redact_host_url_masks_a_password_hidden_behind_a_slash_question_mark_or_hash() {
+        // `urlsplit`'s own netloc for these ends at the first `/`,
+        // `?` or `#`, so it never sees the `@` that follows -- the
+        // password must still come out fully removed (issue #778).
+        for sep in ['/', '?', '#'] {
+            let url = format!("http://user:pa{sep}ss@example.test:11434");
+            let redacted = redact_host_url(&url);
+            assert_eq!(redacted, "http://example.test:11434");
+            assert!(!redacted.contains("pa"));
+            assert!(!redacted.contains("ss"));
+        }
     }
 
     #[test]

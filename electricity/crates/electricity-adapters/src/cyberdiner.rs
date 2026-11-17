@@ -42,7 +42,7 @@
 
 use crate::config::{cfg_int_or, cfg_value_or, rstrip_base_url, value_is_truthy};
 use crate::transport::{
-    ParsedUrl, TransportFailure, default_port, parse_url, redact_url_for_error,
+    ParsedUrl, TransportFailure, cyberdiner_proxy_headers, default_port, parse_url,
 };
 use electricity_json::WriteMode;
 use electricity_tools::http::http_url::urljoin;
@@ -190,6 +190,7 @@ fn resolve_tier(
 /// a job response; a response without a top-level `data` *object*
 /// means this isn't talking to the API it thinks it is.
 fn unwrap_envelope(body: &Value, url: &str) -> Result<Dict, AdapterError> {
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     match body
         .as_dict()
         .and_then(|d| d.get(&Value::Str("data".to_string())))
@@ -264,9 +265,21 @@ fn urllib_headers(
 /// host_header_value`'s curl-flavored default-port omission every
 /// other adapter in this crate uses).
 fn urllib_host_header(parsed: &ParsedUrl) -> String {
+    // An IPv6 `host` ([`ParsedUrl`]'s own field is already bracket-
+    // stripped) needs its brackets back before a port can be
+    // appended, or the result is ambiguous -- `::1:8080` reads back
+    // as some other address entirely, not `::1` port `8080` -- and
+    // `netloc_for_proxy` below, which reuses this, would otherwise
+    // feed `split_netloc` a string a `no_proxy=::1` entry can never
+    // match (issue #778).
+    let host = if parsed.host.contains(':') {
+        format!("[{}]", parsed.host)
+    } else {
+        parsed.host.clone()
+    };
     match parsed.port {
-        Some(port) => format!("{}:{port}", parsed.host),
-        None => parsed.host.clone(),
+        Some(port) => format!("{host}:{port}"),
+        None => host,
     }
 }
 
@@ -290,20 +303,25 @@ fn netloc_for_proxy(parsed: &ParsedUrl) -> String {
 /// curl-flavored rules (`HTTP_PROXY` ignored for `http://`, `ALL_PROXY`
 /// honoured, ...), which belong to every other adapter in this crate
 /// alone.
-fn connect_target_for(parsed: &ParsedUrl, port: u16) -> ConnectTarget {
+fn connect_target_for(parsed: &ParsedUrl, port: u16) -> Result<ConnectTarget, TransportFailure> {
     let scheme = if parsed.scheme == "https" {
         Scheme::Https
     } else {
         Scheme::Http
     };
+    // A proxy value this adapter can't use (an unsupported scheme, an
+    // invalid port) is refused outright, the same `Validation` text
+    // every other surface gives, never silently treated as "no proxy"
+    // and sent direct (issue #778).
     let proxy =
-        electricity_tools::http::resolve_proxy_target(&parsed.scheme, &netloc_for_proxy(parsed));
-    ConnectTarget {
+        electricity_tools::http::resolve_proxy_target(&parsed.scheme, &netloc_for_proxy(parsed))
+            .map_err(TransportFailure::Validation)?;
+    Ok(ConnectTarget {
         scheme,
         host: parsed.host.clone(),
         port,
         proxy,
-    }
+    })
 }
 
 /// A [`SendError`] this crate's own `http`
@@ -323,6 +341,7 @@ fn connect_target_for(parsed: &ParsedUrl, port: u16) -> ConnectTarget {
 /// unconditionally retryable; `IncompleteRead` (an `http.client.
 /// HTTPException`, none of the three) is not.
 fn send_error(url: &str, err: SendError) -> AdapterError {
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     match err {
         SendError::Connect { text, .. } => AdapterError {
             message: format!("cyberdiner: request to {url} failed: {text}"),
@@ -364,20 +383,21 @@ fn send_error(url: &str, err: SendError) -> AdapterError {
     }
 }
 
-fn transport_failure_error(url: &str, failure: TransportFailure) -> AdapterError {
+fn transport_failure_error(failure: TransportFailure) -> AdapterError {
+    // The shared `Validation`/`InvalidUtf8` text, verbatim and already
+    // redacted by its own producer (`http_conventions::check_scheme`/
+    // `strict_port`) -- never a generic "unsupported URL" wrapper that
+    // discards it (issue #778). `ValueError`, matching cof's own
+    // `check_url`/`resolve_proxy`, both of which raise that -- never
+    // the `RuntimeError` every I/O-time failure elsewhere in this
+    // module raises instead.
     let message = match failure {
-        TransportFailure::Validation(_) => {
-            format!(
-                "cyberdiner: request to {} failed: unsupported URL",
-                redact_url_for_error(url)
-            )
-        }
-        TransportFailure::InvalidUtf8(message) => message,
+        TransportFailure::Validation(message) | TransportFailure::InvalidUtf8(message) => message,
     };
     AdapterError {
         message,
         retry: RetryInfo::not_retryable(),
-        py_class: PyExc::RuntimeError,
+        py_class: PyExc::ValueError,
     }
 }
 
@@ -401,6 +421,7 @@ fn http_error(
     detail: &str,
     retry_after: Option<&str>,
 ) -> AdapterError {
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     let message = if detail.is_empty() {
         format!("cyberdiner: HTTP {status} from {url}: {reason}")
     } else {
@@ -419,6 +440,7 @@ fn http_error(
 }
 
 fn non_json_error(url: &str, text: &str) -> AdapterError {
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     AdapterError {
         message: format!(
             "cyberdiner: non-JSON response from {url}: {}",
@@ -507,21 +529,35 @@ async fn request_json(
     let mut visited: HashMap<String, u32> = HashMap::new();
 
     loop {
-        let parsed =
-            parse_url(&current_url).map_err(|e| transport_failure_error(&current_url, e))?;
+        let parsed = parse_url(&current_url).map_err(transport_failure_error)?;
         let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
-        let connect_target = connect_target_for(&parsed, port);
+        let connect_target = connect_target_for(&parsed, port).map_err(transport_failure_error)?;
         let host_header = urllib_host_header(&parsed);
 
         let mut extra_headers = vec![("Authorization".to_string(), format!("Bearer {token}"))];
         if current_body.is_some() {
             extra_headers.push(("Content-type".to_string(), "application/json".to_string()));
         }
+        // A plain `http://` request through a proxy has no `CONNECT`
+        // tunnel at all -- the absolute-form target below *is* the
+        // request line the proxy itself reads, and `Proxy-
+        // Authorization` belongs in the regular header set, exactly
+        // as the `http` tool's own request loop (issue #778).
+        extra_headers.extend(cyberdiner_proxy_headers(
+            &connect_target.proxy,
+            connect_target.scheme,
+        ));
         let headers = urllib_headers(&host_header, current_body.as_deref(), &extra_headers);
+        let wire_target = match (&connect_target.proxy, connect_target.scheme) {
+            (Some(_), Scheme::Http) => {
+                format!("{}://{host_header}{}", parsed.scheme, parsed.target)
+            }
+            _ => parsed.target.clone(),
+        };
 
         let raw_request = RawRequest {
             method: current_method.clone(),
-            target: parsed.target.clone(),
+            target: wire_target,
             headers,
             body: current_body.as_ref().map(|b| b.as_bytes().to_vec()),
         };
@@ -915,19 +951,30 @@ async fn probe(url: &str, token: &str, timeout: Duration) -> bool {
         return false;
     };
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
-    let connect_target = connect_target_for(&parsed, port);
+    // `adapters/cyberdiner.py::check`'s own bare `except Exception:` --
+    // a proxy value this probe can't use counts as unreachable too, the
+    // same as any other connection-level failure, never a crash out of
+    // `check()`.
+    let Ok(connect_target) = connect_target_for(&parsed, port) else {
+        return false;
+    };
     let Ok(client) = http_client::build_client() else {
         return false;
     };
     let host_header = urllib_host_header(&parsed);
-    let headers = urllib_headers(
-        &host_header,
-        None,
-        &[("Authorization".to_string(), format!("Bearer {token}"))],
-    );
+    let mut extra_headers = vec![("Authorization".to_string(), format!("Bearer {token}"))];
+    extra_headers.extend(cyberdiner_proxy_headers(
+        &connect_target.proxy,
+        connect_target.scheme,
+    ));
+    let headers = urllib_headers(&host_header, None, &extra_headers);
+    let wire_target = match (&connect_target.proxy, connect_target.scheme) {
+        (Some(_), Scheme::Http) => format!("{}://{host_header}{}", parsed.scheme, parsed.target),
+        _ => parsed.target.clone(),
+    };
     let raw_request = RawRequest {
         method: "GET".to_string(),
-        target: parsed.target.clone(),
+        target: wire_target,
         headers,
         body: None,
     };
@@ -1011,6 +1058,31 @@ mod tests {
             "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
+    }
+
+    #[test]
+    fn urllib_host_header_brackets_an_ipv6_host_before_appending_a_port() {
+        // Issue #778: `ParsedUrl.host` is already bracket-stripped, so
+        // appending a port without putting the brackets back would be
+        // ambiguous (`::1:8080` isn't `::1` port `8080`).
+        let parsed = parse_url("http://[::1]:8080/x").unwrap();
+        assert_eq!(urllib_host_header(&parsed), "[::1]:8080");
+    }
+
+    #[test]
+    fn urllib_host_header_brackets_a_portless_ipv6_host_too() {
+        let parsed = parse_url("http://[::1]/x").unwrap();
+        assert_eq!(urllib_host_header(&parsed), "[::1]");
+    }
+
+    #[test]
+    fn netloc_for_proxy_round_trips_an_ipv6_host_through_split_netloc() {
+        // Issue #778: the whole point of bracketing in
+        // `urllib_host_header` -- `resolve_proxy_target`'s own
+        // `split_netloc` must read the same host back out, or a
+        // `no_proxy=::1` entry silently stops matching.
+        let parsed = parse_url("http://[::1]:8080/x").unwrap();
+        assert_eq!(netloc_for_proxy(&parsed), "[::1]:8080");
     }
 
     /// Accepts one connection per scripted response, in order -- a
@@ -1251,6 +1323,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_never_names_a_password_in_a_url_on_a_connection_failure() {
+        // `send_error`'s own `url` (what becomes `cyberdiner:
+        // request to {url} failed: ...`) is redacted the same way
+        // cof's `cyberdiner.py::_request` already redacts its own
+        // `display_url` (issue #778).
+        let addr = crate::test_support::closed_port();
+        let a = adapter(&format!("http://alice:s3cr3t@{addr}"));
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = a
+            .generate(
+                "cheap",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("alice"), "{}", err.message);
+        assert!(!err.message.contains("s3cr3t"), "{}", err.message);
+        assert!(
+            err.message.contains("cyberdiner: request to"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_never_names_a_password_hidden_behind_a_slash_on_a_connection_failure() {
+        // `urlsplit`'s own netloc for this ends at the first `/`, so it
+        // never sees the `@` that follows -- the rest of the password
+        // must still never reach the connection-failure message (issue
+        // #778).
+        let addr = crate::test_support::closed_port();
+        let a = adapter(&format!("http://{addr}/secret@elsewhere"));
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = a
+            .generate(
+                "cheap",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("secret"), "{}", err.message);
+        assert!(
+            err.message.contains("cyberdiner: request to"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
     async fn generate_requires_expo_url_and_token() {
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -1295,6 +1422,31 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("token not configured"));
+    }
+
+    #[tokio::test]
+    async fn generate_refuses_an_unsupported_expo_url_scheme_as_a_value_error() {
+        // Issue #778: a refused scheme/port is `ValueError` on both
+        // engines, matching cof's own `check_url` -- never the
+        // `RuntimeError` this module's own I/O-time failures raise.
+        let a = adapter("ftp://expo.example.test");
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = a
+            .generate(
+                "cheap",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "unsupported URL scheme 'ftp' in 'ftp://expo.example.test/beta/jobs': only http or \
+             https is supported"
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
     }
 
     #[tokio::test]

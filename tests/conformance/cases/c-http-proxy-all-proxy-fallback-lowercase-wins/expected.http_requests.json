@@ -1,0 +1,23 @@
+[
+  {
+    "method": "GET",
+    "path": "/fallback",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "example.invalid"
+      ]
+    ],
+    "body": "",
+    "absolute_form_target": "http://example.invalid/fallback"
+  }
+]

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from circuitry.adapters._retry import (
     RETRY_BACKOFF_CAP_MS,
     RetryInfo,
@@ -27,21 +29,119 @@ def test_cap_reply_text_truncates_and_notes_total_length() -> None:
     assert len(capped) < len(text)
 
 
+_FIXED_NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+
 def test_parse_retry_after_seconds_reads_a_bare_integer() -> None:
     assert parse_retry_after_seconds("30") == 30.0
 
 
-def test_parse_retry_after_seconds_reads_an_http_date() -> None:
-    future = datetime.now(timezone.utc) + timedelta(seconds=120)
-    http_date = future.strftime("%a, %d %b %Y %H:%M:%S GMT")
-    seconds = parse_retry_after_seconds(http_date)
-    assert seconds is not None
-    assert 115 <= seconds <= 125
+def test_parse_retry_after_seconds_reads_an_imf_fixdate() -> None:
+    http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) == 120.0
+
+
+def test_parse_retry_after_seconds_reads_an_rfc_850_date() -> None:
+    http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%A, %d-%b-%y %H:%M:%S GMT")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) == 120.0
+
+
+def test_parse_retry_after_seconds_reads_an_asctime_date() -> None:
+    http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%a %b %e %H:%M:%S %Y")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) == 120.0
+
+
+def test_parse_retry_after_seconds_floors_a_past_date_at_zero() -> None:
+    http_date = (_FIXED_NOW - timedelta(seconds=120)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) == 0.0
 
 
 def test_parse_retry_after_seconds_returns_none_for_garbage() -> None:
     assert parse_retry_after_seconds("not a date or a number") is None
     assert parse_retry_after_seconds("") is None
+
+
+def test_parse_retry_after_seconds_rejects_a_sign() -> None:
+    assert parse_retry_after_seconds("+30") is None
+    assert parse_retry_after_seconds("-30") is None
+
+
+def test_parse_retry_after_seconds_rejects_a_fraction() -> None:
+    assert parse_retry_after_seconds("1.5") is None
+
+
+def test_parse_retry_after_seconds_rejects_inf_and_nan() -> None:
+    assert parse_retry_after_seconds("inf") is None
+    assert parse_retry_after_seconds("Infinity") is None
+    assert parse_retry_after_seconds("nan") is None
+
+
+def test_parse_retry_after_seconds_rejects_digit_grouping() -> None:
+    assert parse_retry_after_seconds("1_000") is None
+
+
+def test_parse_retry_after_seconds_rejects_internal_whitespace() -> None:
+    assert parse_retry_after_seconds("1 2") is None
+    assert parse_retry_after_seconds("1\t2") is None
+
+
+def test_parse_retry_after_seconds_rejects_a_non_ascii_digit() -> None:
+    """``re.ASCII`` on every regex in this module (issue #778): without
+    it, ``\\d`` matches any Unicode decimal digit, Arabic-Indic ones
+    included, not only the ASCII ones RFC 9110's own grammar means.
+    """
+    assert parse_retry_after_seconds("١٢٠") is None
+    assert (
+        parse_retry_after_seconds(
+            "Sun, ٠٦ Nov 1994 08:49:37 GMT", now=_FIXED_NOW
+        )
+        is None
+    )
+
+
+def test_parse_retry_after_seconds_rejects_an_imf_fixdate_with_no_gmt() -> None:
+    """Issue #778: unlike ``email.utils.parsedate_to_datetime``, a
+    missing (or different) time zone is rejected outright, not
+    guessed at.
+    """
+    http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%a, %d %b %Y %H:%M:%S")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
+
+
+def test_parse_retry_after_seconds_rejects_an_rfc_850_date_with_utc_instead_of_gmt() -> None:
+    http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%A, %d-%b-%y %H:%M:%S UTC")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
+
+
+@pytest.mark.parametrize(
+    "http_date",
+    [
+        "Sun, 06 Nov 1994 08:49:37 +0000",
+        "06 Nov 1994 08:49:37 GMT",
+        "Sun, 6 Nov 1994 08:49:37 GMT",
+        "Sun, 06 Nov 94 08:49:37 GMT",
+        "Sun, 06 Nov 1994 08:49:37 EST",
+        "Sun Nov 6 08:49:37 1994",
+        "Mon, 06-Nov-94 08:49:37 GMT",
+    ],
+)
+def test_parse_retry_after_seconds_rejects_lenient_date_forms(http_date: str) -> None:
+    """Forms a looser parser (``email.utils.parsedate_to_datetime``, or
+    ``chrono::DateTime::parse_from_rfc2822`` on the Rust side) would
+    accept: a numeric zone, a missing weekday, a one-digit day with no
+    leading space, a two-digit year on an IMF-fixdate, ``EST`` instead
+    of ``GMT``, a single space before an asctime single-digit day, and
+    an IMF-fixdate's short weekday on an RFC 850 date (issue #778).
+    """
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
+
+
+def test_parse_retry_after_seconds_of_an_absurdly_long_digit_string_is_inf_not_a_crash() -> None:
+    """Issue #778: ``float()`` on 309+ ASCII
+    digits returns ``inf`` rather than raising -- this module must
+    never let that reach an ``int()`` conversion uncapped.
+    """
+    assert parse_retry_after_seconds("1" * 400) == float("inf")
 
 
 def test_next_backoff_delay_uses_retry_after_when_present() -> None:
@@ -51,6 +151,16 @@ def test_next_backoff_delay_uses_retry_after_when_present() -> None:
 
 def test_next_backoff_delay_caps_a_very_long_retry_after() -> None:
     info = RetryInfo(retryable=True, retry_after="999999")
+    assert next_backoff_delay_ms(info, attempt_index=0, base_ms=1000) == RETRY_BACKOFF_CAP_MS
+
+
+def test_next_backoff_delay_caps_an_inf_retry_after_without_an_overflowerror() -> None:
+    """Issue #778: a 309+ digit ``Retry-After``
+    makes ``parse_retry_after_seconds`` return ``inf`` -- capping must
+    happen before the ``int()`` conversion, or this raises
+    ``OverflowError`` instead of returning the cap.
+    """
+    info = RetryInfo(retryable=True, retry_after="1" * 400)
     assert next_backoff_delay_ms(info, attempt_index=0, base_ms=1000) == RETRY_BACKOFF_CAP_MS
 
 

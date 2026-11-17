@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #778 step 7 (no_proxy: '*' bypasses every host)",
+  "description": "`http_proxy` points at a closed port; `no_proxy: '*'` must bypass it for every host, including the mock server's own. Success here is only possible if the wildcard actually bypasses the proxy -- otherwise the request would be routed to the closed port and fail.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"],
+  "env": {"http_proxy": "http://127.0.0.1:1", "no_proxy": "*"}
+}

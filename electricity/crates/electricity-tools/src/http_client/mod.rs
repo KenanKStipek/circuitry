@@ -44,7 +44,7 @@
 
 mod proxy;
 
-pub use proxy::{getproxies_environment, proxy_bypass_environment};
+pub use proxy::{resolve_proxy_checked, resolve_proxy_checked_with_port};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Full};
@@ -67,7 +67,8 @@ pub enum Scheme {
 }
 
 /// Where a request actually connects -- the origin, or a proxy in
-/// front of it (urllib's own convention: [`proxy::resolve_proxy`]).
+/// front of it (Circuitry's own proxy convention, issue #778:
+/// [`proxy::resolve_proxy`]).
 #[derive(Debug, Clone)]
 pub struct ConnectTarget {
     pub scheme: Scheme,
@@ -1133,18 +1134,6 @@ pub fn redirect_policy(method: &str, status: u16) -> Option<RedirectRequest> {
         method: "GET".to_string(),
         drop_body: true,
     })
-}
-
-/// `urllib.request.getproxies_environment`/`proxy_bypass_environment`'s
-/// own composition (#448 decision 1) -- `None` when there's no proxy
-/// configured for *scheme* or `no_proxy` bypasses *host*. Reads the
-/// real process environment (`std::env::vars()`); every test that
-/// calls this (directly, or through [`crate::http::HttpPlugin`]) sets
-/// or clears every `*_proxy`/`*_PROXY`/`REQUEST_METHOD` variable
-/// explicitly first, per this lane's own environment-isolation rule.
-pub fn resolve_proxy(scheme: &str, host: &str) -> Option<String> {
-    let env: Vec<(String, String)> = std::env::vars().collect();
-    proxy::resolve_proxy(scheme, host, &env)
 }
 
 #[cfg(test)]

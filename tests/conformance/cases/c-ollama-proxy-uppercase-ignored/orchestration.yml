@@ -1,0 +1,6 @@
+name: c-ollama-proxy-uppercase-ignored
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

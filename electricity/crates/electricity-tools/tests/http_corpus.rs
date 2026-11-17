@@ -2,10 +2,11 @@
 //! `electricity/scripts/generate_http_corpus.py` -- real output from
 //! CPython's own `urllib.parse.urlencode`, `plugins/base.py::
 //! http_error_excerpt`, `bytes.decode("utf-8", "replace")`,
-//! `urllib.request.Request`'s own header/body/URL handling,
-//! `HTTPRedirectHandler.redirect_request`'s method/status matrix, and
-//! `urllib.request.getproxies_environment`/`proxy_bypass_environment`
-//! -- against this crate's own ports (issue #485).
+//! `urllib.request.Request`'s own header/body/URL handling, and
+//! `HTTPRedirectHandler.redirect_request`'s method/status matrix --
+//! against this crate's own ports (issue #485). The proxy convention is
+//! Circuitry's own now (issue #778 step 7), not CPython's, so it is no
+//! longer part of this differential corpus.
 //!
 //! The corpus is checked in (`tests/golden/http_corpus.json`); CI
 //! separately regenerates it with Python 3.11 and fails the build if
@@ -198,10 +199,6 @@ fn redirect_reason_cases_match_urllibs_own_text() {
     for case in corpus["redirect_reason_cases"].as_array().unwrap() {
         let expected = case["reason"].as_str().unwrap();
         let actual = match case["case"].as_str().unwrap() {
-            "disallowed_scheme" => electricity_tools::http::disallowed_redirect_scheme_reason(
-                "Found",
-                "javascript:alert(1)",
-            ),
             "max_repeats" | "max_redirections" => {
                 electricity_tools::http::redirect_loop_reason("Found")
             }
@@ -226,48 +223,6 @@ fn redirect_decision_cases_match_urllibs_own_matrix() {
                 Some(decision.method.as_str()),
                 expected_new_method,
                 "case: {case:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn proxy_env_cases_match_urllibs_own_convention() {
-    let corpus = load_corpus();
-    for case in corpus["proxy_env_cases"].as_array().unwrap() {
-        let env: Vec<(String, String)> = case["env"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|pair| {
-                (
-                    pair[0].as_str().unwrap().to_string(),
-                    pair[1].as_str().unwrap().to_string(),
-                )
-            })
-            .collect();
-        let proxies = http_client::getproxies_environment(&env);
-        let proxies_map: std::collections::BTreeMap<String, String> = proxies.into_iter().collect();
-        let expected_proxies: std::collections::BTreeMap<String, String> = case["proxies"]
-            .as_object()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
-            .collect();
-        assert_eq!(proxies_map, expected_proxies, "case: {case:?}");
-
-        for (host, expected_bypass) in case["bypass"].as_object().unwrap() {
-            let bypassed = http_client::proxy_bypass_environment(
-                &proxies_map
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<Vec<_>>(),
-                host,
-            );
-            assert_eq!(
-                bypassed,
-                expected_bypass.as_bool().unwrap(),
-                "host {host} in case: {case:?}"
             );
         }
     }
