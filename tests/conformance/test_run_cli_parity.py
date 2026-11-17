@@ -854,6 +854,119 @@ def test_resume_last_resumes_the_same_state_regardless_of_which_engine_wrote_or_
     assert resumed_state["prime"]["step1"]["value"] == step1_uuid
 
 
+#: `tests/conformance/cases/c778-bare-restart-and-saved-state`'s own
+#: orchestration, python-only there (the harness's legacy positional
+#: form has no `--state` of its own, #752's precedent) -- covered here
+#: on both engines' own `run` subcommand instead. A `resume: restart`
+#: dynamic `d` drops its stale `x`/`reader` and reruns, so a bare
+#: `{{d.x.value}}` inside `d` reads the fresh node, same as
+#: `{{prime.d.x.value}}`; a plain dynamic `e`'s unfinished `first`
+#: reruns and reads its already-completed, saved sibling `second`
+#: bare, same as dotted.
+BARE_RESTART_AND_SAVED_STATE_ORCHESTRATION = (
+    "name: c778-bare-restart-and-saved-state\n"
+    "effects:\n"
+    "  - type: dynamic\n"
+    "    name: d\n"
+    "    resume: restart\n"
+    "    effects:\n"
+    "      - type: tool\n"
+    "        name: x\n"
+    "        provider: json\n"
+    "        params: {mode: stringify, input: {marker: \"new-x\"}}\n"
+    "      - type: tool\n"
+    "        name: reader\n"
+    "        provider: json\n"
+    "        params:\n"
+    "          mode: stringify\n"
+    "          input:\n"
+    "            bare: \"{{d.x.value}}\"\n"
+    "            dotted: \"{{prime.d.x.value}}\"\n"
+    "  - type: dynamic\n"
+    "    name: e\n"
+    "    flow: chain\n"
+    "    effects:\n"
+    "      - type: tool\n"
+    "        name: first\n"
+    "        provider: json\n"
+    "        params:\n"
+    "          mode: stringify\n"
+    "          input:\n"
+    "            bare: \"{{second.value}}\"\n"
+    "            dotted: \"{{prime.e.second.value}}\"\n"
+    "      - type: tool\n"
+    "        name: second\n"
+    "        provider: json\n"
+    "        params: {mode: stringify, input: {marker: \"unused-this-run\"}}\n"
+)
+
+BARE_RESTART_AND_SAVED_STATE_SEED = (
+    "{\n"
+    '  "input": {},\n'
+    '  "prime": {\n'
+    '    "d": {\n'
+    '      "value": null,\n'
+    '      "meta": {"completed_at": null, "error": null},\n'
+    '      "x": {"value": "stale-x", "meta": {"completed_at": "2026-01-01T00:00:00Z", "error": null}},\n'
+    '      "reader": {"value": "stale-reader", "meta": {"completed_at": "2026-01-01T00:00:00Z", "error": null}}\n'
+    "    },\n"
+    '    "e": {\n'
+    '      "value": null,\n'
+    '      "meta": {"completed_at": null, "error": null},\n'
+    '      "first": {"value": null, "meta": {"completed_at": null, "error": null}},\n'
+    '      "second": {"value": "SEEDED-SECOND", "meta": {"completed_at": "2026-01-01T00:00:00Z", "error": null}}\n'
+    "    }\n"
+    "  }\n"
+    "}\n"
+)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_bare_restart_and_saved_state_reference_resolves_the_same_as_dotted_via_state(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    """Port of `tests/conformance/cases/c778-bare-restart-and-saved-
+    state` onto both engines' own `run` subcommand, through `--state`
+    (the conformance harness's own legacy positional form has none).
+    """
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "orchestration.yml").write_text(
+        BARE_RESTART_AND_SAVED_STATE_ORCHESTRATION, encoding="utf-8"
+    )
+    (case_dir / "config.json").write_text("{}", encoding="utf-8")
+    seed_path = case_dir / "seed.json"
+    seed_path.write_text(BARE_RESTART_AND_SAVED_STATE_SEED, encoding="utf-8")
+
+    out_path = case_dir / "out.json"
+    result = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        [
+            "orchestration.yml", "--config", "config.json",
+            "--state", str(seed_path), "--resume", "last", "--force",
+            "--out", str(out_path),
+        ],
+    )
+    assert result.returncode == 0, (engine, result.stdout, result.stderr)
+    state = json.loads(out_path.read_text(encoding="utf-8"))
+
+    d = state["prime"]["d"]
+    assert json.loads(d["x"]["value"]) == {"marker": "new-x"}
+    # `{{d.x.value}}`/`{{prime.d.x.value}}` HTML-escape the rendered
+    # JSON text (Mustache's default escaping, e.g. `"` -> `&quot;`) --
+    # compared as raw text here, not re-parsed as JSON.
+    reader_value = json.loads(d["reader"]["value"])
+    assert reader_value["bare"] == reader_value["dotted"]
+    assert "new-x" in reader_value["bare"]
+
+    e = state["prime"]["e"]
+    assert json.loads(e["second"]["value"]) == {"marker": "unused-this-run"}
+    first_value = json.loads(e["first"]["value"])
+    assert first_value["bare"] == first_value["dotted"] == "SEEDED-SECOND"
+
+
 def _last_refusal_error(result: subprocess.CompletedProcess[str]) -> str:
     """The refusal text from either engine's own `--last`/`--resume last`
     stdout -- cof prints a plain `Error: <message>` line (`console.print`,
