@@ -162,7 +162,7 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     handler. Guard against that case and kill just the child instead.
 
     ``PermissionError`` is ignored the same as ``ProcessLookupError``
-    (#385 round 3, cause confirmed by the #385 review's own probe): once
+    (#385): once
     this call's own ``killpg`` has killed the group's last live member,
     that member is a zombie until something actually ``wait()``s on it
     (:func:`_communicate_promptly`/``run_tracked``'s own cleanup, which
@@ -206,7 +206,7 @@ def _isolated_pgid(
 ) -> int | None:
     """*proc*'s own process-group id, only when it is isolated in one of
     its own -- i.e. exactly the case :func:`kill_process_group` itself
-    already treats as safe to ``killpg`` -- else ``None`` (#385 round 3).
+    already treats as safe to ``killpg`` -- else ``None`` (#385).
 
     Captured once, right after ``Popen``, by :func:`run_tracked`: a pgid
     can never be reused while any process in it is still alive, so this
@@ -231,7 +231,7 @@ def _repeat_group_kill(pgid: int | None) -> bool:
     (the whole group is already gone) and ``PermissionError`` (the
     group's last live member is now a zombie nothing has reaped yet --
     see :func:`kill_process_group`'s own docstring for why that, not
-    pgid reuse, is what actually raises it here) (#385 round 3).
+    pgid reuse, is what actually raises it here) (#385).
 
     A real production race, not just a quirk of this suite's own test
     scripts: ``bash -c "a; b"`` forks a *child* process to run a non-tail
@@ -1593,7 +1593,7 @@ def run_tracked(
     # can never be reused while any member of it is still alive, so
     # this stays valid through every repeat kill below, including one
     # needed because of a process this same pgid's own leader forked
-    # after this (#385 round 3, see _repeat_group_kill's own docstring).
+    # after this (#385, see _repeat_group_kill's own docstring).
     pgid = _isolated_pgid(proc)
     # A plain local in `_communicate_promptly` itself would be lost the
     # moment an exception unwinds through it -- this list is how it
