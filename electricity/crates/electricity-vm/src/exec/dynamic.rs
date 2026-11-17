@@ -23,7 +23,8 @@
 //! inherited chain into one `Frozen` entry before dispatch, matching
 //! that one-time snapshot exactly -- nothing else can mutate any of a
 //! tree's own ancestors while its isolated branches run. `exec::
-//! conditional`'s own `if` branch overlay (Quirk Q1's `scope_ctx`) is
+//! conditional`'s own `if` branch overlay (runtime-semantics §2.4's
+//! `scope_ctx`) is
 //! *not* a second `Frozen` case, even though it is also rebuilt once
 //! per branch step: a branch's own later step can still create a
 //! container nested further under an ancestor the overlay already
@@ -87,16 +88,17 @@ fn region_effect_names(
 /// Runs *op* -- the document root, or a nested `dynamic` -- against
 /// *store*, writing its own node under *parent* at `op.name` (always
 /// `Some`: an unnamed `dynamic` cannot be compiled, unlike an unnamed
-/// `if`/`loop`). *ctx_chain* is Quirk Q1's `ctx_override` parameter
-/// (`core/dynamic.py::DynamicRuntime.execute`), not yet materialized:
-/// empty for "no override" (the document root, or an ordinary dynamic
-/// nested directly in a chain/tree with no enclosing scope overlay), or
-/// carrying the enclosing `if` branch's own overlaid ctx as a single
-/// [`CtxSource::Frozen`] entry for a dynamic nested inside one
-/// (DESIGN.md §6.3's own re-merge quirk) -- this dynamic's own children
-/// always get *ctx_chain* extended with one more [`CtxSource::Live`]
-/// entry for *parent* (never collapsed into a `Value` here: see this
-/// module's own doc comment on why that has to stay live).
+/// `if`/`loop`). *ctx_chain* is `core/dynamic.py::DynamicRuntime.execute`'s
+/// own `ctx_override` parameter, not yet materialized: empty for "no
+/// override" (the document root, or an ordinary dynamic nested directly
+/// in a chain/tree with no enclosing scope overlay), or carrying the
+/// enclosing `if` branch's own overlaid ctx as a single
+/// [`CtxSource::Frozen`] entry for a dynamic nested inside one -- this
+/// dynamic's own children always get *ctx_chain* extended with one more
+/// [`CtxSource::Live`] entry for *parent*, its own self-alias (DESIGN.md
+/// §6.3) widening the chain by exactly one flat key, never collapsed
+/// into a `Value` here: see this module's own doc comment on why that
+/// has to stay live.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_dynamic<'a>(
     op: &'a Op,
@@ -208,8 +210,7 @@ pub(crate) fn execute_dynamic<'a>(
         //   siblings`'s own `{{wrap.inner_first.value}}`) -- pushing
         //   `Live(parent.clone())` here instead would flatten every one
         //   of this dynamic's own *siblings* in as bare top-level names
-        //   too (68bbf17's own finding, mirrored here for #778): a
-        //   nested dynamic's own child would then outrank the new
+        //   too: a nested dynamic's own child would then outrank the new
         //   bare-sibling-reference fallback (this function's own
         //   `scoped_frame`, above) for any name it shares with one of
         //   those siblings, exactly backwards from nearest-wins. A

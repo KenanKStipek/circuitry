@@ -175,7 +175,7 @@ fn write_conditional_meta_start(
 /// evaluate_model_condition`), selects exactly one of
 /// *then_*/*else_*, and runs that branch's own effects in order against
 /// *branch_parent*, rebuilding the within-branch scope overlay
-/// (`scope_ctx`/`local_writes`, Quirk Q1) after each one. *named* is
+/// (`scope_ctx`/`local_writes`, runtime-semantics §2.4) after each one. *named* is
 /// `Some((value_node, meta_node))` for a named `if`, `None` for an
 /// unnamed (transparent) one -- every `meta`/`value` write below is a
 /// no-op when it is `None`, exactly mirroring Python's own `if node:`/

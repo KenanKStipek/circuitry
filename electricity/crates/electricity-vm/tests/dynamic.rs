@@ -932,7 +932,7 @@ async fn a_deeply_nested_dynamics_own_if_sees_an_earlier_siblings_write_through_
     // its own anywhere in between) runs an empty dynamic `first`, then a
     // named `if` whose condition reads that write back through the
     // fully-qualified `prime.d.first.value` path -- the same path shape
-    // DESIGN.md §2.4's own Quirk Q1 paragraph promises resolves for an
+    // runtime-semantics §2.4 promises resolves for an
     // ordinary (non-overlay) `dynamic`, because Python's own `ctx` is
     // never actually a frozen copy, however many `dynamic` levels the
     // override was handed down through.

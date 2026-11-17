@@ -391,9 +391,9 @@ impl std::error::Error for VmError {}
 /// `prime`, DESIGN.md's own "document root as a non-overlay `dynamic`"
 /// convention, issue #431's Scope section) -- so running it is exactly
 /// [`exec::dynamic::execute_dynamic`] against *store*'s own root node,
-/// with no `ctx` override of its own (*ctx* is Quirk Q1's `ctx_override`
-/// parameter here, not a pre-resolved rendering context -- see that
-/// function's own doc comment). [`exec::dynamic::execute_dynamic`] itself
+/// with no `ctx` override of its own (*ctx* is `execute_dynamic`'s own
+/// `ctx_override` parameter here, not a pre-resolved rendering context --
+/// see that function's own doc comment). [`exec::dynamic::execute_dynamic`] itself
 /// takes that override as an [`exec::CtxChain`], not yet materialized
 /// (so a reference several `dynamic` levels deep can still re-snapshot
 /// every ancestor fresh instead of reading a frozen `Value`) -- *ctx*

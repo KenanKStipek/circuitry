@@ -164,7 +164,7 @@ fn stdout_json_mode() -> electricity_json::WriteMode {
 /// JSON object key becomes a plain string there, so two dict entries
 /// whose *text* is the same (the bool `true` beside the string `"true"`)
 /// collapse into one entry, at the first one's position, holding the
-/// last one's value (issue #778's own report: cof's console does this
+/// last one's value (cof's console does this
 /// on stdout, never on `--out`'s own file, which keeps both --
 /// [`render_state`] never calls [`collapse_duplicate_text_keys`]).
 pub fn render_state_for_stdout(

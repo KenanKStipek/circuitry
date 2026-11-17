@@ -202,7 +202,7 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 
 /// The `ctx` a container's own children render/evaluate against --
 /// `ctx = store.state if ctx_override is None else {**ctx_override,
-/// **store.state}` (`core/dynamic.py::DynamicRuntime.execute`), where
+/// self.defn.name: dyn}` (`core/dynamic.py::DynamicRuntime.execute`), where
 /// *live* is this call's own fresh [`crate::Store::snapshot`] of
 /// *store.state*'s Rust counterpart (recomputed by the caller
 /// immediately before every use, never cached, so a chain's later
@@ -222,7 +222,7 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 /// its own isolated store until the merge), so there is nothing further
 /// for a `Frozen` entry to miss.
 ///
-/// An `if` branch's own per-step `scope_ctx` overlay (Quirk Q1) is
+/// An `if` branch's own per-step `scope_ctx` overlay (runtime-semantics §2.4) is
 /// *not* a second `Frozen` case, even though it is also rebuilt fresh
 /// from the branch's own *unmodified* starting chain on every single
 /// step (never from the previous step's own overlay, exactly as
@@ -253,11 +253,13 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 /// while this overlay is in use.
 ///
 /// Either way, Python's own `ctx = store.state if ctx_override is None
-/// else {**ctx_override, **store.state}` never actually copies a nested
-/// dict -- the dict literal/spread only ever touches the *top* level,
-/// so every nested value (in particular `ctx["prime"]`, however many
-/// `dynamic` levels up it came from) is the exact same live object
-/// `store.state` itself mutates -- so a Rust `Value`, once cloned out of
+/// else {**ctx_override, self.defn.name: dyn}` never actually copies a
+/// nested dict -- the dict literal/spread only ever touches the *top*
+/// level, so every nested value `ctx_override` already carried
+/// (including `ctx["prime"]`, however many `dynamic` levels up it came
+/// from) is the exact same live object `store.state` itself mutates, and
+/// the one key added on top (`self.defn.name: dyn`) is itself a live
+/// reference, never a copy -- so a Rust `Value`, once cloned out of
 /// a [`Store::snapshot`], can never reproduce that by staying put: it
 /// has to be rebuilt from the *live* [`NodeRef`] chain (or, for the
 /// overlay, a detached one sharing the same live `Slot`s) at the moment

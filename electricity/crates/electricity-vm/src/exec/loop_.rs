@@ -1012,7 +1012,7 @@ fn build_pass_chain(
 
 /// `core.scope.scope_ctx` -- `{**ctx, **local}`, with *local* also
 /// merged one level inside `ctx["prime"]` -- the within-pass overlay a
-/// body step's own later sibling sees (Quirk Q1), rebuilt fresh from
+/// body step's own later sibling sees (runtime-semantics §2.4), rebuilt fresh from
 /// *pass_chain* (never from the previous step's own overlay) after
 /// every single step. Same shape as `exec::conditional::build_overlay`,
 /// duplicated here for the same reason as [`chain_slots`].
