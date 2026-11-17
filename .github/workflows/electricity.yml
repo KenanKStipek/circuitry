@@ -66,9 +66,9 @@ jobs:
         # mid-run `--live-state` watcher, so both need a real OS on
         # both CI runners this matrix already covers (issue #431's
         # acceptance criteria; PR #441). `signals_loop`
-        # (#461) is the `loop`-flavoured twin of `signals`'s own
-        # cases, in its own file rather than extending `signals.rs`, which
-        # already covers the plain-dynamic cases.
+        # (issue #461) is the `loop`-flavoured twin of `signals`'s own
+        # cases, in its own file alongside `signals.rs`
+        # (see electricity/docs/spec/vm-lanes.md).
         # `leftover_export` (issue #478) adds its own
         # `test-tools`-gated, content-bearing exit 0/1 cases here; the
         # three signal-exit cases (130/143/129) and the second-signal
