@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lane B's `difflib` corpus: `core.document_check._near_miss` (which wraps
+"""The `difflib` corpus: `core.document_check._near_miss` (which wraps
 `difflib.get_close_matches`, cutoff 0.8, plus the `_MISTAKEN_FOR` table) on
 a handful of probe words against Circuitry's own real known-key sets --
 not a hand-typed value, so a future change to a known-key set or to the
@@ -19,7 +19,7 @@ exists only to pin that a long word still produces *no* match rather than
 to exercise autojunk itself--, a word that scores exactly at the edge of
 the cutoff, and a word scoring just under it.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI). Usage: python3 generate_compiler_difflib_corpus.py [--check]
 """
 

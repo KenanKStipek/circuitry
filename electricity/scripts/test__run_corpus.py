@@ -3,7 +3,7 @@
 same as `_run_corpus.py`; run directly, e.g. `pytest
 electricity/scripts/test__run_corpus.py`).
 
-The review of PR #432 asked for proof that
+PR #432 asked for proof that
 `canonical_event_order`'s narrow, branch-region-only reordering cannot
 hide a genuinely broken event stream: a chain (no concurrent `dynamic`
 at all) keeps its real emission order byte for byte, so any corruption

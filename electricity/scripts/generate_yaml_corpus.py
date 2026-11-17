@@ -24,7 +24,7 @@ truth electricity-yaml's composer must match (DESIGN.md §3.2, issue #376):
   third-party text only has to fail at the same place with a non-empty
   message, never the same words).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI). Usage: python3 generate_yaml_corpus.py [--check]
 """
 
@@ -668,12 +668,12 @@ def duplicate_key_cases() -> list[dict]:
         # the single-document check runs once the *whole* tree is
         # composed, before anything in it (including this duplicate) is
         # ever constructed -- so a second document after it is the error
-        # that's reported, not the duplicate `a` (first review)
+        # that's reported, not the duplicate `a`
         "a: 1\na: 2\n---\nb: 1\n",
         # a *parser* error (an unclosed flow sequence for `c`) after an
         # already-composed duplicate key never gets a chance to surface:
         # the whole document must compose cleanly before any mapping's
-        # own duplicate-key check ever runs (first review)
+        # own duplicate-key check ever runs
         "a:\n  b: 1\n  b: 2\nc: [\n",
     ]
     return [case(y) for y in yaml_texts]

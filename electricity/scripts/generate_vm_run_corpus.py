@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke golden run corpus for the M0-H VM (issue #431's Test strategy
-section, lane A's own scaffold -- later lanes add the full acceptance-
-criteria corpus through their own `generate_*_run_corpus.py`, reusing
+section -- the full acceptance-criteria corpus is added separately,
+through each `generate_*_run_corpus.py`, reusing
 `_run_corpus.py`).
 
 Four synthetic cases, each run through a real `cof run --out --events
@@ -12,7 +12,7 @@ Four synthetic cases, each run through a real `cof run --out --events
 - a tree `dynamic` with two parallel `json`-tool children;
 - a failure: a `json` `parse` call given a non-string input.
 
-Must be run with Python 3.11 (the lane venv locally;
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally;
 `actions/setup-python` 3.11 in CI). Usage:
     python3 generate_vm_run_corpus.py [--check]
 """

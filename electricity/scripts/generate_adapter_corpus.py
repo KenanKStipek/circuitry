@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A differential corpus for lane F2's real LLM provider adapters
+"""A differential corpus for the real LLM provider adapters
 (issue #503), covering the pure functions and transport-outcome
 decision tables electricity's port has to match exactly:
 
@@ -16,7 +16,7 @@ decision tables electricity's port has to match exactly:
   `curl_failure_message`, and `run_curl`'s own control-character and
   `--config`-size checks).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI, per every other `generate_*.py`). Usage:
 
     python3 generate_adapter_corpus.py [--check]

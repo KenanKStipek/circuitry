@@ -18,7 +18,7 @@ accepts it and, when it does not, every violation:
 
 Documents are synthetic, hand-written against the schema/design, not drawn
 from any real orchestration. Must be run with the Circuitry package
-installed in the active interpreter (the lane venv locally; `pip install -e
+installed in the active interpreter (this repo's own pinned virtualenv locally; `pip install -e
 .` in CI) so the schema and the ``jsonschema`` version are Circuitry's own.
 Usage: python3 generate_schema_corpus.py [--check]
 """

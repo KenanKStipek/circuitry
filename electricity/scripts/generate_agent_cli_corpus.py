@@ -15,7 +15,7 @@ functions' own answer:
 - `adapters._agent_cli.check_binary`'s own text (part B);
 - `adapters.factory._string_list`'s own `ValueError` text (part B).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI), with Circuitry installed (`pip install -e . -c
 electricity/scripts/generator-constraints.txt`, as CI does).
 

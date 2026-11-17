@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane L2a of issue #448 (#521):
+"""Generate the golden corpus for issue #448 (#521):
 `electricity-vm::decompose`'s pure helpers, by actually running
 Circuitry's own real functions in `core/decompose.py`.
 
@@ -12,7 +12,7 @@ missing-result sections need no patch at all -- a cycle is detected
 the missing-result case runs a real, tiny `tool`/`json` orchestration
 end to end (no model call, so no adapter is ever actually invoked).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`).
 Usage: python3 generate_decompose_corpus.py [--check]
 """
@@ -641,12 +641,12 @@ def build_failure_cases() -> list[dict[str, Any]]:
 def build_max_depth_and_success_cases() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """`maybe_decompose`'s own two inline record constructions (`:195-203`,
     `:259-263`), reached by actually running the real function end to end
-    (PR #524's review: these were re-typed dict expressions
+    (PR #524: these were re-typed dict expressions
     before, never the real function's own output) -- the depth ceiling
     (`_run_planner`/`_execute_plan` never even called, since the ceiling is
     checked first) and a full plan/validate/execute pass with
-    `_run_planner`/`_execute_plan` patched, the way the review's own fix
-    suggests, the real `_validate_plan` still in the loop in between."""
+    `_run_planner`/`_execute_plan` patched, the way PR #524's own fix
+    does, the real `_validate_plan` still in the loop in between."""
 
     def run(
         *,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """electricity-config's golden corpus (issue #431's Test strategy
-section, lane D1): ``resolve_config``'s defaults/deep-merge/env-overlay
+section): ``resolve_config``'s defaults/deep-merge/env-overlay
 port, every one of its own error texts, ``_merge_runtime``'s ceiling
 re-intersection, and ``resolve_effective_settings``'s ``sources`` order
 and warnings -- each generated from Circuitry's own real functions
@@ -16,7 +16,7 @@ every text field is checked for -- and has -- that directory's own path
 replaced with the literal ``<root>`` before being written out, so the
 committed corpus carries no local path.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI, same as every other generator in this directory). Usage:
     python3 generate_config_corpus.py [--check]
 """

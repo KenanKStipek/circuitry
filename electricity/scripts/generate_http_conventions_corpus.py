@@ -8,7 +8,7 @@ so this corpus runs cof's own functions directly and lets electricity
 replay the result, rather than comparing either engine against a
 third-party reference.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI, per every other `generate_*.py`). Usage:
 
     python3 generate_http_conventions_corpus.py [--check]

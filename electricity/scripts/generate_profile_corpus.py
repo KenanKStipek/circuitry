@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate electricity-compiler's golden corpus for profile loading and
-validation (lane M1-J1, issue #488) from Circuitry's own real functions:
+validation (issue #488) from Circuitry's own real functions:
 ``cli/profiles.py``'s ``parse_profile_document``, ``_validate_effect_
 paths``, ``collect_orchestration_effect_paths``/``collect_orchestration_
 condition_paths``, ``condition_target_message``, ``validate_profile_
@@ -28,7 +28,7 @@ exception class and text, with the generator's own temporary profile
 path replaced by the literal placeholder `{path}` -- the Rust replay
 substitutes its own path at the same position before comparing.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`, as CI does).
 Usage: python3 generate_profile_corpus.py [--check]
 """
@@ -283,7 +283,7 @@ def routing_pins_case_via_resolve(
 ) -> dict[str, Any]:
     """Like :func:`routing_pins_case`, but *routing* comes from a synthetic
     ``runtime.complexity`` block run through ``resolve_complexity_settings`` --
-    the real path the run wiring (lane R) takes, rather than a
+    the real path the run wiring takes, rather than a
     hand-built `RoutingSettings`."""
     settings = resolve_complexity_settings({"complexity": complexity_block})
     return _routing_pins_case_with(

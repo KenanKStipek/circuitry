@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden run corpus for lane C of issue #431's own `execute_tool`
+"""Golden run corpus for issue #431's own `execute_tool`
 (`electricity-vm::exec::tool`), built on `_run_corpus.py` the same way
 `generate_vm_run_corpus.py` is -- every case is a real `cof run --out
 --events --live-state`, not a hand-typed literal.
@@ -7,14 +7,14 @@
 This is a *document*-level corpus: every case's own root is a `dynamic`
 chain (Circuitry's own implicit `prime` container), so comparing a
 case's own `--out`/`--events` against `electricity::run_orchestration`
-needs lane B2's real `exec::dynamic` chain executor, not just this
-lane's own `execute_tool` -- `tests/tool_run_corpus.rs`'s own comparison
+needs the real `exec::dynamic` chain executor, not just
+`execute_tool` -- `tests/tool_run_corpus.rs`'s own comparison
 tests are `#[ignore = "needs lane B2"]` for exactly that reason (issue
 #431's own Lanes note: "whichever of B2/C merges second removes the
 markers and makes them pass exactly"). Generating this corpus itself has
 no such dependency: it only runs the real Python CLI.
 
-Two of the review's own gaps on the function-level corpus
+Two gaps in the function-level corpus
 (`generate_tool_execute_corpus.py`) have no document-level equivalent
 here and are deliberately not duplicated:
 
@@ -32,7 +32,7 @@ here and are deliberately not duplicated:
   (a mock plugin) is the only way to exercise `execute_tool`'s own
   wiring for it at all.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI). Usage: python3 generate_tool_run_corpus.py [--check]
 """
 

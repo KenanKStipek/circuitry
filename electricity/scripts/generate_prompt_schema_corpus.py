@@ -255,10 +255,10 @@ def cases() -> list[dict]:
         _case('probe_schema3_c9', {'enum': [{'b': 1, 'a': 2}]}, {'c': 3}),
         _case('probe_schema3_c10', {'type': 'integer'}, 1180591620717411303424),
         _case('probe_schema3_c11', {'type': 'array', 'items': {'type': 'object', 'properties': {'n': {'type': 'integer'}, 'm': {'type': 'string'}}, 'required': ['n']}}, [{'m': 1}, {'n': 'x'}]),
-        # Follow-up (round 2): valid-side cases where the
+        # Follow-up: valid-side cases where the
         # `jsonschema` Rust crate and real Python disagree -- the engine
-        # must be the one deciding "valid" here, never the crate (ruling
-        # R6): an integral, finite float satisfies `type: integer`
+        # must be the one deciding "valid" here, never the crate: an
+        # integral, finite float satisfies `type: integer`
         # (Draft 6+'s own widened checker); a combining mark alone never
         # satisfies `\w`; an Arabic-Indic digit satisfies `\d`; `NaN`/
         # `Infinity` satisfy `type: number` (both real Python floats);

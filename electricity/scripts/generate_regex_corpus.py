@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane D2 of issue #448 (#479):
+"""Generate the golden corpus for issue #448 (#479):
 `electricity-tools::regex`'s translation layer and `RegexPlugin` port,
 by actually running Circuitry's own real plugin
 (`plugins/regex.py::RegexPlugin`).
@@ -12,7 +12,7 @@ membership; anchors (`^`/`$`/`\\A`/`\\Z`) with and without MULTILINE;
 `match` result shapes. Lookarounds, VERBOSE and IGNORECASE corners come
 after these, with lighter coverage.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI, same as every other `generate_*_corpus.py`).
 
 Usage: python3 generate_regex_corpus.py [--check]
@@ -75,7 +75,7 @@ def regex_case(name: str, params: dict[str, Any]) -> dict:
         # A third-party-library-shaped message (CPython's own `re.error`,
         # wrapped with electricity's `regex: invalid pattern: ` prefix or
         # not -- a `sub` template error) is compared only by *location*
-        # (issue #479's ruling 3), never byte for byte; `exc.__cause__`
+        # (issue #479), never byte for byte; `exc.__cause__`
         # covers `raise ... from exc` (the plugin's own pattern-compile
         # wrapping), since `isinstance` on the wrapping `ValueError`
         # itself would otherwise miss it.

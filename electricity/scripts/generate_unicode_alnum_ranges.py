@@ -23,7 +23,7 @@ generated, checked-in Rust source.
 
 Must be run with the same Python version/Unicode Character Database version
 used to generate the golden corpus (see generate_value_corpus.py) -- CI and
-the lane venv both pin Python 3.11.
+this repo's own pinned virtualenv both pin Python 3.11.
 
 Usage: python3 generate_unicode_alnum_ranges.py [--check]
 Writes: crates/electricity-tools/src/generated/unicode_alnum_ranges.rs

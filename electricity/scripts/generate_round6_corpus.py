@@ -2,7 +2,7 @@
 """A differential corpus for ``electricity_value::pycompat::round6``.
 
 ``round(x, 6)`` is CPython's own correctly-rounded, half-even-on-the-exact-
-binary-value float rounding (issue #449's gate lane, item 10) -- this
+binary-value float rounding (issue #449) -- this
 generator asks CPython itself for the right answer on a mix of edge cases
 and random floats (both "ordinary" magnitudes and raw random bit patterns),
 so the Rust port is checked against the real builtin, not a re-derivation of

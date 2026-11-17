@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane L2a of issue #448 (#521):
+"""Generate the golden corpus for issue #448 (#521):
 `electricity-tools::validate_yaml`, a close port of
 `plugins/validate_yaml.py::ValidateYamlPlugin`, by actually running
 that real plugin against synthetic params.
@@ -12,7 +12,7 @@ JSON-Schema violation is third-party text (DESIGN.md §1, §12): recorded
 schema error's own `"<location>: "`), never its full wording -- the
 Rust side only checks the prefix matches and the rest is non-empty.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`).
 Usage: python3 generate_validate_yaml_corpus.py [--check]
 """

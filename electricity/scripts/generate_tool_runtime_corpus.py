@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpora for lane C of issue #431 (electricity-tools'
+"""Generate the golden corpora for issue #431 (electricity-tools'
 `json` tool and electricity-redaction's `redact`/`cap_raw`) from Circuitry's
 own real functions (`plugins/json.py::JsonPlugin`, `cli/redaction.py::redact`).
 
@@ -19,7 +19,7 @@ preview -- `encoded[:_RAW_META_MAX_BYTES].decode("utf-8", errors="ignore")`
 -- against hand-built byte strings that straddle the cut with a multi-byte
 codepoint, which is the real behaviour under test.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI). Usage: python3 generate_tool_runtime_corpus.py [--check]
 """
 

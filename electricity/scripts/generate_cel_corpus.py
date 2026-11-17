@@ -26,7 +26,7 @@ sourced from `cel-python`/`lark` itself only has to fail at the same
 place with a non-empty message (DESIGN.md §1, §12), so those cases carry
 no expected text at all, just "this must raise".
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (this repo's own pinned virtualenv locally; `actions/setup-python`
 3.11 in CI). Usage: python3 generate_cel_corpus.py [--check]
 """
 
@@ -628,10 +628,10 @@ def build_corpus() -> list[dict]:
         condition("state.x in ['a', 'b']", {"x": 1}),
     ]
 
-    # --- re-review of #379: exact message text, more
+    # --- issue #379: exact message text, more
     # characters. `{expr!r}` (Python's `repr()`) switches outer quote and
-    # escapes based on content; each of these exercises a character the
-    # first fix pass's probe (a bare `'`) didn't.
+    # escapes based on content; each of these exercises a character
+    # the original bare `'` case didn't.
     cases += [
         condition(
             "state.prime.tick.value == \"it's open\"",
@@ -737,11 +737,11 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- third review of #379: `in` must decide `false` on a
+    # --- issue #379: `in` must decide `false` on a
     # type mismatch that doesn't actually raise in celpy (a plain Python
     # `==` resolving through the two-sided `NotImplemented` fallback),
-    # not raise on every mismatch -- a regression the second fix pass
-    # introduced trying to fix the case below.
+    # not raise on every mismatch -- a regression an earlier fix for the
+    # case below introduced.
     cases += [
         condition("'b' in state.tags", {"tags": ["a", None]}),
         # YAML 1.1 reads a bare `yes`/`no` as a `bool`.
@@ -786,12 +786,12 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- third review of #379: `paths::project` must not
+    # --- issue #379: `paths::project` must not
     # corrupt a `NaN` leaf a longer, `has()`-guarded path extends past it
     # -- comparing the freshly read and already-placed values for
     # equality to decide whether to keep descending is itself `false` for
-    # `NaN` (`NaN != NaN`), which silently re-broke the P0 the second fix
-    # pass had already fixed for every other value.
+    # `NaN` (`NaN != NaN`), which silently reintroduced the bug already
+    # fixed for every other value.
     cases += [
         condition(
             "has(state.a.n.x) || state.a.n > 0.0",
