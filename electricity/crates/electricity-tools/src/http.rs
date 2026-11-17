@@ -1,6 +1,6 @@
 //! `plugins/http.py::HttpPlugin`, ported -- a single HTTP request/
 //! response over the shared client ([`crate::http_client`]), with
-//! urllib's own redirect rule and error shapes (issue #485, lane E).
+//! urllib's own redirect rule and error shapes (issue #485).
 //! The proxy convention is Circuitry's own now (issue #778), not
 //! urllib's (`http_client::resolve_proxy`/`resolve_proxy_target`
 //! below). See [`http_url`] for the small `urllib.parse` subset

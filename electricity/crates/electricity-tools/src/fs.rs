@@ -480,9 +480,9 @@ fn encode_single_byte(codec: Codec, text: &str, limit: u32) -> Result<Vec<u8>, T
     Ok(chars.into_iter().map(|c| c as u8).collect())
 }
 
-/// What a requested codec name resolves to, three ways -- #460's own
-/// lane D1 fix pass ("R2"): a name CPython itself would also reject
-/// gets `cof run`'s own `LookupError: unknown encoding: x`
+/// What a requested codec name resolves to, three ways (#460): a name
+/// CPython itself would also reject gets `cof run`'s own
+/// `LookupError: unknown encoding: x`
 /// ([`Unknown`](EncodingOutcome::Unknown)); a name CPython accepts but
 /// this preview doesn't implement gets the preview marker instead of a
 /// false `unknown encoding` claim ([`NotImplemented`](EncodingOutcome::NotImplemented)).
@@ -521,7 +521,7 @@ pub(crate) fn classify_encoding(name: &str) -> EncodingOutcome {
 /// The preview-marker refusal for a codec name real `cof run` supports
 /// but this preview doesn't implement -- raised *before* anything
 /// touches the filesystem, unlike the `Unknown`/`UnicodeEncodeError`
-/// cases below, which (R2's own ruling) reproduce `cof run`'s own
+/// cases below, which reproduce `cof run`'s own
 /// filesystem effects first.
 pub(crate) fn preview_marker_codec_error(name: &str) -> ToolError {
     ToolError {
@@ -631,7 +631,7 @@ pub(crate) fn py_is_file(path: &Path, display: &str) -> Result<bool, ToolError> 
 /// `Path.mkdir(parents=True, exist_ok=True)` (CPython's own
 /// `pathlib._local.Path.mkdir`), ported exactly so a failure names the
 /// *directory that actually failed* rather than always the original
-/// write's own leaf path (issue #460's own fix pass): try
+/// write's own leaf path (issue #460): try
 /// creating *path* itself first; on `ENOENT` (a missing parent),
 /// recurse into the parent and retry; on any other `OSError`, swallow
 /// it only if *path* already is a directory (the race-safe `exist_ok`
@@ -719,11 +719,11 @@ impl ToolPlugin for FsPlugin {
                 };
                 // Codec classification happens before anything touches
                 // the filesystem, but only a `NotImplemented` name is
-                // actually raised this early (R2): a name CPython
+                // actually raised this early: a name CPython
                 // itself would reject, or one we do support, instead
                 // waits until after `mkdir`/`open` below, so a failure
                 // leaves the same filesystem state `cof run` does
-                // (issue #460's own fix pass -- CPython's
+                // (issue #460 -- CPython's
                 // `open(path, "w", encoding=...)` already created or
                 // truncated the file before either exception could
                 // fire).
@@ -1235,7 +1235,7 @@ mod tests {
         // CPython's own encoder invokes the error handler once per
         // *run* of consecutive unencodable characters, not once per
         // character (`"\u65e5\u672c".encode("ascii")`'s own text) --
-        // issue #460's own fix pass.
+        // Issue #460.
         let err = encode_text(Codec::Ascii, "\u{65e5}\u{672c}").unwrap_err();
         assert_eq!(
             err.message,
@@ -1258,7 +1258,7 @@ mod tests {
         // <root>/file.txt/sub` can never succeed, and CPython's own
         // `Path.mkdir(parents=True, exist_ok=True)` names *that*
         // directory in its error, not the write's own leaf path --
-        // issue #460's own fix pass.
+        // Issue #460.
         let dir = TempDir::new();
         let blocker = dir.0.join("file.txt");
         std::fs::write(&blocker, b"").unwrap();
@@ -1289,7 +1289,7 @@ mod tests {
     async fn a_write_that_fails_to_encode_leaves_the_file_truncated_like_cpython() {
         // CPython's own `open(path, "w", encoding=...)` already
         // creates/truncates the file before `fh.write(content)` can
-        // raise `UnicodeEncodeError` -- issue #460's own fix pass:
+        // raise `UnicodeEncodeError` -- issue #460:
         // a prior write's content must not survive a later
         // failed one.
         let dir = TempDir::new();
@@ -1343,7 +1343,7 @@ mod tests {
     async fn a_write_with_a_real_but_unimplemented_codec_touches_nothing() {
         // "utf-16" is a real Python codec (`cof run` would succeed);
         // this preview doesn't implement it, and refuses up front --
-        // R2's own ruling: no file created at all, unlike the
+        // No file created at all, unlike the
         // `bogus-codec`/`UnicodeEncodeError` cases above.
         let dir = TempDir::new();
         let path = dir.0.join("never-created.txt");
@@ -1405,7 +1405,7 @@ mod tests {
         // `tv_sec`/`tv_nsec` pair represents it as `tv_sec=-11,
         // tv_nsec=700_000_000` (never a negative `tv_nsec`); CPython's
         // `int(st_mtime)` truncates the *true* float value (-10.3)
-        // toward zero, i.e. -10, not -11 -- issue #460's own fix pass.
+        // toward zero, i.e. -10, not -11 (issue #460).
         // Checked against the pure function directly (not
         // a real file's own mtime): a CI sandbox's filesystem isn't
         // guaranteed to keep the exact sub-second value a `set_times`

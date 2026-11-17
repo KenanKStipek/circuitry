@@ -257,8 +257,8 @@ impl ToolPlugin for RegexPlugin {
         let translated = translate::translate(&pattern, flags).map_err(invalid_pattern)?;
         // `match` anchors the whole pattern at position 0
         // (`\A(?:...)`, a non-capturing wrapper that keeps every group
-        // number) -- compiled once, same as every other mode (F9:
-        // this translator used to compile the pattern twice for
+        // number) -- compiled once, same as every other mode (this
+        // translator used to compile the pattern twice for
         // `match`, once unused).
         let pattern_text = if mode == "match" {
             format!("\\A(?:{})", translated.pattern)
@@ -613,7 +613,7 @@ mod tests {
         // a separate, unconfigurable limit from `backtrack_limit`)
         // ending in a non-whitespace character: `\s+$` cannot ever
         // succeed, so an unanchored search tries this from every start
-        // position -- the review's own `\s+$` case.
+        // position.
         let text = "word ".repeat(1_200_000 / 5) + "x";
         let result = run(dict(vec![
             ("pattern", Value::from(r"\s+$")),
@@ -646,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn catastrophic_but_bounded_pattern_still_returns_no_match_like_cpython() {
-        // The review's own R8 baseline: CPython returns `[]` for this
+        // CPython returns `[]` for this
         // in milliseconds; it used to need just past 1,000,000
         // backtracks in fancy-regex (fancy-regex's old default),
         // which this translator's new per-input limit must still

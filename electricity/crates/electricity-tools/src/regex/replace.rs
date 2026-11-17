@@ -324,7 +324,7 @@ pub fn find_iter<'t>(
     Ok(out)
 }
 
-/// Python's 3.7+ scan rule (F4; the module doc comment's own worked
+/// Python's 3.7+ scan rule (the module doc comment's own worked
 /// example): a non-empty match may start right where a *previous*
 /// empty match ended, where Rust's own `regex`/`fancy-regex`
 /// iterators always treat that position as forbidden outright and
@@ -545,7 +545,7 @@ mod tests {
         let (_re, gc, names) = compile("(a)");
         let err = parse_template(r"\5", gc, &names).unwrap_err();
         // CPython: "invalid group reference 5 at position 1" -- the
-        // digit's own position, not the backslash's (R9).
+        // digit's own position, not the backslash's.
         assert_eq!(err, "invalid group reference 5 at position 1");
     }
 

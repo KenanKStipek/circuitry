@@ -1,6 +1,5 @@
 //! `core/cancellation.py::run_tracked` and `kill_process_group`, ported
-//! as a signature-only seam (issue #449's gate lane, item 3) -- lane C
-//! fills every body in this module; the shapes below are final.
+//! (issue #449, item 3); the shapes below are final.
 //!
 //! `run_tracked` is `subprocess.run`, tracked by this run's own
 //! [`CancellationToken`] for the whole time the child can block: the
@@ -24,7 +23,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// `run_tracked`'s own keyword arguments, minus `cmd`/`capture_output`/
 /// `text` (this crate always captures and always decodes as text --
-/// lane C's own [`Completed`] is the ported shape of that decode, not a
+/// [`Completed`] is the ported shape of that decode, not a
 /// bytes/text toggle) -- `timeout`, `input`, `cwd`, `env`, and
 /// *new_session* (`start_new_session=True` only while the run is armed,
 /// [`crate::ToolCall::armed`]'s own doc comment).
@@ -52,7 +51,7 @@ pub struct RunOpts {
 }
 
 /// A finished child process -- text-mode stdout/stderr (universal-
-/// newline translation, locale/UTF-8 strict decoding, lane C's own
+/// newline translation, locale/UTF-8 strict decoding -- this type's own
 /// job), and *exit_code* as Python's own `proc.returncode` convention:
 /// non-negative for a normal exit, `-signum` for one a signal killed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -820,10 +819,9 @@ fn universal_newlines(text: &str) -> String {
 
 /// Why *bytes* is not valid UTF-8, formatted exactly like CPython's
 /// `UnicodeDecodeError.__str__` -- a small, self-contained duplicate of
-/// `electricity_compiler::prompt_files`'s own (private, differently-
-/// owned-lane) helper of the same shape: that module belongs to a
-/// different vm-lanes.md row, so this crate carries its own copy rather
-/// than reaching across the lane boundary for it.
+/// `electricity_compiler::prompt_files`'s own (private) helper of the
+/// same shape: that crate has no dependency on this one, so this crate
+/// carries its own copy rather than reaching across crates for it.
 pub(crate) fn describe_utf8_error(bytes: &[u8]) -> String {
     let (start, consumed, reason) =
         find_utf8_error(bytes).expect("describe_utf8_error called on valid UTF-8");
@@ -1044,9 +1042,8 @@ pub(crate) fn describe_spawn_error(
 
 /// `exc.strerror`: the bare OS error message, without Rust's own
 /// `io::Error::to_string()` " (os error N)" suffix -- the same small
-/// helper `electricity_config::config::strerror` carries under its own
-/// lane; this crate keeps its own copy rather than reaching across the
-/// lane boundary for it.
+/// helper `electricity_config::config::strerror` carries; this crate
+/// keeps its own copy rather than reaching across crates for it.
 fn strerror_text(err: &io::Error) -> String {
     let text = err.to_string();
     match text.rfind(" (os error ") {
