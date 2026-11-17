@@ -76,7 +76,7 @@ class Case:
     #: real server -- rather than `scripted`).
     default_adapter: str = "scripted"
     default_model: str = "scripted-model"
-    #: K1's own adapter check, against `default_adapter` above rather
+    #: The adapter check below, against `default_adapter` above rather
     #: than a hardcoded `"scripted"`, for the same case.
     expected_adapter: str = "scripted"
 
@@ -170,7 +170,7 @@ effects:
     # `--out` (DESIGN.md §1.1's "Second SIGINT during cleanup" row) —
     # the one case `sigint_once`/`sigint_twice` never exercise, since
     # neither has a `finally:` slow enough for a second signal to land
-    # inside its cleanup window (F12).
+    # inside its cleanup window.
     Case(
         name="aborted_second_sigint",
         doc="""\
@@ -433,7 +433,7 @@ prime.ask:
     ),
 ]
 
-# Issue #431's lane E2: documents built only from the M0-H VM's own
+# Issue #431's parity milestone: documents built only from the M0-H VM's own
 # scope (`tool`/`json`, `dynamic`, a CEL `if`, `finally:` -- the Goal
 # section of #431), each recorded against *both* engines under the
 # same config, so `engine_parity.rs` can assert the two produce the
@@ -642,8 +642,8 @@ FAKE_PI_BINARY = str(Path(__file__).resolve().parent.parent / "tests" / "agent_l
 FAKE_CLAUDE_BINARY = str(
     Path(__file__).resolve().parent.parent / "tests" / "agent_live_fakes" / "fake_claude.py"
 )
-# Committed in place of the real, machine-local path above (K2's own
-# rule, applied here deliberately rather than relying on `scrub`'s
+# Committed in place of the real, machine-local path above, applied
+# here deliberately rather than relying on `scrub`'s
 # safety net: a path under this repository's own worktree still
 # starts with `/Users/<name>/...` on the recording machine, which
 # `scrub`'s `/Users/` pattern only strips the username segment from,
@@ -857,7 +857,7 @@ def record_one(
     out_name: str | None = None,
 ) -> None:
     """Records one case against *engine* (``"cof"`` or
-    ``"electricity"``, issue #431's lane E2), under *out_name*
+    ``"electricity"``, issue #431's parity milestone), under *out_name*
     (defaulting to ``case.name``, so two engines never clobber each
     other's fixture when a caller passes a distinct name per engine).
     """
@@ -878,7 +878,7 @@ def record_one(
         # keys (`cli/config.py`) — a bare `"adapter": "scripted"` is an
         # unknown key the config loader silently ignores, so every run
         # fell back to the built-in `ollama` default instead of the
-        # scripted adapter (K1). `runtime.adapters.scripted.replies_file`
+        # scripted adapter. `runtime.adapters.scripted.replies_file`
         # is always set, even with no replies, so `resolve_effective_
         # settings` has a concrete adapter config to report regardless.
         config: dict = {
@@ -1000,7 +1000,7 @@ def record_one(
                 if data is not None:
                     snapshots.append({"t": round(time.monotonic() - start, 3), "state": data})
 
-        # K1: fail loudly (not just a silently-wrong fixture) if a run's
+        # Fail loudly (not just a silently-wrong fixture) if a run's
         # own effective settings didn't actually select the scripted
         # adapter — checked against the final `--out` write when there is
         # one, else the last live-state snapshot (an aborted case has
@@ -1057,7 +1057,7 @@ def scrub(text: str, *scrub_paths: Path) -> str:
     # `/private/var/folders/...` — `cof` itself resolves paths before
     # writing them into state (`_orchestration_dir`, `orchestration_
     # path`), so the as-given replace alone left `/private<SCRUBBED>`
-    # behind every time (K2). A shorter path replaced first could also
+    # behind every time. A shorter path replaced first could also
     # leave a dangling `<SCRUBBED>/...` inside a longer one still
     # waiting its turn, hence the length sort.
     resolved = [p.resolve() for p in scrub_paths]
@@ -1154,8 +1154,8 @@ def write_fixture(
 def check_no_leaked_paths() -> int:
     """A standing test, not just a recording-time scrub: fails if any
     committed fixture still contains an absolute/temp path."""
-    # No trailing slash required on `/private`/`/var`: the bug this
-    # guards against (K2) left exactly `/private<SCRUBBED>` behind, with
+    # No trailing slash required on `/private`/`/var`: requiring one
+    # would leave exactly `/private<SCRUBBED>` behind, with
     # no second slash for a `/private/`-shaped needle to ever match.
     pattern = re.compile(r"/Users/|/home/[^\s\"']+|/var/folders|/private|(?<!<)/tmp/")
     failures = []
@@ -1209,8 +1209,8 @@ def main() -> int:
                 record_one(case, cof_bin, engine="cof")
             return check_no_leaked_paths()
 
-    # `--parity-only`: re-record just PARITY_CASES (issue #431's lane
-    # E2), leaving every other committed fixture untouched -- each
+    # `--parity-only`: re-record just PARITY_CASES (issue #431's parity
+    # milestone), leaving every other committed fixture untouched -- each
     # snapshot's own `t` is real elapsed time, never reproducible, so
     # re-running the full CASES list rewrites every fixture's content
     # with new timing noise even when nothing about the case itself
@@ -1220,7 +1220,7 @@ def main() -> int:
             record_one(case, cof_bin, engine="cof")
 
     # PARITY_CASES always record against `cof`; the `electricity` half
-    # (issue #431's lane E2) only runs when a build is actually on
+    # (issue #431's parity milestone) only runs when a build is actually on
     # PATH -- `electricity-cli --features test-tools` isn't part of
     # an ordinary PATH, and this script's own recordings are a by-hand
     # tool (its own module docstring), not something CI re-runs.
