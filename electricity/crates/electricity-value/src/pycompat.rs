@@ -1,16 +1,16 @@
-//! Small CPython-compatibility helpers shared by several M1 lanes
-//! (issue #449's gate lane, item 10) -- each crate that needs one of
+//! Small CPython-compatibility helpers shared across the M1 effect
+//! types (issue #449, item 10) -- each crate that needs one of
 //! these today re-implements its own narrow copy (`electricity-tools::
 //! json`'s own `python_int`, `electricity-compiler::pipeline`'s own
 //! ASCII-only `is_python_strip_whitespace`); a shared, more complete
-//! version here lets lanes C/D1/D2/E/F2/G/K1 converge on one
+//! version here lets every tool and effect type converge on one
 //! implementation instead of each growing its own.
 //!
 //! [`py_int`] and [`py_strip`] are real, final implementations --
-//! small enough, and specified precisely enough, that lane A can just
-//! finish them. [`shlex_split`]/[`shlex_quote`] (lane C) and
-//! [`urlencode`] (lane E) are also real implementations now, not the
-//! signature-only stubs lane A first landed them as.
+//! small enough, and specified precisely enough, to finish outright.
+//! [`shlex_split`]/[`shlex_quote`] and
+//! [`urlencode`] are also real implementations now, not the
+//! signature-only stubs they first landed as.
 
 use crate::Value;
 use std::fmt;
@@ -22,33 +22,33 @@ use std::fmt;
 /// kept apart by a dependency-direction rule that doesn't actually
 /// hold -- `electricity-vm` already depends on `electricity-tools`).
 /// Not exhaustive of every exception class in Circuitry's own plugin
-/// catalog -- a later lane widens this enum (a new variant, never a
+/// catalog -- a later change widens this enum (a new variant, never a
 /// change to an existing one's spelling) the first time a ported
 /// plugin/adapter actually needs to raise one not listed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyExc {
     ValueError,
     /// `core/templates.py::TemplateError` (a `ValueError` subclass) --
-    /// lane P (#448, #487): a run-time `{{> name}}` expansion/render
+    /// #448, #487: a run-time `{{> name}}` expansion/render
     /// failure under `on_error: fail`. Inserted directly after
     /// `ValueError`, never at the enum's own tail, so a concurrent
-    /// lane appending its own variant there (lane E, #485) can never
+    /// change appending its own variant there (#485) can never
     /// collide with this one on the same or an adjacent line.
     TemplateError,
     /// `core/prompt_files.py::PromptFileError` (a `ValueError` subclass,
     /// issue #578) -- a prompt's `file: {from: ...}` source that could not
     /// be read at dispatch.
     PromptFileError,
-    /// `core/answers.py::AnswerParseError` (lane G, issue #498) -- an
+    /// `core/answers.py::AnswerParseError` (issue #498) -- an
     /// unreadable `boolean`/`number` reply. Inserted directly after
-    /// `TemplateError`, never at the enum's own tail (where lane E
-    /// appended its own variants), so a concurrent lane appending there
+    /// `TemplateError`, never at the enum's own tail (where other
+    /// variants were appended), so a concurrent change appending there
     /// can never collide with this one.
     AnswerParseError,
-    /// `core/prompt.py::SchemaValidationError` (lane G, issue #498) -- a
+    /// `core/prompt.py::SchemaValidationError` (issue #498) -- a
     /// prompt's decoded output failed its declared JSON schema.
     SchemaValidationError,
-    /// `allowlist_gate.py::AllowlistError` (lane G, issue #498) -- a
+    /// `allowlist_gate.py::AllowlistError` (issue #498) -- a
     /// `provider:`/fallback outside the installed adapter allowlist.
     AllowlistError,
     RuntimeError,
@@ -67,54 +67,54 @@ pub enum PyExc {
     /// (PR #454) -- CPython raises this, not
     /// `ValueError`, for a non-finite float.
     OverflowError,
-    /// `core/use.py`'s own cycle-detection raise (M1 lane I, issue
+    /// `core/use.py`'s own cycle-detection raise (issue
     /// #469): a `use` effect whose child identity is already on the
     /// VM's own use-call-stack (`electricity_vm::Frame::
     /// use_call_stack`) raises this, not `ValueError` -- still not
     /// retried, the same as `ValueError`.
     RecursionError,
-    /// `str.encode(encoding)`'s own strict-mode failure (lane D1's
+    /// `str.encode(encoding)`'s own strict-mode failure (the
     /// `fs`/`hash` tools: appended here, never a change to an
     /// existing variant's spelling, per this enum's own doc comment).
     UnicodeEncodeError,
-    /// `IndexError` (lane D2, the `regex` tool's own `sub` template
+    /// `IndexError` (the `regex` tool's own `sub` template
     /// parser): CPython's `re.sub` raises this, not `ValueError`, for
     /// an unknown `\g<name>` group name -- distinct from
     /// [`PyExc::LookupError`], which is the *class name* `re.error`
     /// itself subclasses, never the one #442's multi-failure tree text
     /// needs to print for this specific case.
     IndexError,
-    /// `re.error` (lane D2, the `regex` tool): CPython 3.11/3.12's own
+    /// `re.error` (the `regex` tool): CPython 3.11/3.12's own
     /// name for every pattern-compile and replacement-template parse
     /// failure (`issue #479`'s own "`re.error`'s class" note; 3.13
     /// renames it to `PatternError`, tracked only as a documented
     /// divergence, never matched here).
     ReError,
-    /// `adapters/_retry.py::AdapterCallError` (lane F1, issue #478) --
+    /// `adapters/_retry.py::AdapterCallError` (issue #478) --
     /// an adapter call failure carrying its own `RetryInfo`, raised by
     /// the scripted adapter's error replies. `type(e).__name__` for
     /// this class is used verbatim in #442's own multi-failure tree
     /// text.
     AdapterCallError,
-    /// `adapters/scripted.py::ScriptedRepliesError` (lane F1, issue
+    /// `adapters/scripted.py::ScriptedRepliesError` (issue
     /// #478) -- the scripted adapter's own replies-file-is-malformed
     /// exception, a `RuntimeError` subclass Python code never confuses
     /// with a plain one (`type(e).__name__` differs).
     ScriptedRepliesError,
-    /// `http.client.RemoteDisconnected` (lane E, issue #485) -- a
+    /// `http.client.RemoteDisconnected` (issue #485) -- a
     /// `ConnectionResetError` subclass `urllib.request.urlopen` never
     /// wraps as a `URLError`: the server closed the connection before
     /// sending a status line at all.
     RemoteDisconnected,
-    /// `http.client.IncompleteRead` (lane E, issue #485) -- a short
+    /// `http.client.IncompleteRead` (issue #485) -- a short
     /// body against a `Content-Length` the server itself declared;
     /// not retried (`cause: ErrorCause::None`), unlike every other
     /// raised `http` failure.
     IncompleteRead,
-    /// `http.client.InvalidURL` (lane E, issue #485) -- a request
+    /// `http.client.InvalidURL` (issue #485) -- a request
     /// target carrying a space or control character.
     InvalidURL,
-    /// Plain `AttributeError` (lane F2, issue #503) -- a provider
+    /// Plain `AttributeError` (issue #503) -- a provider
     /// response adapter code expected to be a `dict`/`list` turned out
     /// to be some other JSON shape (`raw.get(...)` on a non-dict body,
     /// `block.get(...)` on a non-dict content block, ...): CPython's
@@ -325,7 +325,7 @@ pub fn py_strip(s: &str) -> &str {
 /// the two Unicode line/paragraph separators `\x85`/`\u2028`/`\u2029`
 /// (CPython's own `Objects/unicodeobject.c::STRINGLIB(splitlines)`/
 /// `unicodectype.c`'s own line-break table) -- used by [`py_splitlines`]
-/// and shared with lane L2's own `strip_fences` (issue #506's "Hazards"
+/// and shared with `strip_fences` (issue #506's "Hazards"
 /// section: model output can carry any of these, which Rust's own
 /// `str::lines()` doesn't split on).
 fn is_py_line_boundary(ch: char) -> bool {
