@@ -106,3 +106,16 @@ def test_does_not_mangle_a_vertex_style_model_id() -> None:
     model version) is not a user:pass@host credential."""
     value = "claude-3-5-sonnet@20240620"
     assert redact({"model": value}) == {"model": value}
+
+
+def test_does_not_mangle_a_list_of_email_addresses() -> None:
+    value = ["alice@example.test", "bob@example.test"]
+    assert redact({"to": value}) == {"to": value}
+
+
+def test_a_question_mark_inside_the_fragment_is_never_treated_as_a_query() -> None:
+    """`urlsplit` finds the fragment (the first #) before it looks for a
+    query -- a ? that comes after it is just fragment text, never a
+    query delimiter, so it must never be re-encoded as a masked query."""
+    value = "https://host/path#frag?a=1"
+    assert redact({"url": value}) == {"url": value}

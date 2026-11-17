@@ -571,6 +571,66 @@
         "t": "str",
         "v": "claude-3-5-sonnet@20240620"
       }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "to"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "alice@example.test"
+                },
+                {
+                  "t": "str",
+                  "v": "bob@example.test"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "to"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "alice@example.test"
+                },
+                {
+                  "t": "str",
+                  "v": "bob@example.test"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "https://host/path#frag?a=1"
+      },
+      "output": {
+        "t": "str",
+        "v": "https://host/path#frag?a=1"
+      }
     }
   ]
 }

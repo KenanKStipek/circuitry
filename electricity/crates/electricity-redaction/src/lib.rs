@@ -151,15 +151,21 @@ fn percent_decode_plus(value: &str) -> String {
 /// second implementation of its own -- `electricity-tools` already
 /// depends on this crate for `http_error_excerpt`'s own `redact()` call.
 pub fn mask_credential_query_params(url: &str) -> String {
-    let Some(query_start) = url.find('?') else {
+    // `urlsplit` finds the fragment (first `#`) BEFORE it looks for a
+    // query: a `?` that appears inside the fragment (after that `#`)
+    // is never a query delimiter at all, just fragment text, so it
+    // must never be searched for a `?` of its own -- `#frag?a=1`'s
+    // `a=1` stays exactly as written, never re-encoded as if it were a
+    // masked query string.
+    let (before_fragment, fragment) = match url.find('#') {
+        Some(idx) => (&url[..idx], Some(&url[idx..])),
+        None => (url, None),
+    };
+    let Some(query_start) = before_fragment.find('?') else {
         return url.to_string();
     };
-    let (before_query, rest) = url.split_at(query_start);
-    let query_and_fragment = &rest[1..];
-    let (query, fragment) = match query_and_fragment.find('#') {
-        Some(idx) => (&query_and_fragment[..idx], Some(&query_and_fragment[idx..])),
-        None => (query_and_fragment, None),
-    };
+    let (before_query, rest) = before_fragment.split_at(query_start);
+    let query = &rest[1..];
     let pairs = parse_qsl(query);
     let masked: Vec<(String, Value)> = pairs
         .into_iter()
@@ -783,6 +789,28 @@ mod tests {
         // A model id with an @ and no colon before it (e.g. a pinned
         // Vertex model version) is not a user:pass@host credential.
         let value = "claude-3-5-sonnet@20240620";
+        assert_eq!(redact(Value::from(value)), Value::from(value));
+    }
+
+    #[test]
+    fn a_list_of_email_addresses_is_not_mangled() {
+        let input = dict(vec![(
+            "to",
+            Value::List(vec![
+                Value::from("alice@example.test"),
+                Value::from("bob@example.test"),
+            ]),
+        )]);
+        assert_eq!(redact(input.clone()), input);
+    }
+
+    #[test]
+    fn a_question_mark_inside_the_fragment_is_never_treated_as_a_query() {
+        // `urlsplit` finds the fragment (the first #) before it looks
+        // for a query -- a ? that comes after it is just fragment
+        // text, never a query delimiter, so it must never be
+        // re-encoded as a masked query.
+        let value = "https://host/path#frag?a=1";
         assert_eq!(redact(Value::from(value)), Value::from(value));
     }
 

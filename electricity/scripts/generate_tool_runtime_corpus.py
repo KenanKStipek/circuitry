@@ -263,6 +263,12 @@ def build_redaction_cases() -> list[dict]:
         redact_case("line one\nis this a question?\nline three")
     )  # a multi-line body, not a single URL value
     cases.append(redact_case("claude-3-5-sonnet@20240620"))  # Vertex-style model id
+    cases.append(
+        redact_case({"to": ["alice@example.test", "bob@example.test"]})
+    )  # a list of e-mail addresses
+    cases.append(
+        redact_case("https://host/path#frag?a=1")
+    )  # a ? inside the fragment (after #) is never a query delimiter
 
     return cases
 
