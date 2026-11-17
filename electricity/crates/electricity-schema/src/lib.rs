@@ -819,14 +819,14 @@ pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
         .collect()
 }
 
-/// A `prompt` effect's own `schema:` check (issue #498, lane G) --
+/// A `prompt` effect's own `schema:` check (issue #498) --
 /// `core/prompt.py::PromptRuntime._validate_schema`'s own
 /// `jsonschema.validate(value, schema)`, whose validator class is
 /// picked from the schema's own `$schema` keyword (defaulting to the
 /// latest draft -- `jsonschema.validate`'s own `validator_for` default),
 /// matched here by [`is_2020_12_or_unset`]'s own exact-URI lookup against
 /// Python's own `_META_SCHEMAS`, never [`jsonschema::validator_for`]'s
-/// prefix-shaped equivalent (PR #502's round-4 fix: any
+/// prefix-shaped equivalent (PR #502: any
 /// `$schema` value *not* one of the handful Python itself registers
 /// falls back to the latest draft there too, not just an exact 2020-12
 /// match). Unlike [`orchestration_errors`]/[`profile_errors`],
@@ -840,11 +840,10 @@ pub enum PromptSchemaCheck {
     Valid,
     /// `jsonschema.ValidationError.message` text -- matched exactly
     /// against Python's own `jsonschema` output for the keyword
-    /// families [`python_message::python_message`] covers (issue #498
-    /// ruling 6, tightened by PR #502's review,
-    /// ruling 2), `oneOf`/`anyOf` included (`engine::render`'s own
-    /// text, not the `jsonschema` crate's `Display` -- PR #502's
-    /// round-6 fix); the remaining gaps are narrower ones named in
+    /// families [`python_message::python_message`] covers (issue #498,
+    /// tightened by PR #502), `oneOf`/`anyOf` included (`engine::render`'s own
+    /// text, not the `jsonschema` crate's `Display` -- PR #502); the
+    /// remaining gaps are narrower ones named in
     /// `DESIGN.md` §13. The `"Schema validation failed: "` prefix is
     /// the caller's, as it is in `core/prompt.py`.
     Invalid(String),
@@ -1091,8 +1090,7 @@ fn validate_prompt_schema_impl(
         // discarded either way once that check fires.
         PromptSchemaCheck::Valid
     } else if fully_supported {
-        // Ruling R6 (follow-up):
-        // the engine is the accept/reject authority whenever it fully
+        // The engine is the accept/reject authority whenever it fully
         // understands the schema, never the crate -- the crate's own
         // `serde_json::Value` can't even represent a `NaN`/`Infinity`
         // instance (or schema value), its regex classes are ECMA/
@@ -1226,7 +1224,7 @@ fn validate_prompt_schema_impl(
     // (likely nonsense, built from a truncated walk) is discarded in
     // favour of the same shape a real, uncaught Python `RecursionError`
     // reaches `core/prompt.py` as: a generic, non-retryable failure,
-    // never `schema_invalid`. F11 (follow-up): `multipleOf`
+    // never `schema_invalid`. `multipleOf`
     // against a `NaN`/`Infinity` instance with a `float` divisor is the
     // same shape, with that exception's own text instead.
     if engine::take_recursion_exceeded() {
@@ -2293,7 +2291,7 @@ mod tests {
 
     #[test]
     fn a_real_object_carrying_the_marker_key_and_an_unrelated_second_key_is_not_a_marker() {
-        // F7 (second-round review): the marker key alone, or paired with
+        // The marker key alone, or paired with
         // exactly `NON_JSON_SCALAR_NUMBER_LIKE`, is a marker -- any other
         // second key means it's a real document object that happens to
         // reuse the marker's own property name, not a stand-in.

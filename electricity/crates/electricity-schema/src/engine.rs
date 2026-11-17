@@ -2,8 +2,8 @@
 //! order-preserving `electricity_value::Value` trees rather than on
 //! `serde_json::Value` (a `BTreeMap`-backed `Map` this workspace never turns
 //! `preserve_order` on for -- see `electricity-vm/Cargo.toml`'s own
-//! dev-dependency comment) -- issue #498 ruling 6, tightened twice over by
-//! PR #502's review and follow-up probes.
+//! dev-dependency comment) -- issue #498, tightened twice over by
+//! PR #502 and its own follow-up.
 //!
 //! This module (via [`schema_is_fully_supported`]) is the accept/reject
 //! *authority* whenever a schema uses only the keywords it implements and
@@ -2712,7 +2712,7 @@ fn pattern_is_match(pattern: &str, text: &str) -> bool {
 /// `examples`, `deprecated`, `readOnly`, `writeOnly`, and every
 /// `content*`/`format` keyword -- Python's own reference implementation
 /// never validates `format` without an explicit `format_checker`, so it
-/// is an annotation here too, issue #498 ruling 6's own module docs).
+/// is an annotation here too, issue #498).
 /// `minContains`/`maxContains` ride along with `contains`, never
 /// meaningful alone, so they're listed as leaves too.
 const SUPPORTED_LEAF_KEYWORDS: &[&str] = &[
@@ -2775,11 +2775,11 @@ pub(crate) fn clear_fully_supported_cache() {
 /// `prefixItems`/`allOf`/`anyOf`/`oneOf`/`not`/`if`/`then`/`else`/
 /// `dependentSchemas`/`contains`/`propertyNames`, and whatever a `$ref`
 /// resolves to) uses *only* keywords [`evaluate`] implements -- the
-/// authority test issue #498's own follow-up (ruling R6)
+/// authority test issue #498's own follow-up
 /// requires: this engine decides accept/reject itself only when this
 /// returns `true`, never the `jsonschema` crate (whose own lossy
 /// `serde_json`/ECMA-regex/format-by-default behavior is exactly what
-/// the follow-up's own probes caught diverging from Python). Memoized
+/// the follow-up caught diverging from Python). Memoized
 /// by schema-node identity ([`FULLY_SUPPORTED_CACHE`]).
 ///
 /// A `$ref` target already seen *anywhere* in this call's own walk
@@ -2946,8 +2946,8 @@ fn schema_is_fully_supported_inner(
                 // `is_2020_12_or_unset` check), so a nested `$schema`
                 // routes to the crate instead rather than silently
                 // validating that subtree under the wrong draft (issue
-                // #498's own follow-up, P2 "nested
-                // `$schema`") -- `not`/`if`/`contains`'s own quirk is
+                // #498's own follow-up, on a nested
+                // `$schema`) -- `not`/`if`/`contains`'s own quirk is
                 // specific to `$id`/subresource scope, never `$schema`
                 // (`evolve()` doesn't change which validator class
                 // handles the nested schema either way), so this one
