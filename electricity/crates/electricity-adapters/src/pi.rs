@@ -7,7 +7,7 @@
 //! closed pipe). `model` is pi's own `provider/id`; `thinking` its
 //! thinking level. Every [`GenerateOptions`] field is ignored, with
 //! one warning naming the set ones; `json_schema` is ignored silently
-//! (B3 -- pi has no schema flag of its own).
+//! (pi has no schema flag of its own).
 
 use crate::agent_cli::{
     build_generate_result, check_binary, check_type_error, io_error_to_adapter,
@@ -27,7 +27,7 @@ use electricity_vm::adapter::{
 
 /// `adapters/pi.py::PiAdapter`. `binary`/`default_model`/`thinking` are
 /// kept as the raw post-`cfg.get(...) or default` [`Value`]
-/// (`crate::config`'s own doc comment, B5), not a plain `String`.
+/// (`crate::config`'s own doc comment), not a plain `String`.
 #[derive(Debug)]
 pub struct PiAdapter {
     /// `pi`, or an alias's own name (`adapters/factory.py::_build_alias`).

@@ -4,17 +4,17 @@
 //! `electricity-vm`, which defines the trait boundary, never the
 //! reverse).
 //!
-//! - [`scripted`]: the Rust `scripted` adapter (lane F1, #478) --
+//! - [`scripted`]: the Rust `scripted` adapter (#478) --
 //!   deterministic replies from a replies file, keyed by call path,
 //!   for the conformance suite (`electricity/DESIGN.md` §12) and for
 //!   running an orchestration with no real model behind it.
-//! - [`host_claude`]: the `host_claude` registration stub (lane F1,
-//!   #478) -- a name `build_registry` recognizes, whose builder
+//! - [`host_claude`]: the `host_claude` registration stub (#478)
+//!   -- a name `build_registry` recognizes, whose builder
 //!   always fails: this adapter needs a *request_handler* injected at
 //!   run time via `RunRequest::adapter` (`circuitry-mcp`'s own use),
 //!   never built from `runtime.adapters.host_claude` config alone.
 //! - [`ollama`], [`openai`], [`anthropic`], [`openai_compat`],
-//!   [`replicate`], [`watsonx`], [`curl_text`]: lane F2's own
+//!   [`replicate`], [`watsonx`], [`curl_text`]:
 //!   (#503/#504) real network-backed providers and the shared curl
 //!   failure-text helper.
 //! - [`cyberdiner`]: the vendor-broker adapter (issue #515, merged in
@@ -26,8 +26,8 @@
 //!
 //! This file also carries the adapter-core helpers every concrete
 //! adapter shares (`adapters/base.py::GenerateOptions.set_fields`/
-//! `ignored_options_warning`), and the leftover-replies export (lane
-//! F1, issue #478, `electricity/docs/spec/scripted-replies.md` §7):
+//! `ignored_options_warning`), and the leftover-replies export
+//! (issue #478, `electricity/docs/spec/scripted-replies.md` §7):
 //! [`write_leftover_export`] is called once, at process exit, from
 //! `electricity-cli` (`electricity::write_leftover_export`'s own
 //! re-export of it) -- never from this crate itself, which has no
@@ -60,22 +60,21 @@ use electricity_vm::adapter::{AdapterRegistry, GenerateOptions};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// `adapters/factory.py::build_adapter`'s own per-attempt registry --
-/// signature only; lane F1 fills the body (registering [`scripted`]/
-/// [`host_claude`]'s own builders; lane F2 adds its own providers'
-/// builders to the same registry in its own PR, each one line in this
-/// function, never a new file).
+/// `adapters/factory.py::build_adapter`'s own per-attempt registry,
+/// registering [`scripted`]/[`host_claude`]'s own builders plus every
+/// other provider's builder in the same registry, each one line in
+/// this function, never a new file.
 pub fn build_registry() -> AdapterRegistry {
     let mut registry = AdapterRegistry::new();
     registry.register("scripted", Box::new(scripted::build_scripted));
     registry.register("host_claude", Box::new(host_claude::build_host_claude));
     // Issue #520 part B: the two coding-agent-CLI adapters, registered
     // right after `host_claude` (not at the end) -- the issue's own
-    // seam note with #515/`cyberdiner`, to keep that lane's own merge
+    // seam note with #515/`cyberdiner`, to keep a merge
     // conflict here as small as possible.
     registry.register("claude_code", Box::new(claude_code::build_claude_code));
     registry.register("pi", Box::new(pi::build_pi));
-    // Lane F2 (issue #503): native Ollama first, then the
+    // Issue #503: native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
     // `replicate`/`watsonx` last. Issue #515 ports `cyberdiner`
     // too, and issue #520 registers `claude_code`/`pi`
@@ -396,7 +395,7 @@ mod tests {
         // `litellm` is in Circuitry's own full registry (so it is
         // named in the message's own "Supported adapters" list), but
         // this crate has no builder for it (a Python-SDK-only adapter,
-        // out of scope for lane F2 per issue #503) -- `build_registry`
+        // out of scope per issue #503) -- `build_registry`
         // mustn't register it.
         let registry = build_registry();
         let err = match registry.build("litellm", &Value::None) {

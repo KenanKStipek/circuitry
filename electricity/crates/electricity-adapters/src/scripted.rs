@@ -878,7 +878,7 @@ impl Adapter for ScriptedAdapter {
     /// no way to carry a raised exception separately from an ordinary
     /// `ok: false` result, so this reproduces `call_check`'s own text
     /// for every non-`ScriptedRepliesError` failure here directly,
-    /// rather than leaving lane R's own fold to guess which kind it is.
+    /// rather than leaving preflight's own fold to guess which kind it is.
     async fn check(&self) -> CheckResult {
         match self.ensure_loaded() {
             Ok(_) => CheckResult {
