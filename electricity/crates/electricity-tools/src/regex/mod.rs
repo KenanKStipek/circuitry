@@ -23,7 +23,7 @@
 //!   until the effect is killed (#448 decision, "Settled questions").
 //!   The limit itself is sized per call, `max(FLOOR, PER_CHAR *
 //!   (input_len + 1))` ([`electricity_pyre::backtrack_limit_for`],
-//!   moved there in PR #502's round-5 fix so `electricity-schema`
+//!   moved there in PR #502 so `electricity-schema`
 //!   can size its own `pattern`/`patternProperties` limit the same
 //!   way; `PER_CHAR = 100`,
 //!   `FLOOR = 10_000_000`, each measured directly in a release build
@@ -32,7 +32,7 @@
 //!   position of a search, not just the eventual match, and so used
 //!   to fail ordinary multi-hundred-KB inputs through the lookarounds
 //!   this translator emits for `\b`/`\B`/non-MULTILINE `$`/lookbehind
-//!   (PR #480's review) even though the real per-character
+//!   (#480) even though the real per-character
 //!   cost is tiny;
 //! - IGNORECASE: `fancy-regex`'s own Unicode case folding is used
 //!   directly for everything this translator doesn't expand itself

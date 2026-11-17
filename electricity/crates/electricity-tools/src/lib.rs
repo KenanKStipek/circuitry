@@ -256,7 +256,7 @@ pub struct CheckResult {
 }
 
 /// What [`ToolPlugin::execute`] needs that isn't *params* itself
-/// (issue #449's gate lane, item 1) -- `core/tool.py::ToolRuntime.
+/// (issue #449, item 1) -- `core/tool.py::ToolRuntime.
 /// execute`'s own per-attempt call carries all four of these to the
 /// plugin it dispatches to, none of them through *params*:
 ///

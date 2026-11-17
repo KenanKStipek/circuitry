@@ -25,8 +25,8 @@
 //! one Rust crate has a builder for. In ordinary operation this path is
 //! unreachable for any M1 provider in any case --
 //! `electricity_bytecode::refusal::first_unsupported`'s own `Supported`
-//! value already refuses a document naming one before its own lane
-//! flips the capability flag, long before a real run ever calls this
+//! value already refuses a document naming one before its own
+//! capability flag flips, long before a real run ever calls this
 //! function -- but the message still has to be exactly right for the
 //! golden unit tests that call it directly, and for a genuinely
 //! unimplemented (M2-scope) name like `mcp`.
@@ -281,15 +281,15 @@ mod tests {
     fn a_plugin_circuitry_supports_but_no_m1_lane_builds_is_still_unknown_here() {
         // `mcp` is in Circuitry's own registry (and so in the
         // "Supported plugins" list the message above names), but it's
-        // M2 scope (#448's own "Out of scope" list) -- no M1 lane ever
-        // builds it, so `builders()` never gets an entry for it, unlike
+        // M2 scope (#448's own "Out of scope" list) -- no builder
+        // exists for it, so `builders()` never gets an entry for it, unlike
         // `shell`/`fs`/`regex`/`http`/`validate_yaml` (each of those
-        // is pre-registered here now, returning its own lane's
+        // is pre-registered here now, returning its own
         // still-not-implemented stub plugin, reachable only through
         // a direct call like this one --
         // the refusal walker's own `Supported::allows_provider` keeps a
         // real document with one of those providers from ever reaching
-        // this function before its own lane flips the flag).
+        // this function before its own capability flag flips).
         let err = match build_plugin("mcp", &Value::None) {
             Err(err) => err,
             Ok(_) => panic!("expected an unknown-plugin error"),
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn every_m1_native_provider_builds_its_own_still_not_implemented_stub() {
         // `builders()` now has an entry for every M1 native-tool
-        // lane's own provider, each returning that lane's own stub
+        // provider, each returning its own stub
         // plugin -- `execute()` still
         // fails with that plugin's own "not implemented yet" message,
         // but `build_plugin` itself no longer reports it as unknown.

@@ -1,4 +1,4 @@
-//! Lane C: the `json` tool (`plugins/json.py`) -- `parse`/`stringify`/
+//! The `json` tool (`plugins/json.py`) -- `parse`/`stringify`/
 //! `extract`, with Circuitry's own exact messages (`JsonPlugin: parse
 //! mode requires params['input'] as a string.`, `json: unknown mode
 //! {mode!r}`) and `raw: {"mode": mode}`. The third-party JSON-decode text

@@ -808,7 +808,7 @@ fn no_answer_message(name: &str, proc: &process::Completed) -> String {
 /// outside it) -- a private copy of `electricity_config::util::py_format_g`
 /// (that one is `pub(crate)` to its own crate, and this module's own doc
 /// convention, like `process.rs`'s `describe_utf8_error`, is to carry a
-/// small duplicate rather than reach across a lane boundary for it).
+/// small duplicate rather than add a cross-crate dependency for it).
 pub(crate) fn py_format_g(x: f64) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() {

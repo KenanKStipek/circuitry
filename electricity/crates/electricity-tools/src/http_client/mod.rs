@@ -30,7 +30,7 @@
 //!
 //! One connection per request (never pooled: this crate's own model is
 //! "one request, maybe a redirect hop, done" -- `hyper-util`'s pooling
-//! client (`client-legacy`) solves a problem this lane doesn't have),
+//! client (`client-legacy`) solves a problem this crate doesn't have),
 //! driven by a task [`send`] spawns and leaves wrapped in an
 //! [`AbortOnDrop`] guard for the lifetime of the call: dropping the
 //! future `send` returns (`execute_tool`'s own `token.cancelled()`
@@ -173,7 +173,7 @@ pub enum TimeoutModel {
 /// needs to tell them apart; the `http` tool never did, since urllib's
 /// own `URLError` text is all it ever surfaced). Carried *alongside*
 /// [`SendError::Connect`]'s own `Display` text, never derived from it
-/// by parsing (issue #503's own ruling: "don't re-derive the kind by
+/// by parsing (issue #503: "don't re-derive the kind by
 /// parsing error text") -- `Display` and the `http` tool's own output
 /// stay byte-for-byte unchanged by this addition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,7 +267,7 @@ impl std::fmt::Display for SendError {
 /// text is built from, via the `libc` crate already in this
 /// workspace's dependency tree (shared with `fs.rs`'s own OS-error
 /// formatter, which this function deliberately mirrors rather than
-/// importing across a lane boundary: `fs.rs` is D1's own file).
+/// reusing directly: `fs.rs`'s own copy is private to that module).
 fn os_strerror(code: i32) -> String {
     // Safety: `strerror` always returns a valid, null-terminated
     // pointer into a statically-owned (or thread-local, platform-
@@ -874,7 +874,7 @@ async fn send_inner(
     // (so there is no original casing left to preserve anyway) and its
     // `HeaderMap::iter()` groups a repeated name's values together at
     // that name's first slot rather than their true interleaved wire
-    // position (confirmed directly; this lane's own notes warn not to
+    // position (confirmed directly; don't
     // rely on it) -- harmless for *this* dedup, which only ever needs
     // "first position, last value", never the interleaving itself.
     let mut headers: Vec<(String, String)> = Vec::new();

@@ -174,8 +174,8 @@ fn platform_strftime(format: &str, naive: &NaiveDateTime) -> String {
 }
 
 /// `ClockPlugin::execute`'s own body, taking *now* as a parameter
-/// instead of reading a live clock -- the injection point #460's lane
-/// D1 ruling asks for ("a module-level function..., never a global
+/// instead of reading a live clock -- the injection point #460 asks
+/// for ("a module-level function..., never a global
 /// mutable"), so a test (or the corpus-replay test) calls this
 /// directly with a fixed instant rather than overriding a thread-local
 /// or a process-wide global.

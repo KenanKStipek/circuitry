@@ -1792,7 +1792,7 @@ mod tests {
             "the background process must still be running 300ms after the step returned"
         );
         // Clean it up ourselves -- by pid, never a bare name, so this
-        // never reaches another lane's own processes on this machine.
+        // never kills an unrelated process sharing this machine.
         unsafe {
             libc::kill(bg_pid as libc::pid_t, libc::SIGKILL);
         }

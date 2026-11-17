@@ -5,9 +5,9 @@
 //! `uuid.rs`/`clock.rs` use too (`as_bool`/`py_truthy`/`get`/the codec
 //! table/the `[Errno N] <strerror>: '<path>'` OS-error formatter) --
 //! `plugins/base.py::_as_bool` and Python's own string-codec machinery
-//! have no other natural home among this lane's own five files, and
+//! have no other natural home among these five files, and
 //! splitting them into a brand-new module would add a `mod` line to
-//! `lib.rs`'s own list (vm-lanes.md: this lane only ever fills a body
+//! `lib.rs`'s own list (vm-lanes.md: a plugin module only ever fills a body
 //! in a file the gate already created).
 
 use crate::{CheckResult, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
@@ -21,14 +21,14 @@ use std::path::{Component, Path, PathBuf};
 // ---------------------------------------------------------------------
 
 /// `params.get(key)`, by `Value::Str` key -- `plugins/json.py`'s own
-/// `get` helper, duplicated here since every plugin in this lane reads
+/// `get` helper, duplicated here since every plugin in this file reads
 /// its own params dict the same way.
 pub(crate) fn get<'a>(params: &'a Value, key: &str) -> Option<&'a Value> {
     params.as_dict()?.get(&Value::Str(key.to_string()))
 }
 
 /// A plain `ValueError`-classed [`ToolError`] -- every validation
-/// failure in this lane's five plugins (`plugins/fs.py`/`env_vars.py`/
+/// failure in these five plugins (`plugins/fs.py`/`env_vars.py`/
 /// `hash.py`/`uuid.py`/`clock.py` all raise bare `ValueError`s for their
 /// own param checks).
 pub(crate) fn value_error(message: impl Into<String>) -> ToolError {
@@ -78,8 +78,7 @@ pub(crate) fn as_bool(value: Option<&Value>, default: bool) -> bool {
 /// `exc.strerror`: the bare OS error message, without Rust's own
 /// `io::Error::to_string()` " (os error N)" suffix -- the same
 /// technique `electricity-config::config::strerror` uses (duplicated
-/// here: that crate isn't this lane's to edit, and isn't a dependency
-/// of this one).
+/// here: that crate isn't a dependency of this one).
 fn strerror(err: &io::Error) -> String {
     let text = err.to_string();
     match text.rfind(" (os error ") {
@@ -202,7 +201,7 @@ pub(crate) fn validate_path(raw: Option<&Value>) -> Result<FsPath, ToolError> {
 // Codec table: `encoding = str(params.get("encoding") or "utf-8")`
 // ---------------------------------------------------------------------
 
-/// The one Python codec family this lane actually implements --
+/// The one Python codec family this module actually implements --
 /// `utf-8`, `ascii` and `latin-1`, plus every alias of theirs
 /// `encodings.aliases.aliases` lists. Any other real Python codec name
 /// (`cp1252`, `utf-16`, `shift_jis`, ...) is a documented narrowing:
@@ -250,7 +249,7 @@ fn normalize_codec_name(name: &str) -> String {
 }
 
 /// `encodings.aliases.aliases`, narrowed to the entries that resolve to
-/// one of the three codecs this lane implements.
+/// one of the three codecs this module implements.
 const UTF8_ALIASES: &[&str] = &["utf8", "u8", "utf", "cp65001", "utf8_ucs2", "utf8_ucs4"];
 const ASCII_ALIASES: &[&str] = &[
     "646",
@@ -361,8 +360,7 @@ fn unicode_encode_error_run(
 /// `UnicodeDecodeError.__str__` -- the exact table CPython's own
 /// UTF-8 decoder uses (duplicated from `electricity-compiler::
 /// prompt_files::describe_utf8_error`/`find_utf8_error`/
-/// `utf8_lead_shape`: that crate isn't this lane's to edit, and isn't
-/// a dependency of this one).
+/// `utf8_lead_shape`: that crate isn't a dependency of this one).
 fn describe_utf8_error(bytes: &[u8]) -> String {
     let (start, consumed, reason) =
         find_utf8_error(bytes).expect("describe_utf8_error called on valid UTF-8");

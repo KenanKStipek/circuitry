@@ -174,7 +174,7 @@ pub(crate) fn merged_env(
     // such variable (CPython copes by decoding with surrogateescape;
     // a variable that round-trip only matters if a plugin's own
     // argv/output ever needed to reproduce its *exact* bytes, which
-    // none of this lane's four tools do). A variable that still isn't
+    // none of `shell`/`awk`/`imagemagick`/`ffmpeg` do). A variable that still isn't
     // valid UTF-8 after this is simply dropped from the inherited set
     // rather than panicking -- safe to skip: the overwhelming common
     // case (every variable is valid UTF-8) is unaffected, and the
