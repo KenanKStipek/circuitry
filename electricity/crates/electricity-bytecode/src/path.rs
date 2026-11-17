@@ -27,7 +27,7 @@ pub enum PathSegment {
 
 /// Identifies which compiled loop a [`PathSegment::Pass`] placeholder
 /// belongs to — a compile-time ordinal (assigned in document order by
-/// the compiler, lane C), not a run-time pass index. The VM concretizes
+/// the compiler), not a run-time pass index. The VM concretizes
 /// a placeholder by substituting the loop's *current* pass index for the
 /// `LoopId` it names, never the other way around.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]

@@ -3,8 +3,9 @@
 //!
 //! Bytecode is an internal implementation step (DESIGN.md §5): there is
 //! no user-facing bytecode format, no persisted `.ebc` file, and no
-//! stability promise on the shapes in this crate beyond "lane B, C and D
-//! build on them without changing them out from under each other" — the
+//! stability promise on the shapes in this crate beyond "every crate
+//! that builds on them can rely on them not changing out from under
+//! it" — the
 //! one *external* surface that touches this IR at all, `--dump-ir`, is
 //! explicitly unstable (issue #408's CLI section).
 //!
@@ -72,7 +73,7 @@
 //!   construction, only by convention: a document that sets both
 //!   compiles, and `core/prompt.py`'s `_materialize_input` prefers
 //!   `template` whenever it's truthy, so `messages` is already dead at
-//!   run time in that case. The compiler (lane C) reproduces that by
+//!   run time in that case. The compiler reproduces that by
 //!   choosing `Template` and discarding `messages` when a document sets
 //!   both — a deliberate, behavior-preserving drop, not an oversight.
 //! - Every `u32`/`u64` field here (loop/concurrency limits) narrows

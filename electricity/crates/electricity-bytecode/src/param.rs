@@ -14,8 +14,8 @@ use serde::{Serialize, Serializer};
 /// string containing `{{ }}` becomes a `Template`, a `{from: ...}`
 /// mapping becomes `From`, and a nested mapping/list becomes `Map`/`List`
 /// of the same walk applied to its children — matching
-/// `core/templates.py`'s own recursive params-walk (lane C ports the
-/// walk itself; this lane only fixes its output shape).
+/// `core/templates.py`'s own recursive params-walk (the compiler ports
+/// the walk itself; this crate only fixes its output shape).
 ///
 /// `Map` is keyed by [`Value`], not `String`: a YAML/JSON mapping key
 /// need not be a string (`yes:`/`1:` parse as `Value::Bool`/`Value::Int`,

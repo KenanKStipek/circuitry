@@ -160,7 +160,7 @@ pub struct PromptOp {
     /// `None` unless `retries:` was a *non-empty* mapping (Python's `if
     /// retries_raw and isinstance(retries_raw, dict)`, `core/compiler.py:
     /// 1582-1589`) -- `retries: {}` is `None` too, so `runtime.
-    /// default_prompt_retries` applies (issue #498, lane G). Unlike
+    /// default_prompt_retries` applies (issue #498). Unlike
     /// `ToolOp`/`UseOp::retries`, which default to `RetryPolicy::default()`
     /// right here because a tool/`use` effect always has *some* retry
     /// policy, a prompt's own run-time default can come from `runtime:`
