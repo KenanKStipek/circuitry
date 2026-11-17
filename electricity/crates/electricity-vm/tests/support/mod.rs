@@ -157,8 +157,8 @@ pub fn refused_use_leaf(path: EffectPath, name: &str, on_error: OnError) -> Op {
     }
 }
 
-/// A `use` leaf, every field explicit -- the general builder M1 lane
-/// I's own `tests/use_effect.rs` needs, [`refused_use_leaf`]'s own
+/// A `use` leaf, every field explicit -- the general builder
+/// `tests/use_effect.rs` needs, [`refused_use_leaf`]'s own
 /// general form.
 #[allow(clippy::too_many_arguments)]
 pub fn use_leaf(

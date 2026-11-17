@@ -440,7 +440,7 @@ pub(crate) fn build_cel_state(chain: &CtxChain, store: &Store, expr: &str) -> Va
 
 #[cfg(test)]
 mod differential_tests {
-    //! The REQUIRED differential test (issue #463's own lane notes): for
+    //! The REQUIRED differential test (issue #463): for
     //! a representative set of store shapes, templates, `{from:}` paths
     //! and CEL expressions, render/evaluate through the *old* path
     //! (`super::live_ctx`'s full snapshot, feeding `electricity_template::
@@ -501,7 +501,7 @@ mod differential_tests {
         // so a CEL path reading one of this date's own named fields
         // (`prime.today.year`) must come out *unresolved*, never
         // narrowed into a resolved int the way a Mustache tag's own
-        // `getattr` fallback would (PR #551's review).
+        // `getattr` fallback would (#551).
         store.set_leaf(
             &prime,
             k("today"),
@@ -635,8 +635,8 @@ mod differential_tests {
 
     /// Evaluates a CEL *expr* both ways and asserts an identical
     /// boolean verdict (`Err` text included) -- *strict* matches
-    /// `evaluate_condition`'s own `strict:` flag (lane notes: must be
-    /// exercised `true` as well as `false`).
+    /// `evaluate_condition`'s own `strict:` flag, which must be
+    /// exercised `true` as well as `false`.
     fn assert_same_condition(
         chain: &CtxChain,
         store: &Store,

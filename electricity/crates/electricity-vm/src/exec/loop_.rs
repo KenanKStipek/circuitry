@@ -499,7 +499,7 @@ fn resolve_collection(in_path: &str, ctx: &Value) -> Result<Vec<Value>, String> 
 /// `type(x).__name__` -- unqualified, unlike [`Value::type_name`]'s
 /// `"datetime.date"`/`"datetime.datetime"` (meant for a fuller,
 /// Python-repr-style name elsewhere). `_resolve_collection`'s own error
-/// text is the only place this lane needs the bare class name.
+/// text is the only place this module needs the bare class name.
 fn py_class_name(v: &Value) -> &'static str {
     match v {
         Value::Date(_) => "date",
@@ -749,7 +749,7 @@ fn index_overlay(as_name: Option<&str>, item: Option<&Value>, idx: u32) -> Index
 /// read of a node's own direct entries -- *chain*'s own `Live` entry
 /// can itself be one of this module's own overlay nodes
 /// ([`plain_overlay`]'s rare multi-entry/`Frozen` fallback path is the
-/// only caller left after #484; issue #501's review found the
+/// only caller left after #484; issue #501 found the
 /// same direct-entry bug here, in the slow path a loop-inside-a-
 /// `dynamic`-inside-a-loop body takes).
 fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
@@ -822,7 +822,7 @@ fn layered(entries: IndexMap<Value, Slot>, fallback: Option<NodeRef>) -> NodeRef
 /// [`layered`], plus a single *hidden* key *fallback* must never expose
 /// through the result -- [`with_prev_overlay`]'s own use, to keep the
 /// current pass's not-yet-created `iter_<idx>` invisible through its
-/// own `prime.<loop_name>` overlay (issue #501's review). A
+/// own `prime.<loop_name>` overlay (issue #501). A
 /// no-op key if *fallback* is `None`: nothing to hide anything from.
 fn layered_hiding(
     entries: IndexMap<Value, Slot>,

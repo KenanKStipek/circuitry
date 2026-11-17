@@ -401,7 +401,7 @@ async fn run_iteration(
     // `_store_root(store)` at the top level: the reflector's own
     // *containing* scope (`parent`), never the inherited `CtxChain` --
     // this module's own doc comment, and the Rust design's own "pass a
-    // `ParamsCtx` over the containing parent `NodeRef` alone" ruling. A
+    // `ParamsCtx` over the containing parent `NodeRef` alone" rule. A
     // live chain (not a one-shot snapshot) so a later iteration sees
     // whatever the containing scope has written since, matching
     // Python's own live dict reference.

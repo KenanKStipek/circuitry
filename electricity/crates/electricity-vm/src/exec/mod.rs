@@ -92,7 +92,7 @@ pub(crate) fn interrupted_text(token: &CancellationToken) -> String {
         // called once `token.is_set()` is already known true -- any
         // other/missing signum too. Deliberately one arm, not two: a
         // dedicated `Some(SIGINT)` match next to this would just
-        // repeat it (PR #440's review of issue #431).
+        // repeat it (PR #440 of issue #431).
         _ => "Interrupted (Ctrl-C/SIGINT)".to_string(),
     }
 }
@@ -283,7 +283,7 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// [`CtxSource::Live`] entry's own [`Store::snapshot`] taken fresh right
 /// here, not at whatever earlier moment that entry joined the chain.
 ///
-/// Known limitation (issue #431 review, PR #440; #442; tracked as
+/// Known limitation (issue #431, PR #440; #442; tracked as
 /// #463): [`Store::snapshot`] deep-copies the *entire* subtree under a
 /// `Live` entry's own node, so a call here is O(the live state
 /// reachable from that node), not Python's O(1) live-reference read.
@@ -304,16 +304,15 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// case and every new loop case in this PR stays byte-identical
 /// (the existing golden corpora, and loop's own conformance cases run
 /// on both engines -- control flow like this is covered by running
-/// real documents, not a golden-corpus replay; see this PR's own
-/// confirmed ruling).
+/// real documents, not a golden-corpus replay).
 ///
 /// A `tool` leaf's own render and an `if`/`while` condition no longer
 /// call this function at all (issue #463, PR #482): `exec::live_scope`
 /// resolves both lazily, a dotted segment at a time, off the live
 /// store itself. This function stays the real cost for every caller
 /// that still needs it: a `use` effect's own input render/`expect:`
-/// (`exec::use_`'s own call sites aren't narrowed either -- PR #482's
-/// review, left as a follow-up: a `use` effect's own retry
+/// (`exec::use_`'s own call sites aren't narrowed either, left as a
+/// follow-up to PR #482: a `use` effect's own retry
 /// loop does resolve its `{from:}`/template inputs lazily now through
 /// the same [`crate::exec::live_scope::LiveRoot`], but its `expect:`'s
 /// own `state` argument still collapses through this function, exactly
@@ -367,7 +366,7 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 /// Wraps *err* with *label*'s own `"<label>: <message>"` prefix
 /// (`core/dynamic.py`'s chain-flow wrap, `RuntimeError(f"{effect_path}:
 /// {e}")`, where `effect_path` is [`effect_label`]'s own result, not a
-/// full state path -- PR #440's review of issue #431: a nested
+/// full state path -- PR #440 of issue #431: a nested
 /// `dynamic`'s own wrap must read `"<its own name>.<child>"`, never
 /// `"<child's full path>"`) -- except a cancellation, which Python's own
 /// `except Exception` (never `BaseException`) never catches, so it

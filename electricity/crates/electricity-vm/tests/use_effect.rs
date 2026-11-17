@@ -229,7 +229,7 @@ async fn a_cycle_between_two_path_children_is_detected_with_the_exact_arrow_text
     let VmError::Raised { message, .. } = err else {
         panic!("expected a VmError::Raised, got {err:?}");
     };
-    // PR #472's review: this used to only check `contains("
+    // PR #472: this used to only check `contains("
     // → ")`, but the PR body calls this "exact arrow text" -- so check
     // the full, real message, both resolved identities included.
     let identity_a = std::fs::canonicalize("tests/fixtures/use/cycle_a.yml")
@@ -533,7 +533,7 @@ async fn the_child_roots_own_pair_is_suppressed_and_every_other_hook_forwards_na
     );
 }
 
-/// PR #472's review: every existing refused-child test used
+/// PR #472: every existing refused-child test used
 /// an *inline* child (`support::refused_use_leaf`); this one is a real
 /// `path:` child, with an ordinary `json` step placed *before* the
 /// unsupported `prompt` step in the same chain -- `first_unsupported`
@@ -656,7 +656,7 @@ async fn use_inside_a_tree_dynamic_has_no_false_cycle_between_sibling_branches()
 /// the same absolute path its own start/end events use, namespaced
 /// under the use node like every other child effect (this test used
 /// to pin the opposite, unnamespaced behaviour per a now-superseded
-/// case from PR #472's review). Also a Rust test, not a conformance
+/// case from PR #472). Also a Rust test, not a conformance
 /// case, for the same `known_divergence` single-location reason as
 /// the sibling test above (the child's own dynamic container also
 /// picks up the use-triggered real-adapter heuristic).
@@ -867,7 +867,7 @@ effects:
 
 #[tokio::test]
 async fn a_cancelled_use_pairs_its_own_start_and_end_and_records_the_interrupt() {
-    // issue #796: before this fix, a cancelled `use` left its own
+    // issue #796: a cancelled `use` used to leave its own
     // `effect_start` unanswered -- no `end` event at all in `--events`,
     // and no `meta.error`/`meta.completed_at` on its node -- unlike an
     // interrupted `dynamic`, which records both. `CancelOnStart` fires

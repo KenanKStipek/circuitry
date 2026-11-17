@@ -1,5 +1,5 @@
 //! `Store`/`NodeRef`: the VM's own mutable state tree (DESIGN.md's store
-//! design; issue #431's Lane B section).
+//! design; issue #431).
 //!
 //! A container child's identity-aliasing (`node["last"]` sharing the
 //! same object as `node["iter_2"]`, `Rc::ptr_eq`-visible, DESIGN.md
@@ -13,8 +13,8 @@
 //! `Slot::Node`'s `NodeRef` again (an earlier revision of this file kept
 //! that identity in a side table keyed by a parent's raw `Rc` address
 //! instead, which could hand back a node belonging to an already-freed
-//! parent once the allocator reused that address -- see issue #431's
-//! review discussion). A [`Slot::Node`] is simply dropped, like any
+//! parent once the allocator reused that address -- see issue #431).
+//! A [`Slot::Node`] is simply dropped, like any
 //! other map value, when its key is overwritten or its owning node goes
 //! away; nothing outside the map it lives in ever names it by address.
 
@@ -62,7 +62,7 @@ pub enum Slot {
 /// chain_slots`/`dict_slots` already pay once per `if`-branch-step/rare
 /// multi-entry-chain call, never per pass) -- plain `.iter()`/`.get()`/
 /// Deref on such a node silently drops every key *fallback* alone
-/// carries (issue #501's review: `exec::conditional`'s
+/// carries (issue #501: `exec::conditional`'s
 /// `chain_slots`/`dict_slots` did exactly that for a release, losing an
 /// `if`'s enclosing scope from its second branch step on inside any
 /// loop body). [`Store::saved`] never sees an overlay node at all: it
@@ -75,7 +75,7 @@ pub struct Node {
     fallback: Option<NodeRef>,
     /// A single *fallback* key this overlay must never expose, even once
     /// *fallback* -- a real, still-mutating tracked node -- comes to
-    /// carry it later in the same pass (issue #501's review).
+    /// carry it later in the same pass (issue #501).
     /// [`exec::loop_::with_prev_overlay`] sets this to the current
     /// pass's own `iter_<idx>` key: that key doesn't exist in the real
     /// loop node yet when the overlay is built (`execute_loop`'s own
@@ -247,7 +247,7 @@ pub fn node_with_fallback(entries: IndexMap<Value, Slot>, fallback: NodeRef) -> 
 
 /// [`node_with_fallback`], plus [`Node::hidden`] -- a single key
 /// *fallback* must never expose through this overlay, even once
-/// *fallback* itself comes to carry it (issue #501's review).
+/// *fallback* itself comes to carry it (issue #501).
 pub fn node_with_fallback_hiding(
     entries: IndexMap<Value, Slot>,
     fallback: NodeRef,

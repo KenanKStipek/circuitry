@@ -951,10 +951,10 @@ fn reply_with(
     })
 }
 
-/// Issue #498 (review of PR #502): a `use` child's own
+/// Issue #498 (PR #502): a `use` child's own
 /// `record_totals` calls must reach the parent run's totals too, the
 /// same way `effect_start`/`effect_complete`/`write` already do
-/// (`exec::use_::ChildObserver`'s own forwarding, before this fix the
+/// (`exec::use_::ChildObserver`'s own forwarding; previously the
 /// trait's default no-op silently swallowed every call from inside a
 /// child).
 #[tokio::test]
@@ -1054,7 +1054,7 @@ async fn a_render_failure_also_calls_record_totals_before_effect_complete() {
     );
 }
 
-/// Issue #498 (review of PR #502): `_record_reply` starts
+/// Issue #498 (PR #502): `_record_reply` starts
 /// from the reply's own warnings and appends the truncation warning
 /// *after* them (`prompt.py:1225-1238`) -- not the other way around.
 #[tokio::test]

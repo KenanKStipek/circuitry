@@ -1,4 +1,4 @@
-//! Lane H (#461), #442's own "Interpreter cost" item, #463, #484: a
+//! #461, #442's own "Interpreter cost" item, #463, #484: a
 //! regression guard for the context a render/condition-eval builds
 //! inside a loop -- originally pinned against `exec::live_ctx`'s own
 //! per-render whole-subtree copy (chain-flow `each`, the case that
@@ -299,11 +299,11 @@ async fn run_while_of(n: u32) -> std::time::Duration {
 /// explicitly with `cargo test --release -p electricity-vm --test
 /// loop_perf -- --ignored`.
 ///
-/// Before this lane's own fix, this shape was the same quadratic cost
+/// Before this fix, this shape was the same quadratic cost
 /// as the `each` case (the issue's own body, and its design-study
 /// comment's own `while`-loop reproduction, measured ≈18-24x for 4x
 /// the passes). Measured on the development machine, release, after
-/// this lane's own fix: 250 passes ≈ 13ms, 1000 passes ≈ 52ms, ≈4x --
+/// this fix: 250 passes ≈ 13ms, 1000 passes ≈ 52ms, ≈4x --
 /// at the truly-linear bound itself. 8x is this issue's own
 /// acceptance ceiling (its body: "growth from 250 to 1000 passes stays
 /// within about 4x"; 8x keeps headroom over that for machine noise
@@ -414,8 +414,8 @@ async fn run_while_use_of(n: u32) -> std::time::Duration {
     t0.elapsed()
 }
 
-/// PR #482's review: `execute_use` still took a full `live_ctx`
-/// snapshot on every pass, unlike the tool leaf this lane's own fix
+/// PR #482: `execute_use` still took a full `live_ctx`
+/// snapshot on every pass, unlike the tool leaf this fix
 /// covers -- so a `use` effect's own input render stayed O(the live
 /// state reachable from the loop) per pass, the same quadratic shape
 /// #463 tracks for a tool leaf. Guards the fix (`exec::use_::

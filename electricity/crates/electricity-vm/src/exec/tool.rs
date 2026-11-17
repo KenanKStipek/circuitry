@@ -108,7 +108,7 @@ impl ResolvedPlugin<'_> {
 /// still register) always wins when one is registered under
 /// *provider*'s own normalized name. Only a *provider* with no such
 /// entry falls through to [`electricity_tools::build_plugin`] (issue
-/// #449's gate lane item 2) -- called fresh on *this* call, i.e. once
+/// #449, item 2) -- called fresh on *this* call, i.e. once
 /// per attempt, exactly where `core/tool.py::ToolRuntime.execute` calls
 /// Python's own `build_plugin` every attempt -- so a per-plugin config
 /// error on that path fails just the one attempt. `json` is never
@@ -1153,14 +1153,14 @@ pub async fn execute_tool<R: ParamsCtx>(
         // Published the moment a fresh attempt's own `meta` is visible,
         // the same way `--live-state` would catch up with Python's own
         // plain dict mutations here (never behind a `store.set` of their
-        // own, but always live through the same shared node) -- lane
-        // D2's own mirror only ever learns a run changed shape by
+        // own, but always live through the same shared node) --
+        // electricity's own live-state mirror only ever learns a run changed shape by
         // polling `RunObserver::write`'s own call count, never by
         // diffing the store itself.
         observer.write();
 
         let mut failure: Option<electricity_tools::ToolError> = None;
-        // Lane E (issue #485): `meta.status_code`'s own value, when a
+        // Issue #485: `meta.status_code`'s own value, when a
         // returned result's `raw.status` was an int *and* this
         // provider is HTTP family (`is_http_family_provider`, below).
         // Threaded past the big `match` below so the retry
@@ -1172,7 +1172,7 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `retry-after`/`Retry-After` value, captured before
         // `capped_raw` redacts/consumes `result.raw` below. Only ever
         // set on an `ok: false` returned result -- never a raised
-        // failure or a failed `expect:` (issue #485's own ruling).
+        // failure or a failed `expect:` (issue #485).
         let mut retry_after_for_backoff: Option<String> = None;
         // Issue #724: this attempt's own `result.tokens_sent`/
         // `.tokens_received`, threaded past the big `match` below the
@@ -1758,7 +1758,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 .map(|code| Value::from(i64::from(code)))
                                                 .unwrap_or(Value::None),
                                         );
-                                        // Lane E (issue #485): `meta.status_code`,
+                                        // Issue #485: `meta.status_code`,
                                         // HTTP-family providers only (`core/
                                         // tool.py`'s own `_HTTP_FAMILY_PROVIDERS`
                                         // gate), the provider's own *as-written*
@@ -2128,7 +2128,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                     expect_failed,
                 );
             if !is_last_attempt && retryable {
-                // Lane E (issue #485): a provider's own `Retry-After`
+                // Issue #485: a provider's own `Retry-After`
                 // overrides the computed backoff -- only ever present
                 // for an `ok: false` returned result
                 // (`retry_after_for_backoff`'s own doc comment above:

@@ -1,4 +1,4 @@
-//! M1 lane L2b (issue #522): runtime decomposition wired into the
+//! Issue #522: runtime decomposition wired into the
 //! `prompt` effect's own dispatch seam -- integration tests against a
 //! real, compiled document (`execute_root`), the same convention
 //! `tests/prompt_effect.rs`/`tests/use_effect.rs` use. `decompose.rs`'s

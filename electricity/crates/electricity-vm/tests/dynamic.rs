@@ -334,7 +334,7 @@ async fn tree_registers_every_branch_before_dispatch_and_clears_at_merge() {
 
 #[tokio::test]
 async fn a_tree_cancelled_before_any_branch_starts_still_clears_its_overlay() {
-    // PR #549's review: a cancelled tree never merges
+    // PR #549: a cancelled tree never merges
     // (cof's own no-state-write cancellation contract), but
     // `clear_tree_branches` must still fire -- left registered, a
     // still-coalescing `--live-state` mirror would keep overlaying
@@ -807,7 +807,7 @@ async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message()
 #[tokio::test]
 async fn stop_on_error_records_only_the_first_of_two_simultaneous_failures() {
     // Both branches fail with no real await point in between (the
-    // lane-C tool stub resolves on its very first poll), so both are
+    // mock tool resolves on its very first poll), so both are
     // already queued in the same `FuturesUnordered` before the drain
     // loop ever runs -- exactly the scenario where a naive "keep
     // appending until the queue is cleared" drain would record both
@@ -1005,7 +1005,7 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
     // `launch` closure that notices it (`z` is queued, never started),
     // not `x`'s. `x`'s own `on_error: continue` must not matter either
     // way -- a `Cancelled` is never an ordinary failure `on_error`
-    // degrades, so the run must still stop (PR #440's review of issue
+    // degrades, so the run must still stop (PR #440 of issue
     // #431: an earlier version of this test cancelled on `x`'s
     // own start instead, so `x`'s own chain pre-check caught it before
     // `y` ever ran, and the comment describing `y`'s own tree noticing

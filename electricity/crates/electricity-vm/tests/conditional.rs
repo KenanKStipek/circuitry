@@ -18,7 +18,7 @@ use support::{
 };
 
 /// A `generate` that always answers `"yes"`, with token counts --
-/// issue #513's review: lets a model `if`'s own container-level
+/// issue #513: lets a model `if`'s own container-level
 /// `record_totals` hook be exercised end to end, not just probed for
 /// reaching `NoopAdapter`'s own failure.
 struct YesAdapter;
@@ -110,7 +110,7 @@ async fn run_with_adapter(
     (store, observer, result)
 }
 
-/// Issue #513's review: a named model `if`'s own successful
+/// Issue #513: a named model `if`'s own successful
 /// pass calls `record_totals` exactly once.
 #[tokio::test]
 async fn a_named_model_if_calls_record_totals_once_on_success() {
@@ -548,7 +548,7 @@ async fn on_error_skip_writes_a_null_result_for_a_broken_condition() {
     // `cli/events.py::EventLog.on_complete` reads `meta.error`, not
     // whatever `decide_and_run` itself returned -- `on_error: skip`
     // absorbs the condition error into `Ok(())`, but the `end` event
-    // must still carry it (`ok: false`, PR #440's review of issue #431).
+    // must still carry it (`ok: false`, PR #440 of issue #431).
     assert!(
         observer
             .events()

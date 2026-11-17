@@ -1,6 +1,6 @@
 //! `core/effect_identity.py`'s `call_path`/`nested_container`, ported as
 //! a cheap-to-clone value rather than a `contextvars.ContextVar` (issue
-//! #449's gate lane items 4/6; PR #454) --
+//! #449, items 4/6; PR #454) --
 //! threaded by [`crate::exec::execute_op`] and every container executor
 //! (including every still-stubbed one, down to the two `condition_model`
 //! stubs) so a later `prompt`/`loop`/`use` effect type never has to
@@ -29,7 +29,7 @@
 //! [`Frame::root`]'s own empty prefix and empty pass map make
 //! [`Frame::effect_path`] return exactly *path* unchanged for the whole
 //! of any M0-shaped run (no `use`, no `loop`), keeping `--events`
-//! output byte-identical until a lane actually calls [`Frame::nested`]/
+//! output byte-identical until a caller actually calls [`Frame::nested`]/
 //! [`Frame::with_pass`].
 
 use electricity_bytecode::{EffectPath, LoopId};
@@ -75,16 +75,15 @@ pub struct Frame {
     /// rendered, fence-cleaned YAML text, UTF-8 encoded, lowercase
     /// (Python's own `hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]`).
     use_call_stack: Rc<Vec<String>>,
-    /// A reflector's own inner-dynamic path rewrite (issue #506's lane
-    /// L1), pushed by [`Frame::rebased`] -- empty for every frame
+    /// A reflector's own inner-dynamic path rewrite (issue #506),
+    /// pushed by [`Frame::rebased`] -- empty for every frame
     /// outside a reflector's inner dynamic. Each `(from, to)` entry is
     /// already resolved against this frame's own [`Frame::pass_indices`]
     /// at the point [`Frame::rebased`] pushed it (never re-resolved per
     /// lookup). [`Frame::apply_rebase`] applies every entry, *last
     /// pushed first* -- a reflector nested inside another reflector's
     /// own `effects:` pushes a second entry onto the outer's own stack
-    /// rather than replacing it (PR #510's first
-    /// review: a single `Option` here could only ever rewrite the
+    /// rather than replacing it (PR #510: a single `Option` here could only ever rewrite the
     /// innermost reflector's own prefix, losing every outer one's own
     /// rewrite entirely) -- applying the innermost rule first and
     /// re-checking the *result* against each earlier, outer rule in
@@ -379,8 +378,8 @@ impl Frame {
         path
     }
 
-    /// A reflector's own inner-dynamic path rewrite (issue #506's lane
-    /// L1): every path this frame is ever asked to resolve that starts
+    /// A reflector's own inner-dynamic path rewrite (issue #506):
+    /// every path this frame is ever asked to resolve that starts
     /// with *from* -- both *from* and *to* given in the same,
     /// not-yet-prefixed coordinate space [`Frame::effect_path`]'s own
     /// *resolved* local reaches right after pass-placeholder

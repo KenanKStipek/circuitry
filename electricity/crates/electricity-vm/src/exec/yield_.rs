@@ -75,7 +75,7 @@ impl<R: ScopeRoot> ScopeRoot for InputsOverlay<'_, R> {
     /// *inner*-side (no store access at all) -- only the fall-through
     /// branch (the first segment isn't an `inputs` key) needs to reach
     /// *inner* at all, and it does so through *inner*'s own `contains`,
-    /// never `lookup` (issue #492's review: the
+    /// never `lookup` (issue #492: the
     /// inherited default would otherwise call `self.lookup`, which
     /// falls through to `inner.lookup`, which -- for a store-backed
     /// *inner* whose path resolves onto a `Slot::Node` with no segments
@@ -272,7 +272,7 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
             // (`cli/events.py`), never the raw exception text, so a
             // secret-shaped message must never reach the event stream
             // even though `Raised` below still carries it unredacted
-            // (issue #492's review).
+            // (issue #492).
             observer.effect_complete(
                 &effect_path,
                 instance,
@@ -597,7 +597,7 @@ mod tests {
             .unwrap();
         // A named-loop-shaped node: large enough that a full
         // `Store::snapshot` of it would be a real cost, not just
-        // incidentally harmless (issue #492's review).
+        // incidentally harmless (issue #492).
         let named_loop = store
             .ensure_dict(&prime, Value::from("named_loop"))
             .unwrap();

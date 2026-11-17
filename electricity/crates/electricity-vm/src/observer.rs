@@ -8,8 +8,8 @@ use electricity_bytecode::{EffectPath, ReportLevel};
 use electricity_value::Value;
 
 /// An opaque per-call identifier [`RunObserver::effect_start`] hands
-/// back and [`RunObserver::effect_complete`] takes (issue #449's gate
-/// lane item 7) -- `--events` pairs a `start` line with its `end` line;
+/// back and [`RunObserver::effect_complete`] takes (issue #449,
+/// item 7) -- `--events` pairs a `start` line with its `end` line;
 /// Python gets that pairing for free from a per-thread call stack
 /// (`cli/events.py`), but this VM runs concurrent tree branches (and,
 /// from M1-H, concurrent/unnamed loop passes writing the same path) on
@@ -33,7 +33,7 @@ pub type InstanceId = u64;
 pub trait RunObserver {
     /// A named effect is about to run (DESIGN.md's own "balanced start/
     /// complete hooks on every exit path; no hooks for an unnamed `if`"
-    /// rule, issue #431's Lane B section) -- returns this call's own
+    /// rule, issue #431) -- returns this call's own
     /// [`InstanceId`], which the matching [`RunObserver::effect_complete`]
     /// call must be given back.
     fn effect_start(&self, _path: &EffectPath) -> InstanceId {
@@ -78,7 +78,7 @@ pub trait RunObserver {
 
     /// A run-time warning with no effect of its own to attach it to --
     /// Circuitry's own stderr `WARNING: ...` lines (issue #442). Adding
-    /// the hook itself is this gate lane's job (issue #449 item 7); the
+    /// the hook itself is issue #449's job (item 7); the
     /// CLI's own stderr writer that turns a call here into a printed
     /// line is #442's own PR, built on top of this seam once it lands.
     fn warning(&self, _message: &str) {}
@@ -151,7 +151,7 @@ pub trait RunObserver {
     /// *node_path* no longer needs this tree's own overlay -- it has
     /// merged. *branches* must be the exact same [`NodeRef`]s this
     /// tree's own [`RunObserver::register_tree_branches`] call passed
-    /// (not merely the same *node_path*): PR #549's review --
+    /// (not merely the same *node_path*): PR #549 --
     /// an unnamed tree loop that is a direct branch of another tree
     /// registers at the *same* path as the outer tree's own container
     /// (an unnamed loop/dynamic branch appends no name segment of its

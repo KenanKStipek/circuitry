@@ -7,7 +7,7 @@
 //! loop, `on_error`, and the run's token/cost totals. Model-mode
 //! `if`/`while`/`expect` (G2), complexity scoring/routing (K2) and
 //! decomposition (L2) are out of scope -- the one call-site placeholder
-//! each of those lanes fills is marked below.
+//! for each is marked below.
 
 pub(crate) mod answers;
 mod decode;
@@ -379,9 +379,9 @@ enum PassOutcome {
 enum HardStop {
     /// `AllowlistError` -- a denied `provider:`/fallback; still recorded
     /// like an ordinary failure by the *caller* (the previous pass's
-    /// own `attempts_meta`, per the ruling below), just never retried.
+    /// own `attempts_meta`, per the explanation below), just never retried.
     Allowlist(String),
-    /// Ruling 4: a `prompt` inside a `use` child named an adapter this
+    /// A `prompt` inside a `use` child named an adapter this
     /// build has no builder for at all -- fatal, never recorded as an
     /// attempt, never absorbed by `on_error`.
     Refused(VmError),

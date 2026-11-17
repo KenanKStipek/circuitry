@@ -125,12 +125,12 @@ pub struct GenerateResult {
 }
 
 /// What [`Adapter::generate`] needs beyond *model*/*prompt*/*options*
-/// (issue #449's gate lane) -- replaces Python's `core.effect_identity.
+/// (issue #449) -- replaces Python's `core.effect_identity.
 /// current_call_path` contextvar with an explicit argument, since this
 /// VM has no thread-local/contextvar-equivalent of its own. *path* is
 /// the effect's own **concretized** [`EffectPath`] (loop passes
 /// resolved to their real index, DESIGN.md's own `concretize`) -- the
-/// scripted adapter's own reply-queue key (issue #449's gate lane item
+/// scripted adapter's own reply-queue key (issue #449 item
 /// 4; `adapters/scripted.py`).
 pub struct CallContext<'a> {
     pub path: &'a EffectPath,

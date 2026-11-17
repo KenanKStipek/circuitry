@@ -113,8 +113,8 @@ impl Limiter {
     /// counts -- parsing `runtime.max_concurrency`/`runtime.
     /// concurrency_groups` out of a document's own JSON/YAML value, with
     /// Python's own `"Invalid runtime concurrency configuration:\n  -
-    /// ..."` error text, is `electricity-config`'s job (issue #431's
-    /// Lane D section), not this crate's.
+    /// ..."` error text, is `electricity-config`'s job (issue #431),
+    /// not this crate's.
     ///
     /// *max_concurrency* of `None` **or** `Some(0)` both mean no global
     /// cap -- Python's own `Semaphore(max_concurrency) if max_concurrency

@@ -5,7 +5,7 @@
 //! balanced `effect_start`/`effect_complete`; an *unnamed* `if` is
 //! transparent -- its selected branch's effects write directly into
 //! *parent* (the enclosing scope), it has no `value`/`meta` of its own,
-//! and it fires neither hook (issue #431's Lane B section: "no hooks for
+//! and it fires neither hook (issue #431: "no hooks for
 //! an unnamed `if`").
 
 use super::dynamic::now_iso;
@@ -682,7 +682,7 @@ fn local_writes(
 /// [`crate::store::Node::flat_entries`] -- not a plain `.iter()`/Deref
 /// read of the node's own direct entries, which would silently drop
 /// every key reachable only through a [`crate::store::Node::fallback`]
-/// (issue #501's review: a loop body's `ctx_chain` can now be
+/// (issue #501: a loop body's `ctx_chain` can now be
 /// one of `exec::loop_`'s own overlay nodes, carrying only that pass's/
 /// step's own local keys directly, with everything else -- `item`,
 /// `input`, `prime`'s own sibling entries -- one or more fallback hops

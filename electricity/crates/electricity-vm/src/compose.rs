@@ -167,7 +167,7 @@ impl ExpandState {
 ///
 /// *head* (*name*'s own first segment) present in `ctx["prime"]`
 /// (checked with [`ScopeRoot::contains`], never a full materialization
-/// -- the rulings on issue #487) means the effect ran, even if skipped
+/// -- issue #487) means the effect ran, even if skipped
 /// or absorbed by its own `on_error`: dotted-get `prime.<name>.value`
 /// (via [`ScopeRoot::lookup`]), `""` for a missing/`None` value.
 /// *head* merely known (*known_names*, #396's "an untaken `if` branch,
@@ -408,7 +408,7 @@ impl<R: ScopeRoot> ScopeRoot for HiddenOverlay<'_, R> {
     /// (no store access at all), so only the fall-through branch (the
     /// first segment isn't a hidden key) needs to reach *inner* at all,
     /// and it does so through *inner*'s own `contains`, never `lookup`
-    /// (issue #492's review: the inherited default would
+    /// (issue #492: the inherited default would
     /// otherwise call `self.lookup`, which falls through to `inner.
     /// lookup`, which -- for a store-backed `inner` whose path resolves
     /// onto a `Slot::Node` with no segments left -- materializes that
@@ -941,8 +941,8 @@ mod tests {
             .unwrap();
         // A named-loop-shaped node: large enough that a full
         // `Store::snapshot` of it would be a real cost, not just
-        // incidentally harmless -- the same shape issue #492's
-        // review names ("a `prime.<head>` node can be a loop
+        // incidentally harmless -- the same shape issue #492 names
+        // ("a `prime.<head>` node can be a loop
         // with thousands of passes").
         let named_loop = store
             .ensure_dict(&prime, Value::from("named_loop"))
@@ -1273,7 +1273,7 @@ mod golden_corpus_live_root {
     /// through [`electricity_template::step`] from the very first
     /// segment on, the same as the eager, plain-`Value`-rooted path,
     /// never actually exercising [`LiveRoot`]'s own node-walking branches
-    /// at all (issue #492's review).
+    /// at all (issue #492).
     fn seed_store_from_ctx(store: &Store, parent: &NodeRef, value: &Value) {
         let Value::Dict(dict) = value else {
             return;

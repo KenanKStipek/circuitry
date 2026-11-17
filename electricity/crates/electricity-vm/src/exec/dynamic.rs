@@ -316,7 +316,7 @@ pub(crate) fn execute_dynamic<'a>(
         // interruption, so the closest approximation is: if *token*
         // wasn't set before `finally:` started but is set once it ends,
         // treat that as if `finally:` itself were cancelled (PR #440's
-        // review of issue #431).
+        // issue #431).
         let was_set_before_finally = token.is_set();
         let finally_result = match finally {
             Some(Region::Block { ops, .. }) => {
@@ -597,7 +597,7 @@ fn execute_chain<'a>(
 /// branch -- a shared, deterministic `ctx` snapshot taken once before
 /// dispatch (never per-branch, unlike chain), up to `max_workers`
 /// branches in flight at once via a manually bounded
-/// [`FuturesUnordered`] (issue #431's Lane B section: "run as futures
+/// [`FuturesUnordered`] (issue #431: "run as futures
 /// inside one task", not `tokio::task::spawn_local` -- this function's
 /// own arguments aren't `'static`), merged back into *dyn_node* in index
 /// order only when nothing was ever cancelled (`core/dynamic.py`'s own
@@ -803,7 +803,7 @@ fn execute_tree<'a>(
         };
 
         if interrupted {
-            // PR #549's review: a cancelled tree never
+            // PR #549: a cancelled tree never
             // merges (cof's own no-state-write cancellation contract,
             // the comment on `tree_errors`/`refused` above), but the
             // overlay this call registered must still come down here --

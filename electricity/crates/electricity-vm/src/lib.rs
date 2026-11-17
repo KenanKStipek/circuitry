@@ -36,7 +36,7 @@ pub mod retry;
 pub mod split;
 pub mod store;
 
-/// Moved to `electricity-value` (issue #449's gate lane): a `ToolCall`
+/// Moved to `electricity-value` (issue #449): a `ToolCall`
 /// (`electricity-tools`) and the VM both need the same concrete token
 /// type, and the workspace's dependency direction (DESIGN.md §2) rules
 /// out defining it in either one -- re-exported here unchanged so every
@@ -96,7 +96,7 @@ pub struct RunContext<'a> {
     /// rather than added to this struct's shape later.
     pub dry_run: bool,
     /// `true` only for a CLI-driven run -- [`electricity_tools::ToolCall::armed`]'s
-    /// own doc comment (issue #449's gate lane item 1).
+    /// own doc comment (issue #449, item 1).
     pub armed: bool,
     /// `adapters/factory.py::build_adapter`'s own per-attempt builder
     /// table (issue #449, item 4) -- the `prompt` effect is the first
@@ -137,20 +137,19 @@ pub struct RunContext<'a> {
     pub decomposition_depth: u32,
     /// The directory a relative `use: {path: ...}`/asset reference
     /// resolves against -- `Program.document`'s own `resolved_directory`.
-    /// Lane I.
     pub orchestration_dir: &'a Path,
     /// `Program.prompts` -- the document's own top-level `prompts:` map
-    /// (name -> template text), for `{{> name}}` expansion. Lane P.
+    /// (name -> template text), for `{{> name}}` expansion.
     pub declared_prompts: &'a indexmap::IndexMap<String, String>,
     /// `Program.effect_names` -- every named effect in the document, for
     /// `{{> name}}`'s own "not a declared prompt" vs "a declared prompt
-    /// that hasn't run yet" distinction. Lane P.
+    /// that hasn't run yet" distinction.
     pub effect_names: &'a BTreeSet<String>,
     /// This run's own capability set -- `electricity` (lib)'s run wiring
     /// builds it once, from `electricity_bytecode::refusal::Supported::
     /// current(...)` with the `test-tools` cargo feature's own extras,
     /// the same value already passed to `first_unsupported` for the
-    /// top-level document. Lane I's own runtime check (M1 table:
+    /// top-level document. The per-child runtime check (M1 table:
     /// "first_unsupported + allowlist on each loaded child program")
     /// reads it off here rather than rebuilding it, so a freshly
     /// compiled `use` child is refused against the exact same
@@ -165,8 +164,8 @@ pub struct RunContext<'a> {
 pub enum VmError {
     /// A `tool` effect's `provider:` has no registered
     /// [`electricity_tools::ToolPlugin`] -- `electricity_tools::registry::
-    /// build_plugin`'s own exact unknown-plugin text (issue #449's gate
-    /// lane item 2), or a registered plugin's own
+    /// build_plugin`'s own exact unknown-plugin text (issue #449,
+    /// item 2), or a registered plugin's own
     /// [`electricity_tools::ToolError`], or any other tool-effect failure
     /// (a render error, an allowlist denial, a failed `expect:`) widened
     /// to the same shape with [`electricity_tools::ToolError::message`]'s
@@ -175,8 +174,8 @@ pub enum VmError {
     /// `on_error: fail` once retries are exhausted (PR #454:
     /// the previous `Tool(String)` shape threw its own
     /// [`electricity_tools::ToolError`]'s *py_class*/*cause* away at
-    /// [`crate::exec::tool::run_tool`], which #442's tree text and lane
-    /// E's own HTTP-family retry rule both need). [`crate::exec::
+    /// [`crate::exec::tool::run_tool`], which #442's tree text and
+    /// issue #485's own HTTP-family retry rule both need). [`crate::exec::
     /// wrap_effect_error`] keeps *cause* unchanged through a chain/tree
     /// wrap but rewrites *py_class* to `RuntimeError` on every wrap (`core/dynamic.py`'s
     /// own `raise RuntimeError(...) from e`: the wrapping exception is
