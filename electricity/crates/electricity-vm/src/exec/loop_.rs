@@ -3,7 +3,7 @@
 //! Routed from [`crate::exec::execute_op`] once
 //! [`electricity_bytecode::refusal::Supported::loop_`] is `true`.
 //!
-//! `--resume` and the interactive progress line are both
+//! `--resume` (runtime-semantics.md C21/C22) and the interactive progress line are both
 //! out of scope (M2-G; electricity's non-TTY stdout never prints one)
 //! -- every pass here always starts at index 0.
 

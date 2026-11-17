@@ -448,7 +448,7 @@ async fn a_schema_decode_failure_is_retried_down_then_across_passes() {
     let (store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
     let err = result.unwrap_err();
     // The bare schema text, not the "All adapter attempts failed"
-    // wrapper (issue #498).
+    // wrapper (issue #498, runtime-semantics.md C14).
     assert!(
         err.to_string()
             .contains("JSON schema validation failed: model returned None")
@@ -1669,7 +1669,7 @@ async fn an_empty_model_string_falls_back_to_the_run_default() {
 /// Python list-of-dicts repr form (single quotes, `None`) -- only
 /// reached when the chain's own *last* entry is an ordinary adapter
 /// failure, not a decode/schema one (otherwise that error re-raises
-/// bare instead, issue #498).
+/// bare instead, issue #498, runtime-semantics.md C14).
 #[tokio::test]
 async fn py_repr_of_the_wrapper_message_includes_a_raw_reply() {
     let mut op = template_prompt("give json");

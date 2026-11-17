@@ -224,9 +224,9 @@ fn http_family_provider(provider: &str) -> bool {
 
 /// `core/tool.py::ToolRuntime._resolve_timeout_seconds`. *runtime_config*
 /// is the merged `runtime:` block [`RunContext::runtime_config`] carries;
-/// nothing populates `runtime.tools.timeout_seconds`
-/// in it yet, so this always falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]
-/// until then. A `timeout_ms: {from: ...}` is read from *ctx* here, for
+/// a configured `runtime.tools.timeout_seconds` there applies, otherwise
+/// this falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]. A `timeout_ms:
+/// {from: ...}` is read from *ctx* here, for
 /// each attempt (issue #564), and fails with the text `tool`'s own
 /// `meta.error` records.
 fn resolve_timeout_seconds<R: ParamsCtx>(

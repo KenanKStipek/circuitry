@@ -1154,7 +1154,7 @@ async fn a_shadowing_steps_bare_name_is_invisible_without_the_branchs_own_names(
 
 #[tokio::test]
 async fn an_ifs_second_branch_step_sees_a_sibling_two_dynamic_levels_under_its_own_sibling() {
-    // Probe E (issue #440, commit `a4ff2cd`): `process` (a named `dynamic`) runs an
+    // Probe E (PR #440, commit `a4ff2cd`): `process` (a named `dynamic`) runs an
     // unnamed `if` whose branch is `[prep, pipeline]`. `pipeline`'s own
     // `outline` step writes two `dynamic` levels under `process` --
     // reachable, from `check` (`pipeline`'s *second* step), only through
