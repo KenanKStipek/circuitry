@@ -1,20 +1,20 @@
 //! `plugins/factory.py::build_plugin`, ported -- a per-attempt plugin
-//! builder (issue #449's gate lane, item 2), replacing the flat
+//! builder (issue #449, item 2), replacing the flat
 //! [`crate::ToolRegistry`] as `electricity_vm::exec::tool::execute_tool`'s
-//! own dispatch seam: lane C calls this *inside* the retry loop, exactly
+//! own dispatch seam: `execute_tool` calls this *inside* the retry loop, exactly
 //! where `core/tool.py::ToolRuntime.execute` calls Python's own
 //! `build_plugin`, so a per-plugin config error fails one attempt and is
 //! retried like any other non-HTTP failure, never treated as a document
 //! error caught up front.
 //!
-//! `builders()` has an entry for every M1 native-tool lane's own
+//! `builders()` has an entry for every native-tool
 //! provider (`json`, plus `sleep`/`fail`/`flaky_build` under the
 //! `test-tools` feature, plus `shell`/`awk`/`imagemagick`/`ffmpeg`/`fs`/
 //! `env_vars`/`hash`/`uuid`/`clock`/`regex`/`http`/`validate_yaml`),
 //! each one returning that
-//! lane's own stub plugin (whose own `execute` still fails with a
+//! provider's own stub plugin (whose own `execute` still fails with a
 //! not-implemented message) rather than this function's own
-//! "Unknown plugin" text -- so lane C/D1/D2/E/L2's own first PR only
+//! "Unknown plugin" text -- so adding a new provider only
 //! ever fills a body in the file this map already names a builder for,
 //! never adds an entry to this shared map itself. The unknown-plugin
 //! message's own "Supported plugins" list is still *not* this map's own
@@ -40,7 +40,7 @@ use std::collections::HashMap;
 /// own `plugin_env_override`) can fail on a single attempt without that
 /// failure being mistaken for a document-shape error caught up front --
 /// `core/tool.py::ToolRuntime.execute` calls Python's own `build_plugin`
-/// inside its retry loop for exactly this reason (M1 gate seam S1).
+/// inside its retry loop for exactly this reason.
 type Builder = fn(&Value) -> Result<Box<dyn ToolPlugin>, ToolError>;
 
 fn builders() -> HashMap<&'static str, Builder> {
@@ -51,15 +51,15 @@ fn builders() -> HashMap<&'static str, Builder> {
             Ok(Box::new(crate::json::JsonTool))
         },
     );
-    // Every M1 native-tool lane's own provider is pre-registered
-    // here now, each builder returning that lane's own (still
+    // Every native-tool provider is pre-registered
+    // here now, each builder returning that provider's own (still
     // not-implemented) stub plugin --
-    // so lane C/D1/D2/E/L2's own first PR only ever fills a body in
+    // so adding a new provider only ever fills a body in
     // the file this map already names, never adds a line to this
-    // shared `HashMap::insert` call sequence another lane might also
+    // shared `HashMap::insert` call sequence another change might also
     // be touching in the same window. The refusal walker's own
     // `Supported` flags (not this map) are still what keeps a real
-    // document from reaching any of these before its own lane lands --
+    // document from reaching any of these before support for it lands --
     // this map only changes what a *direct* `build_plugin` call (this
     // module's own tests, or an embedder bypassing the walker) gets
     // back: the real stub plugin (whose `execute` fails with its own
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn build_plugin_validates_the_shell_host_pin_per_attempt() {
-        // `shell::make_plugin` (lane C's own `_build_shell` seam) --
+        // `shell::make_plugin` (the `_build_shell` seam) --
         // a non-list `allowed_commands` pin fails this one attempt's
         // build, matching Python's own per-attempt `ValueError`.
         let mut cfg = electricity_value::Dict::new();

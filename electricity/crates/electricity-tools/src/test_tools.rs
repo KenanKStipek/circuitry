@@ -31,7 +31,7 @@ use async_trait::async_trait;
 use electricity_value::{Dict, Value};
 
 /// Blocks for `params.seconds` (a number; defaults to `0` when absent)
-/// -- lane D's own signal tests dispatch this inside a `finally:`/tree
+/// -- the signal tests dispatch this inside a `finally:`/tree
 /// branch to prove a queued branch never starts, or that a second
 /// SIGINT during a blocking `finally` exits immediately.
 pub struct SleepTool;
@@ -73,7 +73,7 @@ impl ToolPlugin for SleepTool {
     }
 }
 
-/// Always fails, with a fixed, deterministic message -- lane D's own
+/// Always fails, with a fixed, deterministic message -- the
 /// `on_error`/`retries` signal-adjacent tests need a tool that
 /// deterministically raises, without `shell`.
 pub struct FailTool;
@@ -100,8 +100,8 @@ impl ToolPlugin for FailTool {
 
 /// `test-tools` feature only: a per-attempt *builder* (not the tool's
 /// own `execute`) that fails the first `fail_times` builds for a given
-/// `id`, then succeeds -- the gate's S1 seam (`registry::Builder` is now
-/// fallible) needs a builder that can actually fail, which `sleep`/
+/// `id`, then succeeds -- `registry::Builder` being fallible
+/// needs a builder that can actually fail, which `sleep`/
 /// `fail` never do. Distinct from `electricity_vm::exec::tool`'s own
 /// `FlakyTool`, which fails inside `execute` (an already-built plugin
 /// returning `ok: false`), not during the build itself.

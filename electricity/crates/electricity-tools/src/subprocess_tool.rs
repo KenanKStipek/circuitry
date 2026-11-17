@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// One instance per binary-wrapping plugin file (`awk.rs`,
-/// `imagemagick.rs`, `ffmpeg.rs`, and lane C's own later additions),
+/// `imagemagick.rs`, `ffmpeg.rs`, and any later additions),
 /// each supplying its own *name*/*binary_candidates* -- `plugins/
 /// _subprocess.py::GenericSubprocessTool`'s own four fields.
 pub struct GenericSubprocessTool {
