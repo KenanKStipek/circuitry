@@ -1,0 +1,15 @@
+name: c778-bare-section-missing-field
+effects:
+  - type: tool
+    name: missing_field
+    provider: json
+    params: {mode: stringify, input: {marker: "outer-value"}}
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '[{"other": "a"}]'}
+  - type: tool
+    name: reader
+    provider: json
+    params: {mode: stringify}
+    params_json: '{{#prime.seed.value}}{"input": {{{missing_field.value}}}}{{/prime.seed.value}}'

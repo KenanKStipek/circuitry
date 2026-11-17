@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A `finally:` effect shares its dynamic's own scope: a bare {{first.value}} referencing a body sibling resolves exactly as {{prime.first.value}} does -- fails (renders empty) on main.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

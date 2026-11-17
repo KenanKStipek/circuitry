@@ -319,7 +319,28 @@ class DynamicRuntime:
         # dotted `prime.<name>` path the canonical spelling already reads
         # live off `child_store.state` -- bare and dotted are the same
         # lookup, not two mechanisms kept in sync (#778).
-        ctx = store.state if ctx_override is None else {**ctx_override, **store.state}
+        #
+        # `ctx_override` is widened with only this dynamic's own entry in
+        # *store* (``store.state[self.defn.name]`` -- the very ``dyn`` dict
+        # just below, live), never with the rest of *store*'s own state (the
+        # caller's full namespace, this dynamic's own siblings included):
+        # pre-#778, a bare ``{{<this dynamic's own name>.<child>.value}}``
+        # already worked from one of this dynamic's own children this way
+        # (see test_nested_dynamic_in_loop_still_sees_root_inputs_and_
+        # siblings), and that keeps working -- but merging the *whole* of
+        # *store*'s state the way the pre-#778 line did also leaked every
+        # one of this dynamic's own siblings in as bare top-level names,
+        # which outranks the new fallback below for any name this
+        # dynamic's own child happens to share with one of them: a
+        # nearest-wins case still disagreed between bare and dotted even
+        # after this fix until this was narrowed (#778 review). The dotted
+        # `prime.*` path was never affected either way; it is the same
+        # live `ctx["prime"]` regardless.
+        ctx = (
+            store.state
+            if ctx_override is None
+            else {**ctx_override, self.defn.name: dyn}
+        )
         child_store = store.child(self.defn.name)
         # `finally:` shares this dynamic's own child_store namespace and
         # scope (compiler.py), so its own names count too -- a `finally:`

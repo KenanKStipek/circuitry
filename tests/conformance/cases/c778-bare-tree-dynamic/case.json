@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "Inside a `flow: tree` dynamic's own branch `a`, a bare {{seed.value}} referencing the enclosing (already-completed) root effect resolves exactly as {{prime.seed.value}} does, the same deterministic snapshot from dynamic start every tree branch sees -- fails (renders empty) on main.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

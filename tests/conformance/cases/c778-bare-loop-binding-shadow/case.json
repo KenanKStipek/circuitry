@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A loop's own `as` binding keeps its meaning against a root effect of the same name: inside the loop body, bare {{item}} is the bound string \"loop-item\" (the each binding), never the root tool effect also named `item`. Already true on main (the loop body's own scope overlay predates #778); pinned here so the new bare-sibling fallback -- consulted only once every existing context key, including this one, has already missed -- never changes it.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

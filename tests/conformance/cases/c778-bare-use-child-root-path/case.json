@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A `use: {path: child.yml}` child's own root is a container too: inside the child, a bare {{first.value}} resolves exactly as {{prime.first.value}} does -- fails (renders empty) on main.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

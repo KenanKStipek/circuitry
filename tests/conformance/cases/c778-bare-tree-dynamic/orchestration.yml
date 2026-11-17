@@ -1,0 +1,22 @@
+name: c778-bare-tree-dynamic
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: stringify, input: {marker: "seed-value"}}
+  - type: dynamic
+    name: branches
+    flow: tree
+    effects:
+      - type: tool
+        name: a
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{seed.value}}"
+            dotted: "{{prime.seed.value}}"
+      - type: tool
+        name: b
+        provider: json
+        params: {mode: stringify, input: {marker: "b-value"}}

@@ -1,0 +1,5 @@
+name: c778-bare-use-child-root-path
+effects:
+  - type: use
+    name: child
+    path: child.yml
