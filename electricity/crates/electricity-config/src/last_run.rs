@@ -134,10 +134,16 @@ impl LastRun {
     }
 
     /// `LastRun.has_redacted_secrets` -- true when replaying `env_pairs`
-    /// would send the literal redaction marker as a real value.
+    /// would send the literal redaction marker as a real value. The
+    /// marker isn't always the whole value: a URL-shaped value keeps its
+    /// scheme/host around the cut (`url=http://***REDACTED***@host`), so
+    /// this checks for the marker anywhere past the first `=`, not just
+    /// an exact `=***REDACTED***` suffix.
     pub fn has_redacted_secrets(&self) -> bool {
-        let marker = format!("={REDACTED}");
-        self.env_pairs().iter().any(|pair| pair.ends_with(&marker))
+        self.env_pairs().iter().any(|pair| {
+            pair.split_once('=')
+                .is_some_and(|(_, value)| value.contains(REDACTED))
+        })
     }
 
     fn bool_field(&self, key: &str) -> bool {
@@ -486,6 +492,24 @@ mod tests {
         args.insert(
             Value::Str("env_vars".to_string()),
             Value::List(vec![Value::Str(format!("OPENAI_API_KEY={REDACTED}"))]),
+        );
+        let stash = LastRun {
+            path: PathBuf::from("x"),
+            args,
+            error: String::new(),
+        };
+        assert!(stash.has_redacted_secrets());
+    }
+
+    #[test]
+    fn has_redacted_secrets_detects_the_marker_embedded_in_a_url_shaped_value() {
+        // A URL-shaped value keeps its scheme/host around the cut
+        // (`url=http://***REDACTED***@host`), not just a bare
+        // `=***REDACTED***` suffix.
+        let mut args = Dict::new();
+        args.insert(
+            Value::Str("env_vars".to_string()),
+            Value::List(vec![Value::Str(format!("url=http://{REDACTED}@host"))]),
         );
         let stash = LastRun {
             path: PathBuf::from("x"),

@@ -329,7 +329,16 @@ class GitHubSource:
 
     def _get_json(self, endpoint: str) -> Any:
         url = f"{self.api_base}{endpoint}"
-        req = urllib.request.Request(url, method="GET")
+        # Userinfo stripped before urllib ever sees it (issue #819):
+        # `Request.host` keeps it verbatim otherwise, so a userinfo with
+        # no port (`http://user:pass@host/`) reaches `http.client`
+        # unstripped and raises its own credential-bearing
+        # `InvalidURL("nonnumeric port: ...")`, which is neither a
+        # `URLError` nor an `OSError` and would otherwise escape
+        # `_get_json`'s own redaction entirely.
+        req = urllib.request.Request(
+            http_conventions.strip_request_url_userinfo(url), method="GET"
+        )
         for key, value in self._headers().items():
             req.add_header(key, value)
 

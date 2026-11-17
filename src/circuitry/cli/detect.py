@@ -51,7 +51,12 @@ def _curl_json_get(url: str, timeout: int = 5) -> dict[str, Any]:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(url, method="GET")
+    # Userinfo stripped before urllib ever sees it (issue #819):
+    # `Request.host` keeps it verbatim otherwise, so a userinfo with no
+    # port (`http://user:pass@host/`) reaches `http.client` unstripped
+    # and raises its own credential-bearing `InvalidURL("nonnumeric
+    # port: ...")`, which the callers below would otherwise echo.
+    req = urllib.request.Request(http_conventions.strip_request_url_userinfo(url), method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 

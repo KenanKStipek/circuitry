@@ -96,6 +96,24 @@ def test_detect_ollama_scrubs_a_url_from_urllibs_own_exception_text() -> None:
     assert "alice" not in status.detail
 
 
+def test_detect_ollama_scrubs_the_real_invalidurl_text_with_no_mocking() -> None:
+    """#819: a userinfo with no port reaches `http.client`'s own
+    host/port split unstripped and raises its own credential-bearing
+    `InvalidURL("nonnumeric port: ...")` -- unlike the mocked test
+    above, this drives the real `urllib.request` code path against a
+    closed port on 127.0.0.1, with no `_curl_json_get` mock at all, so
+    it would catch a regression the mock can't.
+    """
+    password = "pw_value_pw_value"
+    base_url = f"http://alice:{password}@127.0.0.1"
+
+    status = detect_ollama(base_url)
+
+    assert status.available is False
+    assert password not in status.detail
+    assert "alice" not in status.detail
+
+
 # --- OpenAI ---
 
 

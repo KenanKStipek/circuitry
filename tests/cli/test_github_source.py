@@ -567,6 +567,27 @@ def test_refresh_offline_never_names_a_password_in_a_custom_api_base(
     assert "git.example.test" in str(excinfo.value)
 
 
+def test_refresh_against_a_real_closed_port_never_leaks_the_password_via_invalidurl(
+    tmp_path: Path,
+) -> None:
+    """#819: a userinfo with no port reaches `http.client`'s own
+    host/port split unstripped and raises its own credential-bearing
+    `InvalidURL("nonnumeric port: ...")`, which is neither a `URLError`
+    nor an `OSError` and would otherwise escape `_get_json`'s own
+    redaction entirely -- unlike the mocked test above, this drives the
+    real `urllib.request` code path against a closed port on 127.0.0.1,
+    with `urlopen` never mocked, so it would catch a regression the
+    mock can't.
+    """
+    password = "pw_value_pw_value"
+    with pytest.raises(LibraryFetchError) as excinfo:
+        _source(
+            tmp_path, api_base=f"https://alice:{password}@127.0.0.1"
+        ).refresh()
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
 def test_unfetched_source_is_empty_and_carries_a_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

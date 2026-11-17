@@ -144,7 +144,13 @@ fn percent_decode_plus(value: &str) -> String {
 /// issue #819's fix to this settings-snapshot redactor, which
 /// previously only ever stripped userinfo, never a credential-like
 /// query parameter.
-fn mask_credential_query_params(url: &str) -> String {
+///
+/// `pub` so `electricity-tools::http_conventions::redact_request_url`
+/// (the request-URL redactor every refusal/warning/event names a URL
+/// through) calls this one copy of the rule rather than holding a
+/// second implementation of its own -- `electricity-tools` already
+/// depends on this crate for `http_error_excerpt`'s own `redact()` call.
+pub fn mask_credential_query_params(url: &str) -> String {
     let Some(query_start) = url.find('?') else {
         return url.to_string();
     };
@@ -330,10 +336,40 @@ fn redact_url(value: &str) -> String {
     mask_credential_query_params(&out)
 }
 
+/// `cli/redaction.py::_looks_like_single_url` -- whether *value* is
+/// shaped like one whole URL, rather than prose that merely contains
+/// an `@` or a `://` somewhere inside it: no whitespace anywhere, and
+/// either a scheme (`://`) or the `user:pass@host` shape (a `:` before
+/// the last `@`). A bare email address or a sentence that happens to
+/// contain a URL or an `@` is never treated as one (issue #819's
+/// redaction-gate regression).
+fn looks_like_single_url(value: &str) -> bool {
+    // `urlsplit`'s own leading-control/space strip, then its embedded
+    // `\t`/`\r`/`\n` removal (`redact_url`'s own `lstripped`/`cleaned`
+    // steps below) -- applied here too, so this gate agrees with what
+    // `redact_url` will actually parse, rather than rejecting a value
+    // on a leading/embedded character it would have ignored anyway.
+    let lstripped = value.trim_start_matches(|c: char| (c as u32) <= 0x20);
+    let cleaned: String = lstripped
+        .chars()
+        .filter(|&c| c != '\t' && c != '\r' && c != '\n')
+        .collect();
+    if cleaned.chars().any(char::is_whitespace) {
+        return false;
+    }
+    if cleaned.contains("://") {
+        return true;
+    }
+    match cleaned.rfind('@') {
+        Some(at) => cleaned[..at].contains(':'),
+        None => false,
+    }
+}
+
 /// `cli/redaction.py::_redact_string` -- a JWT or API-key-shaped string
-/// redacts wholesale; anything that looks like it could carry a URL
-/// (issue #819: a scheme, OR an `@` even without one) goes through
-/// [`redact_url`]; anything else passes through unchanged.
+/// redacts wholesale; anything shaped like one whole URL
+/// ([`looks_like_single_url`]) goes through [`redact_url`]; anything
+/// else passes through unchanged.
 fn redact_string(value: &str) -> String {
     if jwt_re().is_match(value) {
         return REDACTED.to_string();
@@ -341,7 +377,7 @@ fn redact_string(value: &str) -> String {
     if keyish_re().is_match(value) {
         return REDACTED.to_string();
     }
-    if value.contains("://") || value.contains('@') {
+    if looks_like_single_url(value) {
         return redact_url(value);
     }
     value.to_string()
@@ -717,6 +753,37 @@ mod tests {
             redact(Value::from(url)),
             Value::from("https://api.example.test/search?api_key=%2A%2A%2A")
         );
+    }
+
+    #[test]
+    fn an_email_address_is_not_mangled() {
+        // An @ with no colon before it (an email address, not a
+        // user:pass@host credential) is left alone.
+        let value = "alice@example.test";
+        assert_eq!(redact(Value::from(value)), Value::from(value));
+    }
+
+    #[test]
+    fn a_sentence_containing_a_question_mark_link_is_not_mangled() {
+        // Prose that merely contains a URL (with whitespace around it)
+        // is never treated as a single URL value: it must not be
+        // re-encoded as a query string.
+        let value = "<a href=\"https://x.test/?a=1\">x</a> more";
+        assert_eq!(redact(Value::from(value)), Value::from(value));
+    }
+
+    #[test]
+    fn a_multi_line_body_containing_a_question_mark_is_not_mangled() {
+        let value = "line one\nis this a question?\nline three";
+        assert_eq!(redact(Value::from(value)), Value::from(value));
+    }
+
+    #[test]
+    fn a_vertex_style_model_id_is_not_mangled() {
+        // A model id with an @ and no colon before it (e.g. a pinned
+        // Vertex model version) is not a user:pass@host credential.
+        let value = "claude-3-5-sonnet@20240620";
+        assert_eq!(redact(Value::from(value)), Value::from(value));
     }
 
     #[test]

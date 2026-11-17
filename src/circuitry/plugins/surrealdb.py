@@ -403,7 +403,7 @@ class SurrealDBPlugin:
             value=_jsonable(response),
             raw={
                 "mode": mode,
-                "url": self.url,
+                "url": redact_host_url(self.url),
                 "namespace": namespace,
                 "database": database,
             },

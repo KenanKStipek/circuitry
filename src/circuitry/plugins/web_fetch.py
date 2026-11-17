@@ -97,7 +97,7 @@ class WebFetchPlugin:
         status = int(resp.status_code)
         text = resp.text
         raw: dict[str, Any] = {
-            "url": url, "status": status, "mode": mode,
+            "url": http_conventions.redact_request_url(url), "status": status, "mode": mode,
             "content_type": resp.headers.get("Content-Type", ""),
         }
         ok = not (fail_on_error and status >= 400)

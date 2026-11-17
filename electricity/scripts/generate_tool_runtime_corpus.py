@@ -253,6 +253,17 @@ def build_redaction_cases() -> list[dict]:
         redact_case("https://api.example.test/search?api_key=hunter2hunter2")
     )  # credential-like query key, no userinfo at all
 
+    # --- issue #819 follow-up: the redaction gate must not treat plain
+    # prose, an email address or an @-bearing identifier as a URL ---
+    cases.append(redact_case({"to": ["alice@example.test"]}))  # no : before the @
+    cases.append(
+        redact_case('<a href="https://x.test/?a=1">x</a> more')
+    )  # a URL embedded in prose, not a single URL value
+    cases.append(
+        redact_case("line one\nis this a question?\nline three")
+    )  # a multi-line body, not a single URL value
+    cases.append(redact_case("claude-3-5-sonnet@20240620"))  # Vertex-style model id
+
     return cases
 
 

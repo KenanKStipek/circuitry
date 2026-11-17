@@ -32,6 +32,7 @@ import importlib.util
 from dataclasses import dataclass
 from typing import Any
 
+from .. import http_conventions
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
 
@@ -120,7 +121,15 @@ class PlaywrightPlugin:
                 context = browser.new_context(**ctx_kwargs)
                 page = context.new_page()
                 page.set_default_timeout(int(timeout_seconds) * 1000)
-                page.goto(url.strip())
+                try:
+                    page.goto(url.strip())
+                except Exception as exc:
+                    # Playwright's own navigation error names the URL,
+                    # userinfo included (issue #819).
+                    raise RuntimeError(
+                        f"playwright: navigation failed: "
+                        f"{http_conventions.scrub_embedded_urls(str(exc))}"
+                    ) from exc
                 if mode == "text":
                     value: Any = page.inner_text("body")
                 elif mode == "html":
@@ -138,7 +147,11 @@ class PlaywrightPlugin:
 
         return ToolResult(
             value=value,
-            raw={"url": url, "final_url": final_url, "mode": mode},
+            raw={
+                "url": http_conventions.redact_request_url(url),
+                "final_url": http_conventions.redact_request_url(final_url),
+                "mode": mode,
+            },
             stdout=None, stderr=None, exit_code=None,
         )
 

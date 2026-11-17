@@ -132,7 +132,7 @@ class WebhookPlugin:
         return ToolResult(
             value=value,
             raw={
-                "url": url,
+                "url": http_conventions.redact_request_url(url),
                 "status": last_status,
                 "headers": last_headers,
                 "body": last_text,

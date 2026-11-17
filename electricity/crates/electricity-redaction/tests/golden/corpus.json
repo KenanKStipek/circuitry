@@ -499,6 +499,78 @@
         "t": "str",
         "v": "https://api.example.test/search?api_key=%2A%2A%2A"
       }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "to"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "alice@example.test"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "to"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "alice@example.test"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "<a href=\"https://x.test/?a=1\">x</a> more"
+      },
+      "output": {
+        "t": "str",
+        "v": "<a href=\"https://x.test/?a=1\">x</a> more"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "line one\nis this a question?\nline three"
+      },
+      "output": {
+        "t": "str",
+        "v": "line one\nis this a question?\nline three"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "claude-3-5-sonnet@20240620"
+      },
+      "output": {
+        "t": "str",
+        "v": "claude-3-5-sonnet@20240620"
+      }
     }
   ]
 }

@@ -48,12 +48,48 @@ _KEYISH_RE = re.compile(
 )
 
 
+#: Leading characters :func:`urllib.parse.urlsplit` itself strips before
+#: parsing (its own ``_WHATWG_C0_CONTROL_OR_SPACE``) -- applied here so
+#: this gate agrees with what :func:`http_conventions.
+#: redact_request_url_with_marker` (which calls the real ``urlsplit``)
+#: will actually parse, rather than rejecting a value on a leading
+#: control character it would have ignored anyway.
+_URL_LSTRIP_CHARS = "".join(chr(c) for c in range(0x21))
+
+
+def _looks_like_single_url(value: str) -> bool:
+    """Whether *value* is shaped like one whole URL, rather than prose
+    that merely contains an ``@`` or a ``://`` somewhere inside it: once
+    cleaned the same way :func:`urllib.parse.urlsplit` itself would
+    (leading control/space stripped, embedded ``\\t``/``\\r``/``\\n``
+    removed), no whitespace remains, and either it has a scheme
+    (``://``) or the ``user:pass@host`` shape (a ``:`` before the last
+    ``@``, the same shape a schemeless ``base_url``/proxy value
+    carries). A bare email address (``name@host``, no ``:`` before the
+    ``@``) or a sentence that happens to contain a URL or an ``@`` is
+    never treated as one (issue #819's redaction-gate regression):
+    either still carries whitespace a single URL value never does, or
+    carries no ``:`` before its ``@``.
+    """
+    cleaned = value.lstrip(_URL_LSTRIP_CHARS)
+    for control in ("\t", "\r", "\n"):
+        cleaned = cleaned.replace(control, "")
+    if any(c.isspace() for c in cleaned):
+        return False
+    if "://" in cleaned:
+        return True
+    at = cleaned.rfind("@")
+    if at == -1:
+        return False
+    return ":" in cleaned[:at]
+
+
 def _redact_string(value: str) -> str:
     if _JWT_RE.match(value):
         return REDACTED
     if _KEYISH_RE.match(value):
         return REDACTED
-    if "://" in value or "@" in value:
+    if _looks_like_single_url(value):
         return http_conventions.redact_request_url_with_marker(value, REDACTED)
     return value
 

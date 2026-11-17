@@ -24,6 +24,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
+from .. import http_conventions
 from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
 from .base import ToolResult
@@ -86,7 +87,7 @@ class WebSearchPlugin:
             value = body
         return ToolResult(
             value=value,
-            raw={"url": url, "body": body},
+            raw={"url": http_conventions.redact_request_url(url), "body": body},
             stdout=None, stderr=None, exit_code=proc.returncode,
         )
 

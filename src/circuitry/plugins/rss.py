@@ -65,7 +65,17 @@ class RssPlugin:
 
         response_headers: dict[str, str] | None = None
         if urlparse(stripped).scheme in ("http", "https"):
-            req = urllib.request.Request(stripped, headers={"User-Agent": _DEFAULT_UA})
+            # Userinfo stripped before urllib ever sees it (issue #819):
+            # `Request.host` keeps it verbatim otherwise, so a userinfo
+            # with no port (`http://user:pass@host/`) reaches
+            # `http.client` unstripped and raises its own credential-
+            # bearing `InvalidURL("nonnumeric port: ...")`, which is
+            # neither a `URLError` nor an `OSError` and would otherwise
+            # escape the `except` clause below entirely.
+            req = urllib.request.Request(
+                http_conventions.strip_request_url_userinfo(stripped),
+                headers={"User-Agent": _DEFAULT_UA},
+            )
             try:
                 with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                     source: Any = resp.read()
@@ -101,7 +111,7 @@ class RssPlugin:
         return ToolResult(
             value=entries,
             raw={
-                "url": url,
+                "url": http_conventions.redact_request_url(url),
                 "feed_title": getattr(feed.feed, "title", ""),
                 "bozo": bozo,
                 "count": len(entries),

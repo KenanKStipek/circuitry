@@ -79,3 +79,30 @@ def test_redacts_a_credential_like_query_param_with_no_userinfo_at_all() -> None
     out = redact({"base_url": "https://api.example.test/search?api_key=hunter2hunter2"})
     assert "hunter2" not in out["base_url"]
     assert out["base_url"] == "https://api.example.test/search?api_key=%2A%2A%2A"
+
+
+def test_does_not_mangle_an_email_address() -> None:
+    """An @ with no colon before it (an email address, not a
+    user:pass@host credential) is left alone."""
+    out = redact({"to": ["alice@example.test"]})
+    assert out == {"to": ["alice@example.test"]}
+
+
+def test_does_not_mangle_a_sentence_containing_a_question_mark_link() -> None:
+    """Prose that merely contains a URL (with whitespace around it) is
+    never treated as a single URL value: it must not be re-encoded as
+    a query string."""
+    value = '<a href="https://x.test/?a=1">x</a> more'
+    assert redact({"note": value}) == {"note": value}
+
+
+def test_does_not_mangle_a_multi_line_body_containing_a_question_mark() -> None:
+    value = "line one\nis this a question?\nline three"
+    assert redact({"note": value}) == {"note": value}
+
+
+def test_does_not_mangle_a_vertex_style_model_id() -> None:
+    """A model id with an @ and no colon before it (e.g. a pinned Vertex
+    model version) is not a user:pass@host credential."""
+    value = "claude-3-5-sonnet@20240620"
+    assert redact({"model": value}) == {"model": value}

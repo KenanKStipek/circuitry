@@ -6,103 +6,13 @@
 //! this is never third-party text -- it is Circuitry's own, compared
 //! exactly.
 
-/// `curl_support.py::_CREDENTIAL_QUERY_KEY_RE` -- a case-insensitive
-/// *search* (not a full match) for any of these words anywhere in a
-/// query key.
-fn looks_like_credential_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    ["key", "token", "secret", "auth", "password", "pwd"]
-        .iter()
-        .any(|needle| lower.contains(needle))
-}
-
-/// `urllib.parse.parse_qsl(keep_blank_values=True)` -- `&`-separated
-/// `name=value` pairs (a bare `name` with no `=` keeps an empty
-/// value), each percent-decoded with `+` read as a space (the
-/// `application/x-www-form-urlencoded` convention `parse_qsl` uses by
-/// default, `plus` left `True`).
-fn parse_qsl(query: &str) -> Vec<(String, String)> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| match pair.split_once('=') {
-            Some((k, v)) => (percent_decode_plus(k), percent_decode_plus(v)),
-            None => (percent_decode_plus(pair), String::new()),
-        })
-        .collect()
-}
-
-fn percent_decode_plus(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                    Some(byte) => {
-                        out.push(byte);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            other => {
-                out.push(other);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// `http_conventions.py::_mask_credential_query_params` -- masks the
-/// value of any query-string key matching [`looks_like_credential_key`],
-/// then re-encodes the **whole** query with
-/// [`electricity_value::pycompat::urlencode`] even when nothing
-/// matched (so `%2A%2A%2A` for the mask, a space becomes `+`, exactly
-/// mirrors `urllib.parse.urlencode`'s own default `quote_plus`
-/// encoding).
-fn mask_credential_query_params(url: &str) -> String {
-    let Some(query_start) = url.find('?') else {
-        return url.to_string();
-    };
-    let (before_query, rest) = url.split_at(query_start);
-    let query_and_fragment = &rest[1..];
-    let (query, fragment) = match query_and_fragment.find('#') {
-        Some(idx) => (&query_and_fragment[..idx], Some(&query_and_fragment[idx..])),
-        None => (query_and_fragment, None),
-    };
-    let pairs = parse_qsl(query);
-    let masked: Vec<(String, electricity_value::Value)> = pairs
-        .into_iter()
-        .map(|(k, v)| {
-            let value = if looks_like_credential_key(&k) {
-                "***".to_string()
-            } else {
-                v
-            };
-            (k, electricity_value::Value::Str(value))
-        })
-        .collect();
-    let new_query = electricity_value::pycompat::urlencode(&masked, false).unwrap_or_default();
-    let mut result = format!("{before_query}?{new_query}");
-    if let Some(fragment) = fragment {
-        result.push_str(fragment);
-    }
-    result
-}
+// `http_conventions.py::_mask_credential_query_params`'s own
+// `looks_like_credential_key`/`parse_qsl`/`percent_decode_plus` --
+// one copy of the rule, in `electricity-redaction` (the lower
+// crate this one already depends on for `http_error_excerpt`'s own
+// `redact()` call), used through
+// `electricity_redaction::mask_credential_query_params` below rather
+// than reimplemented here a second time.
 
 /// `http_conventions.strip_request_url_userinfo` -- the LAST `@`
 /// inside [`crate::http::http_url::urlsplit`]'s own `netloc`, not a
@@ -131,7 +41,7 @@ fn strip_request_url_userinfo(url: &str) -> String {
 /// exercises it in isolation.
 #[cfg(test)]
 fn redact_url(url: &str) -> String {
-    strip_request_url_userinfo(&mask_credential_query_params(url))
+    strip_request_url_userinfo(&electricity_redaction::mask_credential_query_params(url))
 }
 
 /// `http_conventions.redact_proxy_value` -- a proxy value has no
@@ -334,7 +244,7 @@ pub fn redact_request_url(url: &str) -> String {
     } else {
         strip_request_url_userinfo(url)
     };
-    mask_credential_query_params(&cut)
+    electricity_redaction::mask_credential_query_params(&cut)
 }
 
 /// The length, in bytes from the start of *s*, of a `scheme://...` URL
@@ -669,7 +579,9 @@ mod tests {
     #[test]
     fn mask_credential_query_params_masks_a_matching_key_only() {
         assert_eq!(
-            mask_credential_query_params("https://host/x?api_key=sk-test&q=widgets"),
+            electricity_redaction::mask_credential_query_params(
+                "https://host/x?api_key=sk-test&q=widgets"
+            ),
             "https://host/x?api_key=%2A%2A%2A&q=widgets"
         );
     }
@@ -677,7 +589,7 @@ mod tests {
     #[test]
     fn mask_credential_query_params_leaves_a_url_with_no_query_unchanged() {
         assert_eq!(
-            mask_credential_query_params("https://host/x"),
+            electricity_redaction::mask_credential_query_params("https://host/x"),
             "https://host/x"
         );
     }
