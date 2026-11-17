@@ -12,13 +12,13 @@
 //! before or after the two positionals (`<config.json> <orchestration.yml>`)
 //! -- `--out`/`--pretty`/`--live-state`/`--events` included. A value-taking
 //! long flag also accepts `--flag=value`, not just `--flag value`
-//! (`cof`'s own Click parser accepts both; ruling on PR
-//! #432's review) -- `=` on a boolean flag (`--pretty=true`) is a usage
+//! (`cof`'s own Click parser accepts both; PR
+//! #432) -- `=` on a boolean flag (`--pretty=true`) is a usage
 //! error, never silently accepted or ignored. An unknown flag is a usage
-//! error (exit 2): issue #431's gate lane tightens this from the pre-#431
+//! error (exit 2): issue #431 tightens this from the pre-#431
 //! preview CLI, which let a trailing unknown flag fall through to the
-//! (always-refusing) run path instead. `--profile <path>` (issue #495,
-//! lane R) is passed straight through to `RunRequest::profile_path` --
+//! (always-refusing) run path instead. `--profile <path>` (issue #495)
+//! is passed straight through to `RunRequest::profile_path` --
 //! an explicit path only, never discovered by name (DESIGN §1, §6.11).
 //! A loaded profile's own `out:` (`RunResult::out_path`) is written only
 //! when no `--out` was given.
@@ -164,7 +164,7 @@ struct RunArgs {
     pretty: bool,
     live_state: Option<String>,
     events: Option<String>,
-    /// `--profile <path>` (issue #495, lane R): an explicit path
+    /// `--profile <path>` (issue #495): an explicit path
     /// only, passed through to `RunRequest::profile_path`.
     profile: Option<String>,
     /// `--allow-capabilities a,b` (issue #728, `run` only) -- raw text,
@@ -2362,7 +2362,7 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
 }
 
 /// Issue #478's own exit-path wiring: no document can make a
-/// `scripted` adapter load until lane G flips `prompt`, so `tests/
+/// `scripted` adapter load until `prompt` support lands, so `tests/
 /// leftover_export.rs` has no other way to exercise
 /// `electricity::write_leftover_export`'s own real call site end to
 /// end. When `test-tools` is enabled (never in a plain build) and

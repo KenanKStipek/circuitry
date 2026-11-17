@@ -1,4 +1,4 @@
-//! C25 re-run with a prompt (issue #538's B3): `signals.rs` and
+//! C25 re-run with a prompt (issue #538): `signals.rs` and
 //! `signals_loop.rs` both re-run C25 with the `sleep` test-tool, never
 //! a real model call. This file is C25's prompt-effect twin --
 //! `adapter: claude_code`, with a fake `claude` (the shape of

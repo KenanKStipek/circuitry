@@ -12,12 +12,12 @@ fn bin() -> PathBuf {
 }
 
 /// A document that fails at run time regardless of whether
-/// `electricity_vm::execute_root` is still lane B's own stub or the
+/// `electricity_vm::execute_root` is still a stub or the
 /// real interpreter (issue #431's golden run corpus's own
 /// `json_parse_failure` case: `prime.broken: JsonPlugin: parse mode
 /// requires params['input'] as a string.`) -- unlike `effects: []`
-/// (which the stub also fails today, but will *succeed* once lane B2
-/// lands), every test below that only needs an ordinary ``--out``-
+/// (which the stub also fails today, but will *succeed* once the real
+/// interpreter lands), every test below that only needs an ordinary ``--out``-
 /// writing failure, not any particular error text, uses this instead
 /// (PR #441).
 const FAILURE_DOC: &str = "\
@@ -222,7 +222,7 @@ fn known_run_flag_in_first_position_is_a_run_request() {
         ])
         .output()
         .unwrap();
-    // `--profile` is now a real path (issue #495, lane R): `p` doesn't
+    // `--profile` is now a real path (issue #495): `p` doesn't
     // exist relative to this process's own cwd, so the run fails with
     // electricity's own not-found text (DESIGN §6.11) -- exit 1, the
     // ordinary run-failure JSON payload on stdout, not stderr (PR #441).
@@ -353,7 +353,7 @@ fn dump_ir_without_e_on_a_required_input_fails_with_the_missing_input_message() 
 
 /// A document that only declares content the M0-H VM actually runs is
 /// never refused -- [`FAILURE_DOC`] fails at run time regardless of
-/// whether `execute_root` is still lane B's own stub or the real
+/// whether `execute_root` is still a stub or the real
 /// interpreter, so this is an *ordinary* failure, not the preview
 /// refusal: `--out`/`--events`/`--live-state` are written, same as any
 /// other failed run (issue #431's run-wiring step 20).
@@ -565,13 +565,13 @@ fn an_mcp_provider_is_refused_with_no_files_written() {
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, with no file written at all, even though the rest of the
 /// document (`json`/`dynamic` only) is otherwise fully supported --
-/// `litellm` (a Python-SDK-only adapter, out of scope for lane F2,
+/// `litellm` (a Python-SDK-only adapter, out of scope for
 /// issue #503) has no electricity-side adapter build at all, so
-/// settled ruling 3's own stateless refusal (`unbuildable_known_adapter`)
-/// fires before preflight (issue #495, lane R) is ever reached, not
+/// the stateless refusal (`unbuildable_known_adapter`)
+/// fires before preflight (issue #495) is ever reached, not
 /// because preflight itself is unported. `openai` used to be this
-/// test's own example; it became a real, buildable adapter in lane F2,
-/// so it now reaches a real preflight failure instead (see the Python
+/// test's own example; it became a real, buildable adapter in that
+/// same change, so it now reaches a real preflight failure instead (see the Python
 /// conformance case `document-adapter-preflight-not-ready`).
 #[test]
 fn a_document_level_adapter_is_refused_with_no_files_written() {
