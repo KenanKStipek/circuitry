@@ -1,0 +1,8 @@
+name: c778-bare-yield-partial-and-bare
+effects:
+  - type: yield
+    name: a
+    template: "A"
+  - type: yield
+    name: b
+    template: "{{> a}} / {{a.value}}"

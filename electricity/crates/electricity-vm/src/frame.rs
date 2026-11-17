@@ -148,6 +148,36 @@ pub struct Frame {
     /// by the same [`Frame::with_document_tool_providers`] call, never on
     /// its own.
     allow_tools_available: bool,
+    /// `core/templates.py`'s own bare-sibling-reference fallback chain
+    /// (issue #778), ported: one entry per enclosing effect container,
+    /// nearest first -- its own self-alias (`"prime"` for a document's
+    /// own root or a `use`/decomposition child's own isolated root,
+    /// `"inner"` for a reflector's own inner dynamic, or a nested
+    /// dynamic's own declared name, e.g. `"d"` -- never a dotted path
+    /// built from an ancestor's own name) and its own body-and-
+    /// `finally:` effect names. Consulted by a template render only
+    /// after every normal scope has missed ([`electricity_template::
+    /// ScopeRoot::bare_fallback`], `exec::live_scope::LiveRoot`'s own
+    /// impl) -- a bare reference whose first segment names one of a
+    /// listed container's own effects resolves as `<that container's
+    /// own self-alias>.<the rest of the reference>`, through the same
+    /// live lookup the dotted spelling already uses. The self-alias
+    /// alone, not a computed dotted path, because `exec::dynamic::
+    /// execute_dynamic` widens the live `CtxChain` with exactly that
+    /// one flat key on every dynamic, nested or not -- the live node
+    /// stays reachable this way through a loop body, an `if` branch or
+    /// a tree branch, where the canonical dotted spelling computed
+    /// from an ancestor's own path would not be (#778).
+    /// Pushed by [`Frame::with_bare_effect_scope`], called by
+    /// `exec::dynamic::execute_dynamic` for every dynamic it runs --
+    /// `core/templates.py::push_bare_effect_scope`'s own `ContextVar`,
+    /// carried here as an ordinary, cheap-to-clone [`Frame`] field
+    /// instead: electricity threads [`Frame`] explicitly through every
+    /// container executor rather than relying on Python's implicit
+    /// per-task context, so a tree flow's own concurrent branches need
+    /// no thread-copying trick to each see the chain as it stood when
+    /// they branched off.
+    bare_effect_chain: Rc<Vec<(String, Rc<std::collections::BTreeSet<String>>)>>,
     /// `core/prompt.py`'s own container-nesting display depth
     /// (`structure.depth`, a.k.a. the `structural_position` signal) --
     /// issue #516's §4(c) table, superseding the one-value-per-run
@@ -178,6 +208,7 @@ impl Frame {
             document_is_generated: false,
             generating_effect_path: Rc::new(String::new()),
             allow_tools_available: true,
+            bare_effect_chain: Rc::new(Vec::new()),
         }
     }
 
@@ -205,6 +236,7 @@ impl Frame {
             document_is_generated: self.document_is_generated,
             generating_effect_path: Rc::clone(&self.generating_effect_path),
             allow_tools_available: self.allow_tools_available,
+            bare_effect_chain: Rc::clone(&self.bare_effect_chain),
         }
     }
 
@@ -236,6 +268,7 @@ impl Frame {
             document_is_generated: is_generated,
             generating_effect_path: Rc::new(generating_effect_path),
             allow_tools_available,
+            bare_effect_chain: Rc::clone(&self.bare_effect_chain),
         }
     }
 
@@ -397,6 +430,7 @@ impl Frame {
             document_is_generated: self.document_is_generated,
             generating_effect_path: Rc::clone(&self.generating_effect_path),
             allow_tools_available: self.allow_tools_available,
+            bare_effect_chain: Rc::clone(&self.bare_effect_chain),
         }
     }
 
@@ -430,6 +464,7 @@ impl Frame {
             document_is_generated: self.document_is_generated,
             generating_effect_path: Rc::clone(&self.generating_effect_path),
             allow_tools_available: self.allow_tools_available,
+            bare_effect_chain: Rc::clone(&self.bare_effect_chain),
         }
     }
 
@@ -453,6 +488,7 @@ impl Frame {
             document_is_generated: self.document_is_generated,
             generating_effect_path: Rc::clone(&self.generating_effect_path),
             allow_tools_available: self.allow_tools_available,
+            bare_effect_chain: Rc::clone(&self.bare_effect_chain),
         }
     }
 
@@ -477,6 +513,7 @@ impl Frame {
             document_is_generated: self.document_is_generated,
             generating_effect_path: Rc::clone(&self.generating_effect_path),
             allow_tools_available: self.allow_tools_available,
+            bare_effect_chain: Rc::clone(&self.bare_effect_chain),
         }
     }
 
@@ -486,6 +523,71 @@ impl Frame {
     /// `use` effect's name.
     pub fn use_call_stack(&self) -> &[String] {
         &self.use_call_stack
+    }
+
+    /// `core/templates.py::push_bare_effect_scope`, ported: one more
+    /// enclosing effect container pushed onto [`Frame::bare_effect_
+    /// chain`]. *own_name* is this container's own name (a dynamic's
+    /// own `self.defn.name` -- always `"prime"` for a document's real
+    /// root or a `use`/decomposition child's own isolated root,
+    /// `"inner"` for a reflector's own inner dynamic, or a nested
+    /// dynamic's own declared name); *own_effect_names* is its own
+    /// body-and-`finally:` effect names.
+    ///
+    /// *isolated* starts a brand new chain rooted at *own_name* alone,
+    /// sharing nothing with whatever chain this frame already carries
+    /// -- a document executed via `use`, a reflector or a
+    /// decomposition plan has its own isolated state and its own
+    /// effect names, unrelated to its caller's. `exec::dynamic::
+    /// execute_dynamic`'s own callers pass this exactly where
+    /// `core/dynamic.py::DynamicRuntime.execute`'s own `ctx_override is
+    /// None` does: the document's real root, and every call that
+    /// starts a brand new, independent program execution -- never a
+    /// plain nested `dynamic:` effect inside the same chain/tree, which
+    /// always nests under whatever chain is already running. Otherwise
+    /// (*isolated* `false`) this container also nests at *own_name*
+    /// alone, never a dotted path built from an ancestor's own name --
+    /// `exec::dynamic::execute_dynamic` widens the live `CtxChain` with
+    /// exactly this one flat key (*own_name* -> this dynamic's own
+    /// node) on every nested dynamic, so the live node stays reachable
+    /// this way through a loop body, an `if` branch or a tree branch,
+    /// where the canonical dotted spelling computed from an ancestor's
+    /// own path would not be (#778; matches `push_bare_effect_
+    /// scope`'s own `(own_name, own_effect_names), *chain`).
+    pub fn with_bare_effect_scope(
+        &self,
+        own_name: &str,
+        own_effect_names: std::collections::BTreeSet<String>,
+        isolated: bool,
+    ) -> Frame {
+        let own_effect_names = Rc::new(own_effect_names);
+        let new_chain = if isolated {
+            vec![(own_name.to_string(), own_effect_names)]
+        } else {
+            let mut chain = vec![(own_name.to_string(), own_effect_names)];
+            chain.extend(self.bare_effect_chain.iter().cloned());
+            chain
+        };
+        Frame {
+            prefix: Rc::clone(&self.prefix),
+            pass_indices: Rc::clone(&self.pass_indices),
+            use_call_stack: Rc::clone(&self.use_call_stack),
+            rebase: self.rebase.clone(),
+            display_depth: self.display_depth,
+            document_tool_providers: Rc::clone(&self.document_tool_providers),
+            document_shell_commands: Rc::clone(&self.document_shell_commands),
+            document_is_generated: self.document_is_generated,
+            generating_effect_path: Rc::clone(&self.generating_effect_path),
+            allow_tools_available: self.allow_tools_available,
+            bare_effect_chain: Rc::new(new_chain),
+        }
+    }
+
+    /// The bare-sibling-reference fallback chain this frame currently
+    /// carries (issue #778) -- see [`Frame::bare_effect_chain`]'s own
+    /// field doc comment. Nearest enclosing container first.
+    pub fn bare_effect_chain(&self) -> &[(String, Rc<std::collections::BTreeSet<String>>)] {
+        &self.bare_effect_chain
     }
 }
 
@@ -788,5 +890,52 @@ mod tests {
         let two_levels = one_level.push_use("b.yml".to_string());
         let identity = "a.yml".to_string();
         assert!(two_levels.use_call_stack().contains(&identity));
+    }
+
+    fn names(items: &[&str]) -> std::collections::BTreeSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn with_bare_effect_scope_isolated_starts_a_fresh_chain_rooted_at_own_name() {
+        // #778: an isolated root (`use`/decomposition/reflector's own
+        // child) shares nothing with whatever chain the caller already
+        // carries -- the new chain has exactly the one entry.
+        let parent = Frame::root().with_bare_effect_scope("outer", names(&["a"]), true);
+        let child = parent.with_bare_effect_scope("prime", names(&["b"]), true);
+        assert_eq!(
+            child.bare_effect_chain(),
+            &[("prime".to_string(), std::rc::Rc::new(names(&["b"])))]
+        );
+    }
+
+    #[test]
+    fn with_bare_effect_scope_nested_resolves_through_its_own_self_alias_not_a_dotted_path() {
+        // #778: a non-isolated (nested) entry's own chain key
+        // is its bare self-alias (`own_name`), never a dotted path
+        // computed from the parent entry's own path -- `format!("
+        // {parent_path}.{own_name}")` would miss the live node while
+        // the nested dynamic runs inside a loop body, an `if` branch,
+        // or a tree branch, where the canonical dotted spelling isn't
+        // the chain's own live top-level key.
+        let root = Frame::root().with_bare_effect_scope("prime", names(&["a"]), true);
+        let nested = root.with_bare_effect_scope("d", names(&["x"]), false);
+        let chain = nested.bare_effect_chain();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].0, "d");
+        assert_eq!(chain[1].0, "prime");
+    }
+
+    #[test]
+    fn with_bare_effect_scope_nested_twice_keeps_every_entry_at_its_own_self_alias() {
+        let root = Frame::root().with_bare_effect_scope("prime", names(&["a"]), true);
+        let outer = root.with_bare_effect_scope("outer", names(&["x"]), false);
+        let inner = outer.with_bare_effect_scope("inner", names(&["y"]), false);
+        let paths: Vec<&str> = inner
+            .bare_effect_chain()
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["inner", "outer", "prime"]);
     }
 }

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #778",
+  "description": "A reflector-generated document's parsed plan (meta.iterations[0].parsed) lands in live state with a mixed-type key -- a tool's params mapping has a plain on: key, which YAML 1.1 resolves to the bool True, beside string keys. --out --pretty must still sort the state's keys and succeed, by each key's own JSON text, rather than raising the TypeError a plain sort_keys=True json.dumps call would for a dict mixing key types.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "also_pretty": true,
+  "expect": "success"
+}

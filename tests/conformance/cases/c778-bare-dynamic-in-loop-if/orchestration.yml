@@ -1,0 +1,28 @@
+name: c778-bare-dynamic-in-loop-if
+effects:
+  - type: tool
+    name: x
+    provider: json
+    params: {mode: stringify, input: {marker: "root-x"}}
+  - type: loop
+    name: lp
+    each: {in: input.items, as: item}
+    body:
+      - type: if
+        if: {mode: cel, expr: "true"}
+        then:
+          - type: dynamic
+            name: d
+            flow: chain
+            effects:
+              - type: tool
+                name: x
+                provider: json
+                params: {mode: stringify, input: {marker: "loop-if-x"}}
+              - type: tool
+                name: reader
+                provider: json
+                params:
+                  mode: stringify
+                  input:
+                    bare: "{{x.value}}"

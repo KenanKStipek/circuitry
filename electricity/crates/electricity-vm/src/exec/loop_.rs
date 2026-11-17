@@ -1012,7 +1012,7 @@ fn build_pass_chain(
 
 /// `core.scope.scope_ctx` -- `{**ctx, **local}`, with *local* also
 /// merged one level inside `ctx["prime"]` -- the within-pass overlay a
-/// body step's own later sibling sees (Quirk Q1), rebuilt fresh from
+/// body step's own later sibling sees (runtime-semantics §2.4), rebuilt fresh from
 /// *pass_chain* (never from the previous step's own overlay) after
 /// every single step. Same shape as `exec::conditional::build_overlay`,
 /// duplicated here for the same reason as [`chain_slots`].
@@ -1732,12 +1732,17 @@ async fn run_while<'a>(
                 // "write after the decision" ordering quirk here: the
                 // 7 keys land in the same place regardless of outcome.
                 Condition::Model { template } => {
-                    let ctx = super::live_ctx(&cond_chain, store);
+                    // #778: a frame-carrying root, not a
+                    // bare `super::live_ctx` snapshot -- a bare
+                    // reference inside *template* must still resolve
+                    // through this frame's own enclosing-container
+                    // fallback chain.
+                    let live_root = super::live_scope::LiveRoot::new(&cond_chain, store, frame);
                     let effect_path = frame.effect_path(&op.path);
                     let outcome = super::condition_model::evaluate_model_condition(
                         super::condition_model::ConditionKind::While,
                         template,
-                        &ctx,
+                        &live_root,
                         &effect_path,
                         run_ctx,
                         token,

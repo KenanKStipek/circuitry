@@ -31,6 +31,7 @@ from .effect_identity import nested_container
 from .prompt import PromptDefinition, PromptRuntime
 from .resume import ResumeMode, effect_completed_ok
 from .store import Store
+from .templates import pop_bare_effect_scope, push_bare_effect_scope
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class TreeExecutionError(RuntimeError):
             original = err.__cause__ or err
             parts.append(f"  [{i}] {type(original).__name__}: {err}")
         return "\n".join(parts)
+
 
 
 def _now_iso() -> str:
@@ -146,6 +148,31 @@ def _render_ancestors(ancestors: list[AncestorContext], spinner_chars: str) -> l
             f" {a.name} [dim]{elapsed}[/dim]"
         )
     return lines
+
+
+def _region_effect_names(effects: Sequence[Any]) -> frozenset[str]:
+    """The effect names that write straight into the enclosing container's
+    own namespace -- every named effect in *effects*, plus (because it has
+    no namespace of its own to write into instead) the names an unnamed
+    ``if``'s own branches or an unnamed loop's own body write there too, at
+    any depth through further unnamed ``if``/loop nesting (#778). A named
+    ``if``/loop, like a nested ``dynamic``/``use``/``reflector``, owns its
+    own node and its children's names stay out of this set.
+    """
+    from .conditional import ConditionalDefinition
+    from .loop import LoopDefinition
+
+    names: set[str] = set()
+    for e in effects:
+        name = getattr(e, "name", None)
+        if isinstance(name, str):
+            names.add(name)
+        elif isinstance(e, ConditionalDefinition):
+            names |= _region_effect_names(e.then_effects)
+            names |= _region_effect_names(e.else_effects)
+        elif isinstance(e, LoopDefinition):
+            names |= _region_effect_names(e.body)
+    return frozenset(names)
 
 
 @dataclass(frozen=True)
@@ -310,494 +337,545 @@ class DynamicRuntime:
 
         # A container parent (loop body, conditional branch, enclosing dynamic)
         # hands down the context its own children render against — iteration
-        # bindings, root inputs, absolute state paths.  Layer this dynamic's
-        # store namespace on top of it so the short sibling paths inside this
-        # dynamic keep resolving, with local nodes winning name collisions
-        # (same precedence the loop body uses for its own siblings).
-        ctx = store.state if ctx_override is None else {**ctx_override, **store.state}
+        # bindings, root inputs, absolute state paths. This dynamic's own
+        # effects write straight into it, live, with no overlay of its own:
+        # a bare reference to one of this dynamic's own children resolves
+        # through `core.templates`'s own fallback, via this dynamic's own
+        # self-alias -- the single flat `self.defn.name: dyn` key below --
+        # never a dotted path built from an ancestor's own name. Bare and
+        # dotted land on the same live node either way, reached
+        # differently: bare through the self-alias chain, dotted through
+        # `child_store.state`'s own nesting (#778).
+        #
+        # `ctx_override` is widened with only this dynamic's own entry in
+        # *store* (``store.state[self.defn.name]`` -- the very ``dyn`` dict
+        # just below, live), never with the rest of *store*'s own state (the
+        # caller's full namespace, this dynamic's own siblings included):
+        # pre-#778, a bare ``{{<this dynamic's own name>.<child>.value}}``
+        # already worked from one of this dynamic's own children this way
+        # (see test_nested_dynamic_in_loop_still_sees_root_inputs_and_
+        # siblings), and that keeps working -- but merging the *whole* of
+        # *store*'s state the way the pre-#778 line did also leaked every
+        # one of this dynamic's own siblings in as bare top-level names,
+        # which outranks the new fallback below for any name this
+        # dynamic's own child happens to share with one of them, so a
+        # nearest-wins lookup would disagree between bare and dotted
+        # (#778). The dotted
+        # `prime.*` path was never affected either way; it is the same
+        # live `ctx["prime"]` regardless.
+        ctx = (
+            store.state
+            if ctx_override is None
+            else {**ctx_override, self.defn.name: dyn}
+        )
         child_store = store.child(self.defn.name)
+        # `finally:` shares this dynamic's own child_store namespace and
+        # scope (compiler.py), so its own names count too -- a `finally:`
+        # effect can shadow, or be shadowed by, a body effect the same way
+        # two body effects can shadow each other. This dynamic's own entry
+        # on the bare-reference chain (`core.templates`) carries both: a
+        # bare head naming one of them resolves to this dynamic's own
+        # self-alias plus the rest of the reference, nearest container
+        # first -- never a dotted path built from an ancestor's own name.
+        # `isolated=True` starts a
+        # fresh chain rooted at this dynamic's own name instead of nesting
+        # under whatever chain is already running -- the document's real
+        # root, and a `use`/reflector/decomposition child's own root (each
+        # always called with `ctx_override=None`, like the root itself)
+        # share nothing with their caller's own effect names.
+        own_names = _region_effect_names(self.defn.effects) | _region_effect_names(
+            self.defn.finally_effects
+        )
+        bare_scope_token = push_bare_effect_scope(
+            own_name=self.defn.name,
+            own_effect_names=own_names,
+            isolated=ctx_override is None,
+        )
 
-        # Build ancestor context for children (this dynamic is now a parent).
-        # Skip depth 0 — that's the invisible root "prime" container.
-        t0 = time.monotonic()
-        self._child_ancestors = list(self._ancestors)
-        if self.depth > 0:
-            icon, color = _EFFECT_STYLE.get(f"dynamic:{self.defn.flow}", ("⬡", "blue"))
-            self._child_ancestors.append(AncestorContext(
-                name=self.defn.name,
-                icon=icon,
-                color=color,
-                start=t0,
-                indent="  " * (self.depth - 1),
-            ))
-
-        body_exc: BaseException | None = None
         try:
-            if self.defn.flow == "chain":
-                # `cof run --resume`: positional, not per-effect. Skipping
-                # stops for good the moment one effect in this chain isn't
-                # resumed whole — whatever an old run's later nodes show,
-                # they're either past the point this run actually diverged
-                # from (a stale leftover, #270 F2) or sit after a failure
-                # that on_error absorbed (also stale: the chain kept going
-                # past it last time, so this run must too). A disabled
-                # effect doesn't count: it's a deterministic no-op this run
-                # regardless of resume, not a sign the position is stale.
-                resume_active = self.resume
-                for idx, effect in enumerate(self.defn.effects):
-                    # A cancelled run must not start the chain's next effect
-                    # (#356) — the only way this chain itself ever notices,
-                    # when it is running on a tree-flow worker thread rather
-                    # than the main thread a real signal interrupts directly.
-                    get_token().check()
-                    effect_path = self._effect_path(effect=effect, index=idx)
-                    try:
-                        outcome = self._execute_effect(
-                            effect,
-                            store=child_store,
-                            ctx=ctx,
-                            resume_active=resume_active,
-                        )
-                    except Exception as e:
-                        wrapped = RuntimeError(f"{effect_path}: {e}")
-                        copy_signal_outranked_tag(e, wrapped)
-                        raise wrapped from e
-                    finally:
-                        if store.on_write:
-                            store.on_write(store.root_state)
-                    if outcome == "ran":
-                        resume_active = False
-            else:
-                # Tree semantics: all effects run concurrently against the same
-                # deterministic snapshot from dynamic start, not sibling
-                # writes. A shallow overlay (`dict(ctx)`), not a per-run
-                # deepcopy(ctx) — cheap regardless of how large the run
-                # state is (#318), for the same reason the tree each loop's
-                # overlay is safe (#268): every write lands in a branch's own
-                # isolated Store (below), never in ctx itself, and every
-                # value a branch reads out of ctx and hands to a tool/prompt
-                # is already a fresh copy by the time it leaves this process
-                # (template rendering stringifies it; params_json
-                # round-trips it through json.loads). See
-                # tests/core/test_dynamic_tree_shallow_overlay.py for the
-                # isolation this relies on.
-                tree_ctx = dict(ctx)
+            # Build ancestor context for children (this dynamic is now a parent).
+            # Skip depth 0 — that's the invisible root "prime" container.
+            t0 = time.monotonic()
+            self._child_ancestors = list(self._ancestors)
+            if self.depth > 0:
+                icon, color = _EFFECT_STYLE.get(f"dynamic:{self.defn.flow}", ("⬡", "blue"))
+                self._child_ancestors.append(AncestorContext(
+                    name=self.defn.name,
+                    icon=icon,
+                    color=color,
+                    start=t0,
+                    indent="  " * (self.depth - 1),
+                ))
 
-                tree_errors: list[Exception] = []
-
-                # Build animated per-effect tracker for verbose display
-                tree_tracker: _TreeStatus | None = None
-                if self.verbose and self.defn.effects:
-                    tracker_items = []
-                    for effect in self.defn.effects:
-                        _tl = _effect_type_label(effect)
-                        _icon, _color = _EFFECT_STYLE.get(_tl, ("·", "white"))
-                        _ename = getattr(effect, "name", None) or "?"
-                        tracker_items.append((_ename, _icon, _color))
-                    tree_tracker = _TreeStatus(
-                        items=tracker_items,
-                        indent="  " * self.depth,
-                        ancestors=self._child_ancestors,
-                    )
-
-                if tree_tracker is not None:
-                    from rich.live import Live
-
-                    live_ctx: Any = _live_region(
-                        lambda: Live(
-                            tree_tracker,
-                            refresh_per_second=10,
-                            transient=True,
-                            console=_console,
-                        )
-                    )
-                else:
-                    live_ctx = nullcontext()
-
-                # Give each thread its own isolated Store so concurrent
-                # effects never mutate shared dicts.  Results are merged
-                # back into child_store sequentially after all futures
-                # complete; observers see each branch as it runs (see
-                # Store.parallel_branches).
-                isolated_stores = child_store.parallel_branches(
-                    len(self.defn.effects)
-                )
-
-                # `cof run --resume`: a branch store starts life as
-                # ``state={}`` (Store.parallel_branches), so without this
-                # ``_execute_effect``'s own skip check (`store.state.get`)
-                # could never see a finished node from a prior run — tree
-                # children would always rerun. Seed the one key each branch
-                # is actually responsible for from the pre-existing
-                # child_store (which, under resume, still carries the
-                # earlier run's children) before dispatch.
-                if self.resume:
-                    for idx, effect in enumerate(self.defn.effects):
-                        branch_name = getattr(effect, "name", None)
-                        if not isinstance(branch_name, str):
-                            continue
-                        existing = child_store.state.get(branch_name)
-                        if effect_completed_ok(existing):
-                            isolated_stores[idx].state[branch_name] = existing
-
-                # An empty tree runs nothing, like an empty chain;
-                # ThreadPoolExecutor itself refuses max_workers=0. Unset
-                # max_concurrency keeps every child running at once, as
-                # before this field existed; set, it bounds the pool.
-                if self.defn.max_concurrency is None:
-                    max_workers = max(1, len(self.defn.effects))
-                else:
-                    max_workers = max(
-                        1, min(self.defn.max_concurrency, len(self.defn.effects))
-                    )
-
-                # One signal, before any branch starts, naming how many can
-                # ever be concurrently pending — bounded by max_concurrency,
-                # since that's the real ceiling the pool enforces, not the
-                # total item count — lets a listener (MCP's RunManager) wait
-                # for a real completion/pause count instead of guessing from
-                # a debounce window (#237); the true branch total goes along
-                # for `--events` (#423).
-                store.fire_concurrent_dispatch(
-                    self.defn.name,
-                    min(max_workers, len(self.defn.effects)),
-                    len(self.defn.effects),
-                )
-
-                # Set by a worker that just failed, before it re-raises
-                # (see _execute_branch), so the *same* worker thread checks
-                # it before taking its next queued child — no race against
-                # the main thread's own cancellation below, which only
-                # reaches children a free worker hasn't already started.
-                stop_event = (
-                    threading.Event() if self.defn.stop_on_error else None
-                )
-
-                with live_ctx:
-                    # Deliberately not ``with ThreadPoolExecutor(...) as
-                    # executor:`` — ``Executor.__exit__`` unconditionally
-                    # calls ``shutdown(wait=True)`` on the way out of a
-                    # ``with`` block, exception or not. That would silently
-                    # re-block the main thread on every already-running
-                    # branch's own worker thread even after the
-                    # cancellation path below already called
-                    # ``shutdown(wait=False, cancel_futures=True)`` — for
-                    # as long as it takes that branch's killed subprocess to
-                    # actually be noticed, which is ordinarily instant but,
-                    # under heavy CPU load, is itself just another
-                    # unbounded wait while this run is armed (#385 follow-
-                    # up: load-testing the as_completed fix caught exactly
-                    # this). Managing shutdown explicitly means the
-                    # cancellation path's own non-blocking shutdown is the
-                    # only one that ever runs.
-                    executor = ThreadPoolExecutor(max_workers=max_workers)
-                    # Built empty, before the try, and filled by a plain
-                    # loop rather than a dict comprehension (#385 review
-                    # P1): a ``KeyboardInterrupt``/``RunCancelledBySignal``
-                    # landing mid-comprehension left this name unbound, so
-                    # the ``except`` below calling ``futures.keys()`` raised
-                    # ``UnboundLocalError`` instead — an ordinary
-                    # ``Exception``, not a cancellation, so the outer
-                    # ``is_cancellation`` check misreported it as a plain
-                    # failure. Filling it incrementally also means any
-                    # branch already submitted before that happens is still
-                    # waited for below, not silently dropped.
-                    futures: dict = {}
-                    # Second line of defense (#555 follow-up): every
-                    # future the pool actually accepted, appended inside
-                    # the same `deferred_signal_region` as the submit
-                    # call that returned it below -- independent of
-                    # `futures` itself ever recording it, so the
-                    # cancellation path still waits for (and can cancel)
-                    # a branch even if some other bug kept it out of
-                    # `futures`.
-                    all_submitted: list = []
-                    try:
-                        # Each branch's own ``isolated_stores[idx]`` resets
-                        # its path prefix (Store.parallel_branches), so a
-                        # model call inside it would otherwise lose this
-                        # dynamic's own absolute path — pushed here, before
-                        # ``submit_with_context`` copies the submitting
-                        # thread's contextvars into the worker (#362).
-                        # ``child_store`` directly, not ``self.defn.name`` on
-                        # the outer ``store`` — see loop.py's own tree-flow
-                        # dispatch for why (#370).
-                        with nested_container(child_store, None):
-                            for idx, effect in enumerate(self.defn.effects):
-                                # One `deferred_signal_region` around both
-                                # the submit and recording its future
-                                # (#555 follow-up): `submit_with_
-                                # context` itself asserts the caller
-                                # already holds one rather than opening
-                                # its own narrower one that would raise
-                                # before `future` -- let alone `futures`
-                                # -- is ever bound, silently losing a
-                                # branch the pool already started running.
-                                with deferred_signal_region():
-                                    future = submit_with_context(
-                                        executor,
-                                        self._execute_branch,
-                                        effect,
-                                        store=isolated_stores[idx],
-                                        ctx=tree_ctx,
-                                        stop_event=stop_event,
-                                        tracker=tree_tracker,
-                                    )
-                                    all_submitted.append(future)
-                                    futures[future] = idx
-                        self._await_tree_branches(
-                            futures, tree_errors=tree_errors, store=store
-                        )
-                        # ``stop_on_error`` breaks out of that drain after
-                        # the first failure (#385) while other
-                        # branches can still be running — their futures
-                        # are only *cancelled* if the pool hasn't dequeued
-                        # them yet, never force-stopped. Waiting for them
-                        # here, inside this ``try``, means a signal that
-                        # lands on one of those still-running workers
-                        # reaches the ``except BaseException`` below
-                        # instead of escaping past the ``else`` clause's
-                        # own unbounded ``executor.shutdown(wait=True)``,
-                        # which the matching ``except`` doesn't cover.
-                        #
-                        # `all_submitted`, not `futures.keys()` (#555
-                        # follow-up): a strict superset, so this still
-                        # waits for a branch even if some other bug kept
-                        # it out of `futures` itself.
-                        wait_for_cancelled_branches(all_submitted)
-                    except BaseException:
-                        # Cancellation (SIGINT/SIGTERM): a future the
-                        # pool has not yet dequeued must never start
-                        # (#356) — ``cancel_futures`` is what makes that
-                        # true. Not ``wait=True`` (see above: unbounded,
-                        # and risks the hang #385 found) — but not a bare
-                        # ``wait=False`` with no wait at all either:
-                        # ``wait_for_cancelled_branches`` below waits
-                        # (with no total time limit, only its own polled
-                        # wait — see that function's own docstring) for
-                        # every already-running branch's worker thread to
-                        # actually notice its just-killed subprocess and
-                        # return before this re-raises.
-                        #
-                        # One region around both calls, not two:
-                        # `shutdown(cancel_futures=True)` itself calls
-                        # `Future.cancel()` on every not-yet-dequeued
-                        # future -- it dequeues
-                        # those with its own `get_nowait()`, so no worker
-                        # races it for them, but that `cancel()` still
-                        # touches each one's own lock a worker could be
-                        # mid-release of, the same #555 exposure. If the
-                        # region ended here instead, a first signal
-                        # landing during `wait_for_cancelled_branches`
-                        # would raise immediately and cut that wait
-                        # short: `sigterm_as_interrupt`'s own `finally`
-                        # would then reset the token while an already-
-                        # running branch the kill can't reach is still
-                        # mid-step, letting it pass its next `check()` and
-                        # start the next one after cancellation was
-                        # already reported. Keeping both calls in one
-                        # region means `check_deferred_signal` (polled by
-                        # `as_completed_promptly` inside the wait) leaves
-                        # the signal's exception parked until every
-                        # already-submitted branch has actually finished
-                        # and this region's own exit raises it -- a
-                        # second signal still ends the process at once,
-                        # region or not.
-                        #
-                        # When this `except` was entered by something
-                        # other than a signal (`executor.submit` itself
-                        # raising, or an observer callback raising) and a
-                        # first signal then lands during the wait: the
-                        # region's exit raises that signal's exception,
-                        # chained (via the implicit `__context__` this
-                        # `except` clause is already handling) onto the
-                        # original one, and it is the signal's exception
-                        # -- not the original -- that reaches `runtime_
-                        # shim` and picks the exit code (130/143/129): a
-                        # cancelled run reports cancellation, with the
-                        # original failure preserved as context rather
-                        # than lost.
-                        with deferred_signal_region():
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            wait_for_cancelled_branches(all_submitted)
-                        raise
-                    else:
-                        # No cancellation: every future is already done —
-                        # ``_await_tree_branches`` only returns once
-                        # ``as_completed_promptly`` has drained every one of
-                        # them for the ordinary (non-``stop_on_error``) case,
-                        # and the ``wait_for_cancelled_branches`` call above
-                        # covers the ``stop_on_error`` early-break case — so
-                        # this just reaps already-finished worker threads,
-                        # never an additional wait on a still-running one.
-                        executor.shutdown(wait=True)
-
-                # Merge isolated stores back into child_store sequentially
-                for idx in range(len(self.defn.effects)):
-                    for key, value in isolated_stores[idx].state.items():
-                        child_store.state[key] = value
-
-                if store.on_write:
-                    store.on_write(store.root_state)
-
-                if tree_errors:
-                    exc = TreeExecutionError(tree_errors)
-                    exc.__cause__ = tree_errors[0]
-                    raise exc
-
-        except BaseException as e:
-            # Caught as BaseException, not Exception, so a Ctrl-C/
-            # cancellation (KeyboardInterrupt/SystemExit) still runs this
-            # dynamic's own `finally:` on the way out (best effort) — see
-            # the cancellation check below, which re-raises it regardless
-            # of on_error.
-            body_exc = e
-
-        finally_exc: BaseException | None = None
-        if self.defn.finally_effects:
-            # Read before `finally:` starts (#796): a real signal handler
-            # still runs (and raises, or kills a tracked process) on the
-            # main thread no matter what `get_token().cleanup()`
-            # suppresses below, so a signal landing *during* an otherwise-
-            # successful `finally:` leaves no exception for the `except`
-            # below to catch -- it must be recognised from the token
-            # itself afterwards instead.
-            was_set_before_finally = get_token().is_set()
+            body_exc: BaseException | None = None
             try:
-                # Suppress this run's own cancellation check for the
-                # duration of `finally:` (#356) — a `finally:`
-                # must still run in full after Ctrl-C/SIGTERM, including
-                # any nested dynamic/loop/use/conditional it contains, not
-                # abort the moment one of them polls the already-cancelled
-                # token. See CancellationToken.cleanup.
-                with get_token().cleanup():
-                    self._execute_chain(
-                        self.defn.finally_effects,
-                        store=store,
-                        child_store=child_store,
-                        ctx=ctx,
-                        # No distinct 'finally' label segment: a finally effect
-                        # writes into the same child_store namespace as the body
-                        # (same state path a same-named body effect would have),
-                        # so the wrapped error's path should match the state
-                        # tree it actually names, not a '.finally.' segment that
-                        # isn't really there (#272 review).
-                        label=self.defn.name,
+                if self.defn.flow == "chain":
+                    # `cof run --resume`: positional, not per-effect. Skipping
+                    # stops for good the moment one effect in this chain isn't
+                    # resumed whole — whatever an old run's later nodes show,
+                    # they're either past the point this run actually diverged
+                    # from (a stale leftover, #270 F2) or sit after a failure
+                    # that on_error absorbed (also stale: the chain kept going
+                    # past it last time, so this run must too). A disabled
+                    # effect doesn't count: it's a deterministic no-op this run
+                    # regardless of resume, not a sign the position is stale.
+                    resume_active = self.resume
+                    for idx, effect in enumerate(self.defn.effects):
+                        # A cancelled run must not start the chain's next effect
+                        # (#356) — the only way this chain itself ever notices,
+                        # when it is running on a tree-flow worker thread rather
+                        # than the main thread a real signal interrupts directly.
+                        get_token().check()
+                        effect_path = self._effect_path(effect=effect, index=idx)
+                        try:
+                            outcome = self._execute_effect(
+                                effect,
+                                store=child_store,
+                                ctx=ctx,
+                                resume_active=resume_active,
+                            )
+                        except Exception as e:
+                            wrapped = RuntimeError(f"{effect_path}: {e}")
+                            copy_signal_outranked_tag(e, wrapped)
+                            raise wrapped from e
+                        finally:
+                            if store.on_write:
+                                store.on_write(store.root_state)
+                        if outcome == "ran":
+                            resume_active = False
+                else:
+                    # Tree semantics: all effects run concurrently against the same
+                    # deterministic snapshot from dynamic start, not sibling
+                    # writes. A shallow overlay (`dict(ctx)`), not a per-run
+                    # deepcopy(ctx) — cheap regardless of how large the run
+                    # state is (#318), for the same reason the tree each loop's
+                    # overlay is safe (#268): every write lands in a branch's own
+                    # isolated Store (below), never in ctx itself, and every
+                    # value a branch reads out of ctx and hands to a tool/prompt
+                    # is already a fresh copy by the time it leaves this process
+                    # (template rendering stringifies it; params_json
+                    # round-trips it through json.loads). See
+                    # tests/core/test_dynamic_tree_shallow_overlay.py for the
+                    # isolation this relies on.
+                    tree_ctx = dict(ctx)
+
+                    tree_errors: list[Exception] = []
+
+                    # Build animated per-effect tracker for verbose display
+                    tree_tracker: _TreeStatus | None = None
+                    if self.verbose and self.defn.effects:
+                        tracker_items = []
+                        for effect in self.defn.effects:
+                            _tl = _effect_type_label(effect)
+                            _icon, _color = _EFFECT_STYLE.get(_tl, ("·", "white"))
+                            _ename = getattr(effect, "name", None) or "?"
+                            tracker_items.append((_ename, _icon, _color))
+                        tree_tracker = _TreeStatus(
+                            items=tracker_items,
+                            indent="  " * self.depth,
+                            ancestors=self._child_ancestors,
+                        )
+
+                    if tree_tracker is not None:
+                        from rich.live import Live
+
+                        live_ctx: Any = _live_region(
+                            lambda: Live(
+                                tree_tracker,
+                                refresh_per_second=10,
+                                transient=True,
+                                console=_console,
+                            )
+                        )
+                    else:
+                        live_ctx = nullcontext()
+
+                    # Give each thread its own isolated Store so concurrent
+                    # effects never mutate shared dicts.  Results are merged
+                    # back into child_store sequentially after all futures
+                    # complete; observers see each branch as it runs (see
+                    # Store.parallel_branches).
+                    isolated_stores = child_store.parallel_branches(
+                        len(self.defn.effects)
                     )
-            except BaseException as fe:
-                finally_exc = fe
+
+                    # `cof run --resume`: a branch store starts life as
+                    # ``state={}`` (Store.parallel_branches), so without this
+                    # ``_execute_effect``'s own skip check (`store.state.get`)
+                    # could never see a finished node from a prior run — tree
+                    # children would always rerun. Seed the one key each branch
+                    # is actually responsible for from the pre-existing
+                    # child_store (which, under resume, still carries the
+                    # earlier run's children) before dispatch.
+                    if self.resume:
+                        for idx, effect in enumerate(self.defn.effects):
+                            branch_name = getattr(effect, "name", None)
+                            if not isinstance(branch_name, str):
+                                continue
+                            existing = child_store.state.get(branch_name)
+                            if effect_completed_ok(existing):
+                                isolated_stores[idx].state[branch_name] = existing
+
+                    # An empty tree runs nothing, like an empty chain;
+                    # ThreadPoolExecutor itself refuses max_workers=0. Unset
+                    # max_concurrency keeps every child running at once, as
+                    # before this field existed; set, it bounds the pool.
+                    if self.defn.max_concurrency is None:
+                        max_workers = max(1, len(self.defn.effects))
+                    else:
+                        max_workers = max(
+                            1, min(self.defn.max_concurrency, len(self.defn.effects))
+                        )
+
+                    # One signal, before any branch starts, naming how many can
+                    # ever be concurrently pending — bounded by max_concurrency,
+                    # since that's the real ceiling the pool enforces, not the
+                    # total item count — lets a listener (MCP's RunManager) wait
+                    # for a real completion/pause count instead of guessing from
+                    # a debounce window (#237); the true branch total goes along
+                    # for `--events` (#423).
+                    store.fire_concurrent_dispatch(
+                        self.defn.name,
+                        min(max_workers, len(self.defn.effects)),
+                        len(self.defn.effects),
+                    )
+
+                    # Set by a worker that just failed, before it re-raises
+                    # (see _execute_branch), so the *same* worker thread checks
+                    # it before taking its next queued child — no race against
+                    # the main thread's own cancellation below, which only
+                    # reaches children a free worker hasn't already started.
+                    stop_event = (
+                        threading.Event() if self.defn.stop_on_error else None
+                    )
+
+                    with live_ctx:
+                        # Deliberately not ``with ThreadPoolExecutor(...) as
+                        # executor:`` — ``Executor.__exit__`` unconditionally
+                        # calls ``shutdown(wait=True)`` on the way out of a
+                        # ``with`` block, exception or not. That would silently
+                        # re-block the main thread on every already-running
+                        # branch's own worker thread even after the
+                        # cancellation path below already called
+                        # ``shutdown(wait=False, cancel_futures=True)`` — for
+                        # as long as it takes that branch's killed subprocess to
+                        # actually be noticed, which is ordinarily instant but,
+                        # under heavy CPU load, is itself just another
+                        # unbounded wait while this run is armed (#385 follow-
+                        # up: load-testing the as_completed fix caught exactly
+                        # this). Managing shutdown explicitly means the
+                        # cancellation path's own non-blocking shutdown is the
+                        # only one that ever runs.
+                        executor = ThreadPoolExecutor(max_workers=max_workers)
+                        # Built empty, before the try, and filled by a plain
+                        # loop rather than a dict comprehension (#385 review
+                        # P1): a ``KeyboardInterrupt``/``RunCancelledBySignal``
+                        # landing mid-comprehension left this name unbound, so
+                        # the ``except`` below calling ``futures.keys()`` raised
+                        # ``UnboundLocalError`` instead — an ordinary
+                        # ``Exception``, not a cancellation, so the outer
+                        # ``is_cancellation`` check misreported it as a plain
+                        # failure. Filling it incrementally also means any
+                        # branch already submitted before that happens is still
+                        # waited for below, not silently dropped.
+                        futures: dict = {}
+                        # Second line of defense (#555 follow-up): every
+                        # future the pool actually accepted, appended inside
+                        # the same `deferred_signal_region` as the submit
+                        # call that returned it below -- independent of
+                        # `futures` itself ever recording it, so the
+                        # cancellation path still waits for (and can cancel)
+                        # a branch even if some other bug kept it out of
+                        # `futures`.
+                        all_submitted: list = []
+                        try:
+                            # Each branch's own ``isolated_stores[idx]`` resets
+                            # its path prefix (Store.parallel_branches), so a
+                            # model call inside it would otherwise lose this
+                            # dynamic's own absolute path — pushed here, before
+                            # ``submit_with_context`` copies the submitting
+                            # thread's contextvars into the worker (#362).
+                            # ``child_store`` directly, not ``self.defn.name`` on
+                            # the outer ``store`` — see loop.py's own tree-flow
+                            # dispatch for why (#370).
+                            with nested_container(child_store, None):
+                                for idx, effect in enumerate(self.defn.effects):
+                                    # One `deferred_signal_region` around both
+                                    # the submit and recording its future
+                                    # (#555 follow-up): `submit_with_
+                                    # context` itself asserts the caller
+                                    # already holds one rather than opening
+                                    # its own narrower one that would raise
+                                    # before `future` -- let alone `futures`
+                                    # -- is ever bound, silently losing a
+                                    # branch the pool already started running.
+                                    with deferred_signal_region():
+                                        future = submit_with_context(
+                                            executor,
+                                            self._execute_branch,
+                                            effect,
+                                            store=isolated_stores[idx],
+                                            ctx=tree_ctx,
+                                            stop_event=stop_event,
+                                            tracker=tree_tracker,
+                                        )
+                                        all_submitted.append(future)
+                                        futures[future] = idx
+                            self._await_tree_branches(
+                                futures, tree_errors=tree_errors, store=store
+                            )
+                            # ``stop_on_error`` breaks out of that drain after
+                            # the first failure (#385) while other
+                            # branches can still be running — their futures
+                            # are only *cancelled* if the pool hasn't dequeued
+                            # them yet, never force-stopped. Waiting for them
+                            # here, inside this ``try``, means a signal that
+                            # lands on one of those still-running workers
+                            # reaches the ``except BaseException`` below
+                            # instead of escaping past the ``else`` clause's
+                            # own unbounded ``executor.shutdown(wait=True)``,
+                            # which the matching ``except`` doesn't cover.
+                            #
+                            # `all_submitted`, not `futures.keys()` (#555
+                            # follow-up): a strict superset, so this still
+                            # waits for a branch even if some other bug kept
+                            # it out of `futures` itself.
+                            wait_for_cancelled_branches(all_submitted)
+                        except BaseException:
+                            # Cancellation (SIGINT/SIGTERM): a future the
+                            # pool has not yet dequeued must never start
+                            # (#356) — ``cancel_futures`` is what makes that
+                            # true. Not ``wait=True`` (see above: unbounded,
+                            # and risks the hang #385 found) — but not a bare
+                            # ``wait=False`` with no wait at all either:
+                            # ``wait_for_cancelled_branches`` below waits
+                            # (with no total time limit, only its own polled
+                            # wait — see that function's own docstring) for
+                            # every already-running branch's worker thread to
+                            # actually notice its just-killed subprocess and
+                            # return before this re-raises.
+                            #
+                            # One region around both calls, not two:
+                            # `shutdown(cancel_futures=True)` itself calls
+                            # `Future.cancel()` on every not-yet-dequeued
+                            # future -- it dequeues
+                            # those with its own `get_nowait()`, so no worker
+                            # races it for them, but that `cancel()` still
+                            # touches each one's own lock a worker could be
+                            # mid-release of, the same #555 exposure. If the
+                            # region ended here instead, a first signal
+                            # landing during `wait_for_cancelled_branches`
+                            # would raise immediately and cut that wait
+                            # short: `sigterm_as_interrupt`'s own `finally`
+                            # would then reset the token while an already-
+                            # running branch the kill can't reach is still
+                            # mid-step, letting it pass its next `check()` and
+                            # start the next one after cancellation was
+                            # already reported. Keeping both calls in one
+                            # region means `check_deferred_signal` (polled by
+                            # `as_completed_promptly` inside the wait) leaves
+                            # the signal's exception parked until every
+                            # already-submitted branch has actually finished
+                            # and this region's own exit raises it -- a
+                            # second signal still ends the process at once,
+                            # region or not.
+                            #
+                            # When this `except` was entered by something
+                            # other than a signal (`executor.submit` itself
+                            # raising, or an observer callback raising) and a
+                            # first signal then lands during the wait: the
+                            # region's exit raises that signal's exception,
+                            # chained (via the implicit `__context__` this
+                            # `except` clause is already handling) onto the
+                            # original one, and it is the signal's exception
+                            # -- not the original -- that reaches `runtime_
+                            # shim` and picks the exit code (130/143/129): a
+                            # cancelled run reports cancellation, with the
+                            # original failure preserved as context rather
+                            # than lost.
+                            with deferred_signal_region():
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                wait_for_cancelled_branches(all_submitted)
+                            raise
+                        else:
+                            # No cancellation: every future is already done —
+                            # ``_await_tree_branches`` only returns once
+                            # ``as_completed_promptly`` has drained every one of
+                            # them for the ordinary (non-``stop_on_error``) case,
+                            # and the ``wait_for_cancelled_branches`` call above
+                            # covers the ``stop_on_error`` early-break case — so
+                            # this just reaps already-finished worker threads,
+                            # never an additional wait on a still-running one.
+                            executor.shutdown(wait=True)
+
+                    # Merge isolated stores back into child_store sequentially
+                    for idx in range(len(self.defn.effects)):
+                        for key, value in isolated_stores[idx].state.items():
+                            child_store.state[key] = value
+
+                    if store.on_write:
+                        store.on_write(store.root_state)
+
+                    if tree_errors:
+                        exc = TreeExecutionError(tree_errors)
+                        exc.__cause__ = tree_errors[0]
+                        raise exc
+
+            except BaseException as e:
+                # Caught as BaseException, not Exception, so a Ctrl-C/
+                # cancellation (KeyboardInterrupt/SystemExit) still runs this
+                # dynamic's own `finally:` on the way out (best effort) — see
+                # the cancellation check below, which re-raises it regardless
+                # of on_error.
+                body_exc = e
+
+            finally_exc: BaseException | None = None
+            if self.defn.finally_effects:
+                # Read before `finally:` starts (#796): a real signal handler
+                # still runs (and raises, or kills a tracked process) on the
+                # main thread no matter what `get_token().cleanup()`
+                # suppresses below, so a signal landing *during* an otherwise-
+                # successful `finally:` leaves no exception for the `except`
+                # below to catch -- it must be recognised from the token
+                # itself afterwards instead.
+                was_set_before_finally = get_token().is_set()
+                try:
+                    # Suppress this run's own cancellation check for the
+                    # duration of `finally:` (#356) — a `finally:`
+                    # must still run in full after Ctrl-C/SIGTERM, including
+                    # any nested dynamic/loop/use/conditional it contains, not
+                    # abort the moment one of them polls the already-cancelled
+                    # token. See CancellationToken.cleanup.
+                    with get_token().cleanup():
+                        self._execute_chain(
+                            self.defn.finally_effects,
+                            store=store,
+                            child_store=child_store,
+                            ctx=ctx,
+                            # No distinct 'finally' label segment: a finally effect
+                            # writes into the same child_store namespace as the body
+                            # (same state path a same-named body effect would have),
+                            # so the wrapped error's path should match the state
+                            # tree it actually names, not a '.finally.' segment that
+                            # isn't really there (#272 review).
+                            label=self.defn.name,
+                        )
+                except BaseException as fe:
+                    finally_exc = fe
+                else:
+                    # A signal arriving while this `finally:` ran (#796): the
+                    # running cleanup step finished instead of being killed
+                    # (`CancellationToken.track`), so nothing inside this
+                    # `finally:` ever raised -- but the run still ends
+                    # interrupted once cleanup is done, with this signal's
+                    # exit code. Never true when the token was *already* set
+                    # before `finally:` started (the body's own interruption,
+                    # if any, is already `body_exc`).
+                    # Never true either while an outer `finally:` is still the
+                    # one running this one as one of its own cleanup steps
+                    # (`in_cleanup()`): raising here would abandon that outer
+                    # `finally:`'s own remaining steps the moment this nested
+                    # one returns (#796). The outermost `cleanup()` scope's own
+                    # exit raises the parked signal once every nested
+                    # `finally:` is actually done.
+                    if (
+                        not was_set_before_finally
+                        and get_token().is_set()
+                        and not get_token().in_cleanup()
+                    ):
+                        # No message, deliberately: `_error_text` stringifies
+                        # this to `str(exc)` first, and a non-empty message
+                        # here would read back as this dynamic's own
+                        # `meta.error` verbatim instead of the standard
+                        # "Interrupted (SIGTERM)"/... wording every other
+                        # interrupt uses.
+                        finally_exc = RunCancelledBySignal()
+
+            if body_exc is not None:
+                dyn["value"] = False
+                meta["error"] = _error_text(body_exc)
+                if finally_exc is not None:
+                    # The body's own failure is reported as-is; a finally
+                    # failure on top of it is a second note, never the thing
+                    # that hides the original (#272).
+                    meta["finally_error"] = _error_text(finally_exc)
+            elif finally_exc is not None:
+                dyn["value"] = False
+                meta["error"] = _error_text(finally_exc)
             else:
-                # A signal arriving while this `finally:` ran (#796): the
-                # running cleanup step finished instead of being killed
-                # (`CancellationToken.track`), so nothing inside this
-                # `finally:` ever raised -- but the run still ends
-                # interrupted once cleanup is done, with this signal's
-                # exit code. Never true when the token was *already* set
-                # before `finally:` started (the body's own interruption,
-                # if any, is already `body_exc`).
-                # Never true either while an outer `finally:` is still the
-                # one running this one as one of its own cleanup steps
-                # (`in_cleanup()`): raising here would abandon that outer
-                # `finally:`'s own remaining steps the moment this nested
-                # one returns (#796). The outermost `cleanup()` scope's own
-                # exit raises the parked signal once every nested
-                # `finally:` is actually done.
-                if (
-                    not was_set_before_finally
-                    and get_token().is_set()
-                    and not get_token().in_cleanup()
-                ):
-                    # No message, deliberately: `_error_text` stringifies
-                    # this to `str(exc)` first, and a non-empty message
-                    # here would read back as this dynamic's own
-                    # `meta.error` verbatim instead of the standard
-                    # "Interrupted (SIGTERM)"/... wording every other
-                    # interrupt uses.
-                    finally_exc = RunCancelledBySignal()
+                dyn["value"] = True
 
-        if body_exc is not None:
-            dyn["value"] = False
-            meta["error"] = _error_text(body_exc)
-            if finally_exc is not None:
-                # The body's own failure is reported as-is; a finally
-                # failure on top of it is a second note, never the thing
-                # that hides the original (#272).
-                meta["finally_error"] = _error_text(finally_exc)
-        elif finally_exc is not None:
-            dyn["value"] = False
-            meta["error"] = _error_text(finally_exc)
-        else:
-            dyn["value"] = True
+            meta["completed_at"] = _now_iso()
+            # Balances the start fired above, on every exit — success, a body
+            # failure, a finally failure, or both.
+            store.fire_effect_complete(self.defn.name, dyn)
 
-        meta["completed_at"] = _now_iso()
-        # Balances the start fired above, on every exit — success, a body
-        # failure, a finally failure, or both.
-        store.fire_effect_complete(self.defn.name, dyn)
-
-        if body_exc is not None:
-            # Anything that is not an Exception (KeyboardInterrupt, SystemExit,
-            # or the MCP server's own RunCancelled(BaseException)) is a
-            # cancellation: it always propagates, regardless of this
-            # dynamic's own on_error, which only degrades an ordinary failure.
-            is_cancellation = not isinstance(body_exc, Exception)
-            if finally_exc is not None:
+            if body_exc is not None:
+                # Anything that is not an Exception (KeyboardInterrupt, SystemExit,
+                # or the MCP server's own RunCancelled(BaseException)) is a
+                # cancellation: it always propagates, regardless of this
+                # dynamic's own on_error, which only degrades an ordinary failure.
+                is_cancellation = not isinstance(body_exc, Exception)
+                if finally_exc is not None:
+                    logger.warning(
+                        "Dynamic %r: cleanup in 'finally' also failed (%s) after "
+                        "the original failure (%s)",
+                        self.defn.name,
+                        finally_exc,
+                        body_exc,
+                    )
+                if is_cancellation or self.defn.on_error == "fail":
+                    if (
+                        not is_cancellation
+                        and finally_exc is not None
+                        and not isinstance(finally_exc, Exception)
+                    ):
+                        # on_error: fail deliberately lets this ordinary
+                        # failure win over the signal `finally_exc` itself
+                        # reports (#799's own row 3) -- tagged so an ancestor
+                        # (`use.py`'s own tree-branch fallback, #796) never
+                        # re-detects the same still-set token and re-converts
+                        # this already-settled decision back into a
+                        # cancellation once body_exc propagates past it.
+                        mark_signal_outranked_by_failure(body_exc)
+                    raise body_exc
+                # skip/continue: the same degradation a leaf effect's on_error
+                # gives — the failure is recorded on this dynamic's own meta.error
+                # (above) and the exception stops here instead of propagating to
+                # this dynamic's parent, which runs its next effect normally.
                 logger.warning(
-                    "Dynamic %r: cleanup in 'finally' also failed (%s) after "
-                    "the original failure (%s)",
+                    "Dynamic %r: %s; on_error=%s, continuing with the next effect",
+                    self.defn.name,
+                    body_exc,
+                    self.defn.on_error,
+                )
+                # A signal landing while this dynamic's own `finally:` ran, or
+                # anywhere else in this run, is never lost just because
+                # on_error degraded the body's own, unrelated, already-handled
+                # failure (#799).
+                raise_if_interrupted_outside_cleanup()
+                return
+
+            if finally_exc is not None:
+                # The body succeeded; a 'finally' effect's own failure (its
+                # on_error is 'fail', the default — skip/continue already
+                # swallowed it inside _execute_effect) fails this dynamic the
+                # same way a body failure would — unless this *dynamic's own*
+                # on_error says to degrade that failure too (#272 review).
+                is_cancellation = not isinstance(finally_exc, Exception)
+                if is_cancellation or self.defn.on_error == "fail":
+                    raise finally_exc
+                logger.warning(
+                    "Dynamic %r: finally failed (%s); on_error=%s, continuing with "
+                    "the next effect",
                     self.defn.name,
                     finally_exc,
-                    body_exc,
+                    self.defn.on_error,
                 )
-            if is_cancellation or self.defn.on_error == "fail":
-                if (
-                    not is_cancellation
-                    and finally_exc is not None
-                    and not isinstance(finally_exc, Exception)
-                ):
-                    # on_error: fail deliberately lets this ordinary
-                    # failure win over the signal `finally_exc` itself
-                    # reports (#799's own row 3) -- tagged so an ancestor
-                    # (`use.py`'s own tree-branch fallback, #796) never
-                    # re-detects the same still-set token and re-converts
-                    # this already-settled decision back into a
-                    # cancellation once body_exc propagates past it.
-                    mark_signal_outranked_by_failure(body_exc)
-                raise body_exc
-            # skip/continue: the same degradation a leaf effect's on_error
-            # gives — the failure is recorded on this dynamic's own meta.error
-            # (above) and the exception stops here instead of propagating to
-            # this dynamic's parent, which runs its next effect normally.
-            logger.warning(
-                "Dynamic %r: %s; on_error=%s, continuing with the next effect",
-                self.defn.name,
-                body_exc,
-                self.defn.on_error,
-            )
-            # A signal landing while this dynamic's own `finally:` ran, or
-            # anywhere else in this run, is never lost just because
-            # on_error degraded the body's own, unrelated, already-handled
-            # failure (#799).
-            raise_if_interrupted_outside_cleanup()
-            return
-
-        if finally_exc is not None:
-            # The body succeeded; a 'finally' effect's own failure (its
-            # on_error is 'fail', the default — skip/continue already
-            # swallowed it inside _execute_effect) fails this dynamic the
-            # same way a body failure would — unless this *dynamic's own*
-            # on_error says to degrade that failure too (#272 review).
-            is_cancellation = not isinstance(finally_exc, Exception)
-            if is_cancellation or self.defn.on_error == "fail":
-                raise finally_exc
-            logger.warning(
-                "Dynamic %r: finally failed (%s); on_error=%s, continuing with "
-                "the next effect",
-                self.defn.name,
-                finally_exc,
-                self.defn.on_error,
-            )
-            raise_if_interrupted_outside_cleanup()
-            return
+                raise_if_interrupted_outside_cleanup()
+                return
+        finally:
+            pop_bare_effect_scope(bare_scope_token)
 
     def _await_tree_branches(
         self,

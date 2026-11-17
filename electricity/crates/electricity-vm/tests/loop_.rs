@@ -2833,3 +2833,100 @@ async fn collect_values_leaves_out_a_disabled_target_rather_than_a_null_entry() 
     let values = as_list(get(collected, "value").unwrap());
     assert_eq!(values, &Vec::new());
 }
+
+#[tokio::test]
+async fn a_dynamic_nested_in_a_loop_body_reads_its_own_child_not_a_root_sibling() {
+    // #778 (the self-entry narrowing): a nested `dynamic` `d` running
+    // inside a loop body's own chain resolves a bare `{{x.value}}`
+    // read in its second child through its own first child `x` --
+    // the self-alias `push_bare_effect_scope` installs -- never the
+    // root's own unrelated effect also named `x`. A loop body isn't a
+    // namespace of its own, so `d`'s computed dotted path (through
+    // `lp.iter_0`) is never live while the loop is running; only the
+    // self-alias chain is.
+    fn marker_params(marker: &str) -> IndexMap<Value, ParamNode> {
+        let mut input = IndexMap::new();
+        input.insert(
+            k("marker"),
+            ParamNode::Literal(Value::Str(marker.to_string())),
+        );
+        let mut params = IndexMap::new();
+        params.insert(
+            k("mode"),
+            ParamNode::Literal(Value::Str("stringify".to_string())),
+        );
+        params.insert(k("input"), ParamNode::Map(input));
+        params
+    }
+
+    fn bare_read_params(template: &str) -> IndexMap<Value, ParamNode> {
+        let mut params = IndexMap::new();
+        params.insert(
+            k("mode"),
+            ParamNode::Literal(Value::Str("stringify".to_string())),
+        );
+        params.insert(
+            k("input"),
+            ParamNode::Template(TemplateText::new(template.to_string(), true, Escape::None)),
+        );
+        params
+    }
+
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("lp");
+    let body_prefix = own_path.push_pass(loop_id);
+    let d_path = body_prefix.push_name("d");
+
+    let loop_op_ = loop_op(
+        own_path,
+        Some("lp"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        vec![chain_dynamic(
+            d_path.clone(),
+            "d",
+            OnError::Fail,
+            vec![
+                support::json_tool_leaf(d_path.push_name("x"), "x", marker_params("loop-x")),
+                support::json_tool_leaf(
+                    d_path.push_name("reader"),
+                    "reader",
+                    bare_read_params("{{x.value}}"),
+                ),
+            ],
+        )],
+    );
+
+    run(
+        chain_dynamic(
+            root_path(),
+            "prime",
+            OnError::Fail,
+            vec![
+                support::json_tool_leaf(root_path().push_name("x"), "x", marker_params("root-x")),
+                loop_op_,
+            ],
+        ),
+        &store,
+    )
+    .await
+    .unwrap();
+
+    let pr = prime(&store);
+    let lp = as_dict(get(&pr, "lp").unwrap());
+    let reader_text = as_str(dig(lp, &["iter_0", "d", "reader", "value"]));
+    assert!(
+        reader_text.contains("loop-x"),
+        "d's own child x must win -- the dotted path through lp.iter_0 \
+         isn't live while the loop body is running: {reader_text:?}"
+    );
+    assert!(!reader_text.contains("root-x"), "{reader_text:?}");
+}

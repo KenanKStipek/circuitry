@@ -619,7 +619,7 @@ async fn on_error_fail_propagates_a_broken_condition() {
 
 #[tokio::test]
 async fn a_later_branch_effect_sees_an_earlier_siblings_write_by_bare_name() {
-    // `scope_ctx`/`local_writes` (Quirk Q1): inside a branch, a sibling's
+    // `scope_ctx`/`local_writes` (runtime-semantics §2.4): inside a branch, a sibling's
     // write is visible under *both* the bare and `prime`-qualified
     // spelling to the *next* sibling -- exercised here through a nested,
     // *named* `dynamic` (always succeeds trivially, empty) as the first

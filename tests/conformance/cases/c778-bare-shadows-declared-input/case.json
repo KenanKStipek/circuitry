@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #778",
+  "description": "A declared input `x` shadowed by an effect also named `x`: `cof check` compiles this document (a bare reference to a name also shadowed by an effect in scope is no longer flagged as a declared-input collision), and the bare {{x.value}} at run time renders the effect's own value, never the declared input's -- fails to compile at all on main, where any bare reference to a declared input's own name was always an error.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "x=user-supplied"]
+}

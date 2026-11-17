@@ -169,8 +169,11 @@ raises on things the schema itself cannot express:
 - A bare `{{name}}` template reference that collides with a name this
   document's own `interface.inputs` declares (`validate_bare_input_refs`,
   `core/state_ns.py:221`) — caller inputs live under `input.`, so a bare
-  reference to a declared input name is always the author's mistake, not a
-  loop/sibling binding (those are never declared in `interface.inputs`).
+  reference to a declared input name is the author's mistake, not a
+  loop/sibling binding (those are never declared in `interface.inputs`),
+  *unless* an effect in scope also has that name: the effect wins (§3.1's
+  fallback), the declared input is unreachable bare at all from there, and
+  this check does not fire.
 - Effect-name validation (`_validate_name`, `core/compiler.py:54`): non-empty,
   no leading/trailing/internal whitespace, no `.`, not the pattern `iter_\d+`
   (reserved for loop passes), not one of `{value, meta, input, prime, runtime}`
@@ -431,27 +434,52 @@ run). This asymmetry is deliberate (`core/loop.py`, extensive inline
 comments) and must be reproduced exactly, including the off-by-one between
 condition-time and body-time `iter.index` for `while` loops.
 
-**Top-level root is NOT a scope-overlay container.** A plain `dynamic`
-container — including the document root itself, which compiles to a
-`DynamicDefinition` named `"prime"` — never calls `scope_ctx`/`local_writes`
-at all (confirmed by source inspection of `core/dynamic.py`: no reference to
-either). Its `ctx` for every child is simply `store.state` **by reference**
-(`core/dynamic.py` `execute`: `ctx = store.state if ctx_override is None else
-{**ctx_override, **store.state}`), so a later sibling's fully-qualified
-`{{prime.<earlier>.value}}` resolves because it is reading the *same live
-dict* earlier siblings already wrote into — but the **bare** form
-`{{<earlier>.value}}` does **not** resolve at plain top level, because no
-overlay ever puts `<earlier>` at the top of `ctx`. Confirmed live:
+**The bare form works in every container, not just a loop body or an `if`
+branch (issue #778).** A plain `dynamic` container — including the document
+root itself, which compiles to a `DynamicDefinition` named `"prime"` —
+never calls `scope_ctx`/`local_writes` (confirmed by source inspection of
+`core/dynamic.py`: no reference to either), and its `ctx` for every child is
+still simply `store.state` **by reference**, unchanged by #778. Bare
+resolution instead lives in the template renderer itself
+(`core/templates.py::_get_key`): once every scope `scope_ctx` would already
+check has missed — the container's own loop/`if` overlay, then `prime`,
+`runtime`, `input` and every other existing context key, including an
+ancestor dynamic's own self-alias (below) — a bare head naming an effect of
+the *nearest enclosing effect container* resolves.
+
+"The container's own effect names" (`core/dynamic.py::_region_effect_names`)
+is every direct child's declared name, plus — because it writes straight
+into this container's own namespace, having none of its own — the names
+inside an *unnamed* (transparent) `if`'s own `then`/`else` or an unnamed
+loop's own body, at any depth through further unnamed `if`/loop nesting. A
+*named* `if`/loop owns its own node (the ordinary `scope_ctx` overlay
+above), so its children stay out of this set.
+
+Each container on the chain (the document root, a chain/tree `dynamic`, a
+`use` child's own root, `finally:`, a reflector's or decomposition plan's
+own root; nearest first) resolves a bare head naming one of its own names
+through **its own self-alias** — its declared name (`"prime"` for the
+document root and a `use`/reflector/decomposition child's own root,
+otherwise the dynamic's own name) — which `core/dynamic.py` installs as a
+flat, live top-level key in `ctx` for every dynamic, nested or not
+(`ctx[self.defn.name] = dyn`, widening whatever `ctx` this dynamic itself
+received). This is deliberately *not* a dotted path recomputed from the
+container's place in the chain (e.g. `"prime.outer.d"`): that path is only
+live while this container's own render is the top-level one, and would miss
+or read a different node while a loop body, an `if` branch or a tree branch
+is running it (issue #778) — the self-alias key is always
+live instead, since it's the same key `ctx[self.defn.name]` every render of
+this container's own descendants already widens forward. Bare equals
+dotted by construction: live, after `resume: restart`, with saved/resumed
+state, and inside a `flow: tree` branch's own snapshot. Confirmed live:
 
 ```yaml
 effects:
   - {type: tool, name: first, provider: shell, params: {command: echo, args: [AAA]}}
   - {type: prompt, name: second, template: "bare={{first.value}} dotted={{prime.first.value}}"}
 ```
-renders `prompt_sent: "bare= dotted=AAA\n"` — the bare form is empty, the
-dotted form resolves. **This only matches the documented "bare form also
-works" rule inside a loop body or an `if` branch** (where `scope_ctx` *is*
-applied) — see §9 Quirk Q1, a critical parity risk.
+renders `prompt_sent: "bare=AAA dotted=AAA\n"` — both forms resolve, the
+same as inside a loop body or an `if` branch.
 
 ---
 
@@ -477,7 +505,13 @@ sections `{{^x}}...{{/x}}` render iff `x` is falsy/empty/absent. Dotted names
 (`{{a.b.c}}`) walk nested dicts and render empty on any missing/absent
 segment — never an error (confirmed: `{{a.b.c}}` on `{"a":{"b":{}}}` → `""`).
 A template referencing a key entirely absent from context also renders empty,
-not an error (confirmed: `{{missing}}` on `{}` → `""`).
+not an error (confirmed: `{{missing}}` on `{}` → `""`). A bare `{{name}}`
+whose first segment names an effect of an enclosing container is not
+"entirely absent" this way even when every other scope above misses on it:
+once that happens, it falls back to that container's own dotted path
+(nearest enclosing container first) before rendering empty for real — see
+§2.4's "Bare sibling references" and §3.4's `{{> name}}`/`inputs:` overlay
+note.
 
 ### 3.2 Python value → text
 
@@ -2128,21 +2162,6 @@ Each is a real, confirmed behavior of the reference implementation. An
 electricity reimplementation must pick, explicitly, to copy or diverge from
 each — silently doing neither is the actual risk.
 
-**Q1 — Bare sibling references only work inside a loop body / `if` branch,
-never at plain top level or inside a plain `dynamic` container.**
-Documented ("Referencing a sibling within an iteration", orchestration
-reference) only in the context of loop bodies, but easy to over-generalize.
-Minimal repro (§2.4): a two-step top-level `effects:` list where step 2
-writes `{{first.value}}` — renders **empty**; `{{prime.first.value}}` in the
-same template renders correctly. Root cause: `core/dynamic.py`'s chain
-executor never calls `scope_ctx`/`local_writes` — only `core/loop.py` and
-`core/conditional.py` do. **Decision needed**: copy this distinction exactly
-(bare form resolves only inside loop/if scope-overlay containers) or
-normalize it (bare form always works, or never works). Copying it exactly is
-what byte-identical parity requires; normalizing it is a deliberate,
-documented divergence from `cof`.
-
-
 **Q3 — `use.inline`'s template renders against the *parent's* context,
 before the child orchestration even exists; `use.inputs` has no effect on
 what the inline template itself can reference.** Minimal repro (confirmed
@@ -2257,7 +2276,6 @@ the run is fully deterministic.
 | C24 | Named loop whose `last` aliases `iter_2` in memory | n/a | `--out` writes `"last": {"$ref": "iter_2"}`; loading that file back and re-saving round-trips byte-identical (§2.3) |
 | C25 | Ctrl-C (SIGINT) and SIGTERM delivered mid-run, each with a `finally:` on the root | signal harness | `finally:` runs in both cases; exit codes 130 vs 143 respectively; `--out` written in both cases with `runtime.last_run.completed_at` set (§6.5, §8.4) |
 | C26 | `runtime.complexity.scoring.enabled` true vs. absent, identical document/inputs otherwise | n/a | `meta.complexity` key present/absent — every *other* byte of state identical (§5.8) |
-| C27 | Top-level plain `effects:` list, step 2 reads step 1 via bare `{{step1.value}}` and via `{{prime.step1.value}}` | n/a | Bare form empty, dotted form resolves (Q1) — the single most important parity assertion in this list |
 | C28 | `type: yield` with a plain template, no `model`/`adapter` configured at all | n/a | `prime.<name>.value` is the rendered text; no adapter call is attempted (§3.6, §5.9) |
 | C29 | Declared `prompts:` map, `{{> name}}` splicing a declared prompt into another declared prompt and into a `yield` template, with the declared prompt's text ending in `\n` | n/a | Nested declared-prompt expansion; the one-trailing-newline-drop rule (§3.6) |
 | C30 | Two `{{> name}}` tags concatenated in one tool `params` string, each naming a different `yield` effect | n/a | Both splice in, unescaped by the surrounding (escaped) tool-param context (§3.4, §3.6) |

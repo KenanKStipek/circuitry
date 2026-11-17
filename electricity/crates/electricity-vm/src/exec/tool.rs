@@ -2013,12 +2013,16 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 // cancellation) returns early.
                                                 ExpectCondition::Model { template } => {
                                                     let meta_snapshot = store.snapshot(&meta_node);
-                                                    let state = ctx.whole();
+                                                    // #778: *ctx* itself (a frame-carrying
+                                                    // root), not `ctx.whole()`'s plain-`Value` snapshot --
+                                                    // a bare reference inside *template* must still
+                                                    // resolve through *ctx*'s own enclosing-container
+                                                    // fallback chain.
                                                     match super::condition_model::evaluate_model_expect(
                                                         template,
                                                         &value_for_expect,
                                                         &meta_snapshot,
-                                                        &state,
+                                                        ctx,
                                                         &effect_path,
                                                         timeout_seconds,
                                                         run_ctx,

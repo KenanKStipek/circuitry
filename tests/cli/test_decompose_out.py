@@ -124,7 +124,6 @@ def _config(planner: Path, **decomposition_overrides: Any) -> CircuitryConfig:
     return CircuitryConfig(
         runtime={
             "complexity": {"scoring": {"enabled": True}, "decomposition": decomposition},
-            "_decomposition_planner_path": str(planner),
         }
     )
 
@@ -150,6 +149,7 @@ def _run_decomposing_task(
             config=_config(planner),
             skip_preflight=True,
             decompose_out=decompose_out,
+            decomposition_planner_path=planner,
         )
     )
 
@@ -369,6 +369,7 @@ def test_a_run_that_never_decomposes_writes_nothing(tmp_path: Path) -> None:
             config=_config(planner, threshold=100.0),
             skip_preflight=True,
             decompose_out=out_dir,
+            decomposition_planner_path=planner,
         )
     )
 
@@ -480,6 +481,7 @@ def test_two_decomposing_effects_in_one_run_do_not_collide(tmp_path: Path) -> No
             config=_config(planner),
             skip_preflight=True,
             decompose_out=out_dir,
+            decomposition_planner_path=planner,
         )
     )
 

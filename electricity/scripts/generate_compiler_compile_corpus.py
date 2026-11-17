@@ -1161,6 +1161,52 @@ add({
 })
 
 
+# --- #778: a declared input shadowed by an effect in scope compiles ---------
+
+add({
+    "name": "bare_input_ref_shadowed_by_effect_in_scope",
+    "files": {"doc.yml": (
+        "interface:\n"
+        "  inputs:\n"
+        "    x: {type: string}\n"
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: x\n"
+        "    provider: shell\n"
+        "    params: {cmd: 'echo hi'}\n"
+        "  - type: tool\n"
+        "    name: reader\n"
+        "    provider: shell\n"
+        "    params:\n"
+        "      cmd: 'echo {{x.value}}'\n"
+    )},
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "bare_input_ref_shadowed_by_effect_in_unnamed_if",
+    "files": {"doc.yml": (
+        "interface:\n"
+        "  inputs:\n"
+        "    x: {type: string}\n"
+        "effects:\n"
+        "  - type: if\n"
+        "    if: {mode: cel, expr: 'true'}\n"
+        "    then:\n"
+        "      - type: tool\n"
+        "        name: x\n"
+        "        provider: shell\n"
+        "        params: {cmd: 'echo hi'}\n"
+        "  - type: tool\n"
+        "    name: reader\n"
+        "    provider: shell\n"
+        "    params:\n"
+        "      cmd: 'echo {{x.value}}'\n"
+    )},
+    "entry": "doc.yml",
+})
+
+
 # --- Compile errors: Unknown flow value -------------------------------------
 
 add(doc(text="effects: []\nflow: bogus\n"))

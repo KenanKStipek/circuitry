@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #778",
+  "description": "A dynamic `d` nested inside a chain loop's own body, inside an unnamed `if` branch, resolves a bare {{x.value}} read in its second child through its own first child `x` (nearest container wins), not the root effect also named `x` -- fails (renders empty) on main for electricity, which never resolved any bare reference inside a dynamic at all, nested through a loop body and an if branch or not; a design that instead resolved the root's `x` would also be wrong.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "items=[1]"]
+}

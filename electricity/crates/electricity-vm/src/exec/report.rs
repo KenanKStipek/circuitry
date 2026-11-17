@@ -126,7 +126,7 @@ pub(crate) async fn execute_report(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
 ) {
-    let live_root = LiveRoot::new(ctx_chain, store);
+    let live_root = LiveRoot::new(ctx_chain, store, frame);
     let effect_path = frame.effect_path(&op.path);
     let effect_path_str = effect_path.to_string();
     // The message-render label is name-conditional (`core/report.py::

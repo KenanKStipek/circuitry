@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "An unnamed (transparent) `if`'s own `then:` child `s` writes straight into the enclosing container's namespace -- a bare {{s.value}} reaches it the same way the dotted {{prime.s.value}} form does, both from the document root and from a nested dynamic `d`. Fails (renders empty) on main, where neither the root's nor `d`'s own effect names ever counted a transparent `if`'s own children.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,21 @@
+name: c778-bare-loop-binding-shadow
+effects:
+  - type: tool
+    name: item
+    provider: json
+    params: {mode: stringify, input: {marker: "root-item"}}
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '["loop-item"]'}
+  - type: loop
+    name: over_items
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: tool
+        name: reader
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{item}}"

@@ -64,27 +64,84 @@ pub fn python_path_str(path: &Path) -> String {
 /// nonzero exit rather than writing a `{"error": ...}` placeholder and
 /// exiting 0.
 pub fn render_state(state: &Value, pretty: bool) -> Result<String, electricity_json::WriteError> {
-    let mode = if pretty {
-        electricity_json::WriteMode::PRETTY
+    let ordered = pretty_sort_if_needed(state, pretty)?;
+    electricity_json::dumps_default_str(ordered.as_ref(), pretty_write_mode(pretty))
+        .map(|body| format!("{body}\n"))
+}
+
+/// `--pretty`'s own sort rule (issue #778): Python's own `sorted()` order
+/// when the keys compare directly -- all strings (code-point order) or
+/// all numbers (`bool` counting as `0`/`1`) -- the same order plain
+/// `json.dumps(..., sort_keys=True)` already gave for either shape.
+/// Only when `sorted()` can't compare the keys at all (a mix of types,
+/// e.g. the bool `true` beside the string `"true"`) does this fall back
+/// to [`electricity_json::canonical_key_order`]'s own order: the JSON
+/// text each key would write, then [`electricity_json::key_type_rank`]
+/// as a tiebreak -- never insertion order. This is
+/// [`electricity_json::pretty_key_order`], the same rule cof's own
+/// `core/saved_state.py::pretty_key_order` uses; [`canonical_key_order`]
+/// itself stays reserved for `electricity-vm`'s reflector-plan digest,
+/// which must keep hashing a plan the same way regardless of this issue
+/// (#810; see [`electricity_json::canonical_key_order`]'s own doc).
+/// `core/saved_state.py::dumps_saved_state` pre-sorts the tree itself this
+/// same way and writes the result with `sort_keys=False`; ported the same
+/// way here: reorder every `Dict`'s entries first, then write with
+/// `sort_keys` always `false` (see [`pretty_write_mode`]) --
+/// `WriteMode::PRETTY`'s own `sort_keys: true` is deliberately never used
+/// here, since other callers of that constant (`service`'s own saved
+/// record, matching `plugins/service.py`'s independent `json.dumps(record,
+/// indent=2, sort_keys=True)`) still mean literal `sort_keys=True`,
+/// unchanged by this issue.
+///
+/// Not pretty: a borrow of *state* itself, no copy. A key that still can't
+/// be written at all (a `List`/`Dict`/`Bytes`/`Date`/`DateTime` key --
+/// never valid for `sort_keys=True` either) still raises, via the same
+/// [`electricity_json::stringify_key`] plain writing already calls, since
+/// its own text is computed before its type rank is ever looked up.
+fn pretty_sort_if_needed(
+    state: &Value,
+    pretty: bool,
+) -> Result<std::borrow::Cow<'_, Value>, electricity_json::WriteError> {
+    if pretty {
+        Ok(std::borrow::Cow::Owned(electricity_json::pretty_key_order(
+            state,
+        )?))
+    } else {
+        Ok(std::borrow::Cow::Borrowed(state))
+    }
+}
+
+/// [`render_state`]/[`render_state_for_stdout`]'s own write mode: `--pretty`
+/// always writes `indent=2`/`sort_keys=false` now -- the tree is already
+/// reordered by [`pretty_sort_if_needed`] when *pretty* is true, so the
+/// writer itself never needs to sort (see [`pretty_sort_if_needed`]'s own
+/// doc for why this must not be `WriteMode::PRETTY`).
+fn pretty_write_mode(pretty: bool) -> electricity_json::WriteMode {
+    if pretty {
+        electricity_json::WriteMode {
+            indent: Some(2),
+            sort_keys: false,
+            ensure_ascii: true,
+            separators: electricity_json::Separators::Default,
+        }
     } else {
         electricity_json::WriteMode::COMPACT
-    };
-    electricity_json::dumps_default_str(state, mode).map(|body| format!("{body}\n"))
+    }
 }
 
 /// The non-TTY stdout JSON summary's own serialization (issue #431's
-/// "CLI output" decision): `indent=2`, `ensure_ascii=False` always --
-/// Rich's `console.print_json` always re-dumps with its own defaults,
-/// regardless of how the string it's given was itself serialized
-/// (`cli/app.py:1406,1451`) -- `sort_keys` only when *sort_keys* is
-/// (the success-without-`--out` state print passes `--pretty` here;
-/// the failure payload always passes `false`, since `cli/app.py`'s own
+/// "CLI output" decision): `indent=2`, `ensure_ascii=False` always,
+/// never sorted by the writer itself -- `sort_keys` is handled by
+/// pre-reordering the tree instead (see [`pretty_sort_if_needed`]), the
+/// same way [`render_state`]'s own write mode is (issue #778): the
+/// success-without-`--out` state print pre-sorts exactly when `--pretty`
+/// was given; the failure payload never does, since `cli/app.py`'s own
 /// failure branch calls `console.print_json(json.dumps(payload))` with
-/// no `sort_keys` of its own, never governed by `--pretty`).
-fn stdout_json_mode(sort_keys: bool) -> electricity_json::WriteMode {
+/// no `sort_keys` of its own, never governed by `--pretty`.
+fn stdout_json_mode() -> electricity_json::WriteMode {
     electricity_json::WriteMode {
         indent: Some(2),
-        sort_keys,
+        sort_keys: false,
         ensure_ascii: false,
         separators: electricity_json::Separators::Default,
     }
@@ -104,11 +161,59 @@ fn stdout_json_mode(sort_keys: bool) -> electricity_json::WriteMode {
 /// the same as `cli/app.py::run_cmd`'s own `console.print_json(dumps_
 /// saved_state(...))` crashing uncaught rather than printing a
 /// placeholder and exiting 0.
+///
+/// Rich's `console.print_json` re-parses the JSON text it is handed
+/// (`json.loads`) before re-dumping it for syntax highlighting -- every
+/// JSON object key becomes a plain string there, so two dict entries
+/// whose *text* is the same (the bool `true` beside the string `"true"`)
+/// collapse into one entry, at the first one's position, holding the
+/// last one's value (cof's console does this
+/// on stdout, never on `--out`'s own file, which keeps both --
+/// [`render_state`] never calls [`collapse_duplicate_text_keys`]).
 pub fn render_state_for_stdout(
     state: &Value,
     pretty: bool,
 ) -> Result<String, electricity_json::WriteError> {
-    electricity_json::dumps_default_str(state, stdout_json_mode(pretty))
+    let ordered = pretty_sort_if_needed(state, pretty)?;
+    let collapsed = collapse_duplicate_text_keys(ordered.as_ref())?;
+    electricity_json::dumps_default_str(&collapsed, stdout_json_mode())
+}
+
+/// *value* as a `console.print_json`-style `json.loads(json.dumps(value))`
+/// round trip would reshape it, without ever writing the intermediate
+/// text: every dict key becomes the plain JSON string [`electricity_json::
+/// stringify_key`] would have written for it, and two keys that write the
+/// same text collapse to the one `json.loads` would have kept -- the
+/// *first* one's position (an `IndexMap::insert` on an existing key
+/// updates the value in place rather than moving it), holding the *last*
+/// one's value (whichever of the two writes later wins the resulting
+/// Python dict's single slot for that text). See [`render_state_for_
+/// stdout`].
+fn collapse_duplicate_text_keys(value: &Value) -> Result<Value, electricity_json::WriteError> {
+    match value {
+        Value::Dict(dict) => {
+            let mut ordered: indexmap::IndexMap<String, Value> =
+                indexmap::IndexMap::with_capacity(dict.len());
+            for (key, v) in dict.iter() {
+                let text = electricity_json::stringify_key(key)?;
+                let collapsed_v = collapse_duplicate_text_keys(v)?;
+                ordered.insert(text, collapsed_v);
+            }
+            let mut out = Dict::new();
+            for (text, v) in ordered {
+                out.insert(Value::Str(text), v);
+            }
+            Ok(Value::Dict(out))
+        }
+        Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(collapse_duplicate_text_keys(item)?);
+            }
+            Ok(Value::List(out))
+        }
+        other => Ok(other.clone()),
+    }
 }
 
 /// Writes *state*'s saved form to *path*, creating its parent directory
@@ -150,7 +255,7 @@ pub fn failure_payload(error: &str, warnings: &[String], state_out: Option<&Path
             None => Value::None,
         },
     );
-    let body = electricity_json::dumps(&Value::Dict(payload), stdout_json_mode(false))
+    let body = electricity_json::dumps(&Value::Dict(payload), stdout_json_mode())
         .unwrap_or_else(|_| "{\n  \"ok\": false\n}".to_string());
     format!("{body}\n")
 }
@@ -177,6 +282,145 @@ mod tests {
         dict.insert(Value::Str("a".to_string()), Value::from(2i64));
         let rendered = render_state(&Value::Dict(dict), true).unwrap();
         assert_eq!(rendered, "{\n  \"a\": 2,\n  \"b\": 1\n}\n");
+    }
+
+    #[test]
+    fn render_state_pretty_sorts_a_dict_mixing_key_types_by_json_text() {
+        // Issue #778: `sort_keys=True`'s own native-value sort raises
+        // `TypeError` comparing a bool key to a string key (CPython's
+        // `sorted(dct.items())`, confirmed directly) -- `--pretty` falls
+        // back to each key's own JSON text instead, so this must
+        // succeed, and in the same order `core/saved_state.py::
+        // pretty_key_order` produces: "input" < "mode" < "true"
+        // lexicographically.
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Bool(true), Value::Str("push".to_string()));
+        dict.insert(
+            Value::Str("mode".to_string()),
+            Value::Str("parse".to_string()),
+        );
+        dict.insert(Value::Str("input".to_string()), Value::from(1i64));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"input\": 1,\n  \"mode\": \"parse\",\n  \"true\": \"push\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn render_state_pretty_ranks_a_bool_before_a_string_with_equal_json_text() {
+        // Two distinct, Python-unequal keys with the same JSON text --
+        // the bool `True` and the string `"true"` are never equal in
+        // Python, so both survive as separate dict entries. Type rank
+        // (bool before str), not insertion order, breaks the tie here --
+        // the bool sorts first even though it was inserted second
+        // (issue #778, cof's own `test_canonical_key_order_ranks_a_bool_
+        // before_a_string_of_the_same_text`).
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("true".to_string()), Value::from(2i64));
+        dict.insert(Value::Bool(true), Value::from(1i64));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(rendered, "{\n  \"true\": 1,\n  \"true\": 2\n}\n");
+    }
+
+    #[test]
+    fn render_state_pretty_sorts_an_all_int_keyed_dict_numerically() {
+        // Issue #778's own regression: `--pretty` must sort an all-int
+        // dict by the int itself (1, 2, 10), not by each key's own
+        // decimal text ("1", "10", "2") -- `pretty_key_order` tries
+        // Python's native `sorted()` order before ever falling back to
+        // `canonical_key_order`'s JSON-text order. Pinned against cof's
+        // own `dumps_saved_state({"extra": {10: "ten", 1: "one", 2:
+        // "two"}}, pretty=True)`.
+        let mut inner = IndexMap::new();
+        inner.insert(Value::from(10i64), Value::Str("ten".to_string()));
+        inner.insert(Value::from(1i64), Value::Str("one".to_string()));
+        inner.insert(Value::from(2i64), Value::Str("two".to_string()));
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("extra".to_string()), Value::Dict(inner));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"extra\": {\n    \"1\": \"one\",\n    \"2\": \"two\",\n    \"10\": \"ten\"\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn render_state_pretty_sorts_a_nan_keyed_dict_by_json_text_not_numeric_comparison() {
+        // Issue #778: a `Float` `NaN` key makes the dict's keys
+        // incomparable even though comparing it never panics --
+        // `nan < 1` and `1 < nan` are both `false` -- so `--pretty`
+        // must route it through `canonical_key_order`'s own order (by
+        // each key's own JSON text, `"1" < "2" < "NaN"`) rather than
+        // trust its own numeric-key fast path to tolerate it the same
+        // way cof's `sorted()` does. Pinned against cof's own
+        // `dumps_saved_state({"extra": {float("nan"): "nan-value", 1:
+        // "one", 2: "two"}}, pretty=True)`.
+        let mut inner = IndexMap::new();
+        inner.insert(Value::Float(f64::NAN), Value::Str("nan-value".to_string()));
+        inner.insert(Value::from(1i64), Value::Str("one".to_string()));
+        inner.insert(Value::from(2i64), Value::Str("two".to_string()));
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("extra".to_string()), Value::Dict(inner));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"extra\": {\n    \"1\": \"one\",\n    \"2\": \"two\",\n    \"NaN\": \"nan-value\"\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn render_state_pretty_sorts_non_ascii_string_keys_by_code_point() {
+        // All-string keys sort by plain `sorted()` -- code-point order,
+        // the same as `json.dumps(..., sort_keys=True)` -- not
+        // `canonical_key_order`'s JSON-text fallback (though for an
+        // all-string dict the two happen to agree, since a string key's
+        // JSON text is the key itself). Expected bytes taken from cof's
+        // own `dumps_saved_state({"\u00f1": 1, "z": 2, "a": 3, "\u00e9":
+        // 4}, pretty=True)`; `render_state`'s own `ensure_ascii: true`
+        // (see `pretty_write_mode`) escapes both non-ASCII keys the same
+        // way cof's default `ensure_ascii=True` does.
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("\u{f1}".to_string()), Value::from(1i64));
+        dict.insert(Value::Str("z".to_string()), Value::from(2i64));
+        dict.insert(Value::Str("a".to_string()), Value::from(3i64));
+        dict.insert(Value::Str("\u{e9}".to_string()), Value::from(4i64));
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
+        assert_eq!(
+            rendered,
+            "{\n  \"a\": 3,\n  \"z\": 2,\n  \"\\u00e9\": 4,\n  \"\\u00f1\": 1\n}\n"
+        );
+    }
+
+    #[test]
+    fn render_state_for_stdout_collapses_keys_with_equal_json_text_when_pretty() {
+        // cof's console re-parses the already-serialized JSON for
+        // syntax highlighting, so the bool `true` and the string
+        // `"true"` -- two distinct dict entries up to this point --
+        // collapse into cof's console's own single slot for the text
+        // `"true"`: the first one's position, the last one's value --
+        // `--pretty`'s own tie-break (bool before str) means the bool
+        // entry is serialized first here, so the string entry's value
+        // is the one that survives (issue #778).
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Str("true".to_string()), Value::from(2i64));
+        dict.insert(Value::Bool(true), Value::from(1i64));
+        let rendered = render_state_for_stdout(&Value::Dict(dict), true).unwrap();
+        assert_eq!(rendered, "{\n  \"true\": 2\n}");
+    }
+
+    #[test]
+    fn render_state_for_stdout_collapses_keys_with_equal_json_text_without_pretty() {
+        // The same collapse happens whether or not `--pretty` was given
+        // -- cof's console re-parses on every success print, not only a
+        // pretty one; only the key order differs (insertion order here,
+        // since `pretty` is false): the bool entry is serialized first
+        // (it was inserted first), so the string entry's value survives.
+        let mut dict = IndexMap::new();
+        dict.insert(Value::Bool(true), Value::from(1i64));
+        dict.insert(Value::Str("true".to_string()), Value::from(2i64));
+        let rendered = render_state_for_stdout(&Value::Dict(dict), false).unwrap();
+        assert_eq!(rendered, "{\n  \"true\": 2\n}");
     }
 
     #[test]

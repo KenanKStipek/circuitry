@@ -1,0 +1,29 @@
+name: c778-bare-transparent-if
+effects:
+  - type: if
+    if: {mode: cel, expr: "true"}
+    then:
+      - type: tool
+        name: s
+        provider: json
+        params: {mode: stringify, input: {marker: "if-child"}}
+  - type: tool
+    name: root_reader
+    provider: json
+    params:
+      mode: stringify
+      input:
+        bare: "{{s.value}}"
+        dotted: "{{prime.s.value}}"
+  - type: dynamic
+    name: d
+    flow: chain
+    effects:
+      - type: tool
+        name: nested_reader
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{s.value}}"
+            dotted: "{{prime.s.value}}"

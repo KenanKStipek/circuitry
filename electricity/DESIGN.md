@@ -65,8 +65,11 @@ Decisions" instead of citing an external project file repeatedly:
   **intersection** of the document's own list and a host-configured pin, never their union;
   `allowed_commands` is literal-only; no secrets are ever placed on a subprocess's argv; state is
   redacted before it is written anywhere.
-- Mustache partials are removed from the orchestration language itself, in both engines — not an
-  electricity-only omission.
+- Chevron's own file-based `{{> name}}` partial loading (an arbitrary file read by name from the
+  process CWD) is removed from the orchestration language itself, in both engines — not an
+  electricity-only omission. `{{> name}}` itself is supported through prompt composition (issues
+  #396/#487): it splices in a declared `prompts:` entry or an effect's own rendered text, never a
+  file.
 - Error-message parity is explicitly two-tier: text Circuitry's own code writes (the dynamic-wrapped
   `"<path>: <message>"` format, `expect failed: ...`, `use` cycle messages, loop-bounds errors, and
   every other message quoted verbatim in the specification this design implements) must match
@@ -148,7 +151,7 @@ flag for refuses the replay outright, rather than dropping it; the surrounding s
 | REST trigger / scheduler | Deployment-time concern layered over a runner, not the runner itself; nothing here precludes a caller from wrapping the CLI or library in one later. |
 | The step cache (`cache:`, `cof cache`, `--no-cache`) | Removed from Circuitry itself (#353); electricity never had it to begin with. |
 | Document discovery / untrusted-document `runtime:` filtering | The orchestration file is always operator-chosen on the command line = trusted (Decisions, above, now narrowed to the document only — `--config` gained discovery in issue #728). Every document `runtime:` key electricity reads is honored as-is; there is no notion of an untrusted document to filter against (runtime-semantics §8.6's `ORCHESTRATION_RUNTIME_KEYS` trust split collapses to "always trusted"). |
-| Mustache partials (`{{> name}}`) | Removed from both Circuitry and electricity (Decisions, above); chevron's partial loading reads an arbitrary file from the process CWD by name, which is both a parity-fragile feature (no production document uses it) and a minor file-disclosure surface for no real benefit. |
+| Chevron's own file-based `{{> name}}` partial loading | Removed from both Circuitry and electricity (Decisions, above); it reads an arbitrary file from the process CWD by name, which is both a parity-fragile feature (no production document uses it) and a minor file-disclosure surface for no real benefit. `{{> name}}` itself is not removed — it is built, through prompt composition (issues #396/#487, §3.6 above), splicing in a declared `prompts:` entry or an effect's own rendered text instead of a file. |
 
 **Production-only surface.** electricity's only way to trust an orchestration file is for an
 operator to name it on the command line or in the embedding API; there is no API-key discovery
@@ -344,14 +347,17 @@ item 16, runtime-semantics §3):
 - sections iterate a list (binding each element), render once for a truthy non-list, and inverted
   sections flip on falsy/empty/absent;
 - a missing top-level key renders empty, never an error;
-- no partials (§1, Decisions); `{{&name}}` is ported as the existing no-escape alias to
+- no chevron-native file-based partial loading (§1, Decisions) — the `{{> name}}` tag itself is
+  not removed; it is ported through prompt composition (issues #396/#487, runtime-semantics §3.6),
+  splicing in a declared `prompts:` entry or an effect's own rendered text, never reading a file
+  by name. `{{&name}}` is ported as the existing no-escape alias to
   `{{{name}}}` (already covered by the escaping bullet above — this is not a delimiter change,
   just a second spelling of the same tag). `{{=left= =right=}}` custom-delimiter tags **are**
   ported: chevron's tokenizer implements them in well under a hundred lines, no production
   document happens to use them today, and dropping a feature the reference implementation has
   would be an unrecorded, unapproved divergence rather than anything resembling an owner decision
-  — unlike partials, this was never discussed with the owner and is not listed in the Decisions
-  above.
+  — unlike chevron's own file-based partial loading, this was never discussed with the owner and
+  is not listed in the Decisions above.
 
 A malformed template is a compile-time error (`template_syntax_error`, runtime-semantics §1.4);
 a render-time failure against unrenderable data is the dispatching effect's own failure, handled
@@ -771,12 +777,15 @@ reference's `ThreadPoolExecutor` shutdown semantics, runtime-semantics §5.5).
 
 ### 6.3 Scope overlays
 
-Reproduces runtime-semantics §2.4 exactly, including Quirk Q1:
+Reproduces runtime-semantics §2.4 exactly:
 
 - the document root (a `dynamic` with no name) and an ordinary named `dynamic` never build a
   scope overlay — a child op's `ctx` is `store.state` **by reference**, so the fully-qualified
-  `prime.<sibling>.value` form resolves (reading the same live dict) but the **bare**
-  `<sibling>.value` form does not, because nothing ever pushes `<sibling>` to the top of `ctx`;
+  `prime.<sibling>.value` form resolves (reading the same live dict). A **bare**
+  `<sibling>.value` form resolves too, but not through this overlay: it is the template
+  renderer's own bare-sibling-reference fallback (issue #778, `electricity_template::
+  ScopeRoot::bare_fallback`/`Frame::bare_effect_chain`, §2.4's own closing paragraph) —
+  consulted only once every scope below (this overlay included) has already missed;
 - a loop body / `if` branch **does** build an overlay (`scope_ctx`): a shallow merge exposing
   each prior sibling in the same body/branch under both the bare top-level spelling and the
   `prime`-nested spelling, rebuilt from the original `ctx` after every sibling (never layered on
@@ -786,22 +795,21 @@ Reproduces runtime-semantics §2.4 exactly, including Quirk Q1:
   ends;
 - `prime.<loop>.prev` (chain-flow named loops only) exposes the previous *completed* pass's own
   writes, absent (not an empty node) before the first completed pass;
-- **a named `dynamic` nested inside a loop body or `if` branch** does not simply inherit the
-  enclosing overlay unmodified. The reference builds that nested dynamic's own `ctx` as
-  `{**ctx_override, **store.state}` where `ctx_override` is the enclosing body/branch's
-  `scope_ctx` overlay (runtime-semantics §2.4) — i.e. `store.state`'s three real root namespaces
-  are re-merged **on top of** the overlay. Since `scope_ctx` only ever adds bare top-level sibling
-  names and merges its local writes *one level inside* `ctx["prime"]`, and `store.state` has no
-  top-level keys other than `input`/`prime`/`runtime`, the practical effect is: the loop variable
-  and any bare sibling name from the enclosing overlay **survive** (they aren't namespace keys,
-  so `store.state` has nothing to overwrite them with), but `store.state`'s own unmodified `prime`
-  key **overwrites** the overlay's `prime` (which had the enclosing body's local writes merged
-  into it) — so a bare `{{sibling.value}}` reference still resolves inside the nested dynamic's
-  own top-level effects, but `{{prime.sibling.value}}` inside it sees the *real*, un-overlaid
-  `prime` tree, not the enclosing loop/if's locally-overlaid view of it. electricity's scope-overlay
-  construction must reproduce this exact re-merge, not just "inherit the parent's `ctx`" — a naive
-  port that has a nested dynamic simply reuse `ctx_override` as its own `ctx` would leave the
-  overlay's `prime` in place instead of restoring the real one.
+- **a `dynamic` nested inside a loop body or `if` branch** widens whatever `ctx` it itself
+  received (the enclosing body/branch's `scope_ctx` overlay, or `store.state` directly at the
+  document root) with exactly one more flat key: its own self-alias — `ctx[self.defn.name] = dyn`,
+  the live node this dynamic's own `store.ensure_dict(self.defn.name)` just returned — never the
+  old `{**ctx_override, **store.state}` re-merge this design used to describe (that re-merge
+  restored the enclosing overlay's *real*, un-overlaid `prime` on top of it, which is why a bare
+  sibling reference and the dotted `prime.*` form could read two different nodes; issue #778).
+  Every ancestor dynamic's own self-alias key, back to the nearest isolated
+  root, stays present this way for as long as this dynamic's own descendants keep widening
+  forward from it — that is what lets a nested container's own bare-fallback entry
+  (`core/templates.py::push_bare_effect_scope`) resolve through its self-alias alone, rather than
+  a dotted path computed from its place in the chain: the self-alias key is always live, including
+  while a loop body, an `if` branch or a tree branch is running it, where a computed dotted path
+  would not be. electricity's scope-overlay construction must reproduce this exact widening (one
+  flat key added per dynamic, nested or not), not the old re-merge.
 
 **Loop mechanics not otherwise covered above** (runtime-semantics §2.3/§5.4—§5.5, condensed —
 filling in detail an earlier draft of this design left to a one-line bytecode-table row, §5.2):
@@ -2875,7 +2883,6 @@ divergence.
 
 | # | Quirk / risk | Recommendation | Owner decision needed? |
 |---|---|---|---|
-| Q1 | Bare sibling references (`{{first.value}}`) resolve inside a loop body/`if` branch but **not** at plain top level or inside a plain `dynamic` — only the `prime.`-prefixed form works there. | **Copy.** This is the single most load-bearing parity assertion in the whole suite (conformance case C27) — silently "fixing" it would change which existing documents even compile the same way. | **No — settled 2026-10-06**: confirmed no production document relies on the bare-form failing silently in a way a fix would surface as a new error; copied exactly, no owner question remains. |
 | Q3 | `use.inline`'s template renders once, against the **parent's** context, before the child orchestration exists — `use.inputs` has no effect on what the inline template text itself can reference. | **Copy.** "Fixing" this (rendering `inline` twice, once per scope) would be a new, undocumented behavior change, not a bugfix — out of scope for electricity to invent unilaterally. | **No — moot**: no document in the first production document sets uses `use: {inline: ...}` at all, so this quirk's behavior has nothing to apply to yet. |
 | Q4 | `while`'s condition sees `iter.index = count - 1` (post-pass, −1 before any pass); the body sees `iter.index = count` (uncompensated) — a deliberate one-line asymmetry. | **Copy**, with an explicit conformance case asserting both sides (C10). | No — documented as deliberate in the reference's own source commentary. |
 | Q5 | `allowed_commands`'s literal-only rule is enforced **twice** (compile time and dispatch time) by two separate checks. | **Copy both checks** — the duplication is intentional defense-in-depth (dispatch time catches a `use`-/reflector-generated document the static compile pass never statically checked). | No. |
@@ -2941,8 +2948,6 @@ Pinned exactly by `tests/golden/prompt_schema_corpus.json` (221 cases; `electric
 | — | **`validate_yaml` on a draft naming `use: {ref: ...}`** (issue #521's Settled question 4): Circuitry's `_validate_document` compiles the draft with `compile_orchestration(orch=parsed, root_name="prime")`, no `document_dir` — the same call a library-name `ref:` document would otherwise resolve against the curation library, but `document_dir=None` means `cof` never even tries, so a `ref:` draft validates `ok: true` regardless of whether the name exists. electricity's `compile_document(.., &DocumentOrigin::Generated)` instead rejects `ref:` outright at compile time (the standing `use: ref:` decision, §4 step 4) — a `ref:` draft validates `ok: false` here (`Compile error: ...`), where `cof` reports `ok: true` (verified against the real plugin). | **Copy electricity's own standing rule, diverge from `cof` here** — a draft that validates must be one electricity can actually load; `ref:` stays rejected at compile time everywhere in this runtime, including inside `validate_yaml`, not just at the top level. | No — settled in the issue itself; consistent with every other `ref:` row in this table. |
 | — | **`validate_yaml`'s third-party text** (issue #521's Settled question 5; narrowed by issue #528): a PyYAML scan/parse error is still third-party text, same as every other surface in this design (§1, §12) — `electricity-yaml` matches the failure's *location*, never its exact wording. A JSON-Schema violation message no longer is: `electricity-schema`'s own engine now reproduces `core.document_check.schema_errors`'s exact wording and order for the orchestration schema (one function serves every caller the schema reaches — run-level validation, a `use` child, `validate_yaml`, and a reflector's/decomposition's own plan check), falling back to the `jsonschema` crate's own text only when the engine can't stand as sole authority or disagrees with it on accept/reject. | **Compare the scan/parse error by location only**: masked by the conformance harness's own message-shape catalogue (`tests/conformance/README.md`'s "Message shapes" section, its `YAML parse error: ` entry), pinned by the `validate-yaml-third-party-texts` conformance case; the schema-violation entries that case used to pattern-match the same way are pinned by the ordinary exact-state comparison instead now. | No — the scan/parse half is still consistent with §1/§12's standing rule; the schema half is closed. |
 | — | **A decomposition plan whose content this build can't run** (issue #522's Settled question 6): Circuitry has no capability ceiling of its own (`core/decompose.py::_check_capability_ceiling` is always `[]` in practice) and simply executes whatever the planner emits, so there is nothing for `cof run` to refuse here at all. | **Refuse, never execute** — a fatal `VmError::Refused` (`child_label: Some("decomposition plan of '<name>'")`), from either a static `first_unsupported` hit on the freshly compiled plan or a dispatch-time refusal inside it; never `execution_failed`, never absorbed by `on_error`/`on_failure`, and nothing is written to `meta.decomposition` at all — the same rule a reflector's own generated plan already gets (this table's own "mid-run refusal of a reflector-generated plan" row), including that row's own issue #511 carve-out: a plan `tool` effect naming a provider that is not a cof plugin at all is never refused here either, reaching the plan's own `execution_failed`/`decomposition of '<name>' failed (execution_failed): ...` text with the real "Unknown plugin" error inside it -- fatal under `on_failure: fail` (`c511-unknown-tool-decomposition-plan`), absorbed like any other prompt failure by an enclosing `on_error: continue` on the prompt itself (`c511-unknown-tool-decomposition-plan-on-error-continue`), and, under `on_failure`'s own default (`skip`), simply triggering the existing run-as-is fallback to the un-decomposed prompt (`c511-unknown-tool-decomposition-plan-default`). | No — new only in the sense that Circuitry has nothing to diverge *from* here (it would execute the same plan); settled in the issue itself. |
-| — | **`runtime._decomposition_depth`/`runtime._use_call_stack`** (issue #522's binding settled questions): Circuitry re-derives both on every recursive decomposition call by reading them back out of `runtime_config` (`core/decompose.py:271-276`'s `_current_depth`, `:688`'s `_use_call_stack` cycle-guard list) — a config file that sets either key directly changes a `cof run` the same way a deeper recursion would (a non-zero starting depth, or a pre-seeded cycle-guard stack). electricity tracks both natively instead — `RunContext::decomposition_depth` and `Frame::use_call_stack()`, threaded through the Rust call stack, never read back out of the `Value` `runtime_config` dict at all. | **Ignore both keys when config-set** — electricity's own depth/stack tracking is the single source of truth; a config file naming either key has no effect on electricity's observable output, where it would change `cof run`'s. | Yes — a config file setting either key observably diverges; accepted because only Circuitry's own test suite is known to set them (same caller restriction as the `_decomposition_planner_path` row below), never a production document. |
-| — | **`runtime._decomposition_planner_path`** (issue #522's Settled question 9): an undocumented test hook (`core/decompose.py:75-78`) letting Circuitry's own test suite point the planner at a path other than the bundled `curation/agents/decompose.yml` — only Circuitry's own tests ever set it; `cof` honours an override (`core/decompose.py:356-370`'s `_planner_path`) if one is set. | **Not read at all** — electricity always runs the synced `PLANNER_YAML`, regardless of this key. | Yes — a config file setting this key makes `cof run` load a different planner document while electricity keeps running the bundled one; accepted because only Circuitry's own tests are known to set it, and they always run against `cof`, never `electricity`. |
 | — | **A WARNING line logged with `exc_info=True`** (issue #522's own PR comment): `cof run` writes the line's own text to stderr, then a full Python traceback on the lines after it, for every one of these sites — the two decomposition lines (`Decomposition planner failed for prompt %r`/`Decomposition child failed for prompt %r`) and the two complexity-scoring lines (`core/prompt.py:920-924`, `:984-988`) -- the reflector's own prime-template fallback this row used to also name is gone (issue #778 dropped the fallback itself, not just its logging). | **Print the WARNING line alone, no traceback** — `log::warn!` has no Python exception object to format one from in the first place; the conformance harness only ever compares the prefixed `WARNING:`-style line itself, never the traceback that follows it on a real `cof run`, so no case shows the difference. | No — accepted for every site in this set; a future WARNING line ported the same way inherits the same rule without a new row here. |
 | — | **An undeclared function/method call whose own argument is an unset `state.` read** (issue #657/#658): `nope(state.x)`/`state.x.nope()` with `x` unset. cof's evaluator (cel-python) resolves the function/method name before evaluating its arguments (`celpy.evaluation.Evaluator.method_eval`), so it always reports the undeclared reference. The `cel` crate resolves every argument first (`objects.rs::call_function`'s own `args?`), so an unset argument's own marker error wins instead — `False` plus the unset-path warning, naming `x`, not an undeclared-reference error. Only reachable when the call's own name genuinely isn't declared; `cof check`'s own free-name rule never looks at function/method names (by design — the two engines' function sets differ), so this can't be caught before run time on either side. | **Accept the gap, documented, not reproduced** — reordering the `cel` crate's own argument/name resolution would mean patching a pinned external dependency for one narrow edge case; short-circuiting itself is unaffected either way (`false && nope(state.x)` stays `false`, with no warning, on both engines, since neither side ever evaluates the call at all there). | No — a narrow, library-ordering difference between cel-python and the `cel` crate, not a design choice; revisit only if a production document's CEL actually calls an undeclared function/method on an unset argument. |
 | — | **A `cof run` usage error's own invoking program name and decorative panel** (issue #728): `cof run`'s own `UsageError.show` (typer's `rich_markup_mode="rich"`) names the real invoking program (`cof`, or `python -m circuitry.cli.app` under a test harness — not fixed across environments either) in its `Usage:`/`Try ... --help` lines, and wraps `Error: <message>` in a Rich panel (a box whose width depends on the terminal/`COLUMNS`, plus a `(Possible options: ...)` close-match suggestion list) rather than a plain line — confirmed empirically: the same invocation renders a differently-wrapped box at `COLUMNS=40` than at a wider width, so even two real `cof run` runs don't always render this identically. | **electricity run**'s own usage errors print a plain frame instead — `Usage: electricity run [OPTIONS] [orchestration]`, `Try 'electricity run --help' for help.`, a blank line, then `Error: <message>`, always `electricity` as the program name, never a panel or close-match suggestions. `<message>` itself matches the corresponding text inside `cof run`'s own panel (`No such option: <flag>`, `Got unexpected extra argument(s) (<args>)`, `Invalid value: Invalid -e format: ...`) — compared against that substring, never cof's whole frame. | No — the panel and program name are third-party/environment-dependent presentation, not Circuitry's own text; the message core is matched exactly. |
@@ -3061,7 +3066,7 @@ runs, not gates on any one document set.
 | M0-I | The conformance harness itself: running `cof run` from the same checkout to generate expected state, diffing with normalization rules (§12). | — (parallel with all of the above) |
 | M0-J **(gate, Python side)** | The `scripted` fixture adapter and the shared fixture-config format (§12) — a change to Circuitry's Python package in the same repository; blocks any conformance case that needs a scripted model reply, which is most of them. | — (parallel with M0-A..I, but gates M0-I actually producing usable fixtures) |
 
-**Acceptance:** conformance cases C2, C3, C6, C23, C27 pass against a hand-written smoke-test
+**Acceptance:** conformance cases C2, C3, C6, C23, `c27-bare-vs-dotted-reference` pass against a hand-written smoke-test
 document set exercising every M0 crate, plus **the `if` half only of C7** (the `while` half
 needs loop support, which doesn't exist until M1-H — see below). **C2 is exercised through
 electricity's own load-and-check pipeline directly, not through a CLI `--validate-only` flag**,
@@ -3118,7 +3123,7 @@ agent-CLI adapters `claude_code` and `pi`, §9.8, merged in #525 and #531; `lite
 
 **Acceptance: met** — see `tests/conformance/README.md`'s own `## M1 acceptance map` for the
 full case-by-case record. In summary: conformance cases C1, C4, C5, the `while` half of C7 (C7's
-`if` half and C27 already passed in M0), C8 (in full, including a `--profile <path>` fixture for
+`if` half and `c27-bare-vs-dotted-reference` already passed in M0), C8 (in full, including a `--profile <path>` fixture for
 the reference's `--profile <name>` half), C9–C20, C24, C25 (re-run with loops and prompts), C26,
 and C28–C33 pass (#406 was already closed by lane P's own merge, #492), plus
 tools-adapters-plugins §7 cases 1–6, 7 (the `http` half only — the `mcp` half moves to M2),

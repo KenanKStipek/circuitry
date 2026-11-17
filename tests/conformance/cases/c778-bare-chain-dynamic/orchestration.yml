@@ -1,0 +1,18 @@
+name: c778-bare-chain-dynamic
+effects:
+  - type: dynamic
+    name: stage
+    flow: chain
+    effects:
+      - type: tool
+        name: first
+        provider: json
+        params: {mode: stringify, input: {marker: "chain"}}
+      - type: tool
+        name: second
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{first.value}}"
+            dotted: "{{prime.stage.first.value}}"

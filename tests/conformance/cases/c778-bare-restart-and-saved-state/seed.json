@@ -1,0 +1,17 @@
+{
+  "input": {},
+  "prime": {
+    "d": {
+      "value": null,
+      "meta": {"completed_at": null, "error": null},
+      "x": {"value": "stale-x", "meta": {"completed_at": "2026-01-01T00:00:00Z", "error": null}},
+      "reader": {"value": "stale-reader", "meta": {"completed_at": "2026-01-01T00:00:00Z", "error": null}}
+    },
+    "e": {
+      "value": null,
+      "meta": {"completed_at": null, "error": null},
+      "first": {"value": null, "meta": {"completed_at": null, "error": null}},
+      "second": {"value": "SEEDED-SECOND", "meta": {"completed_at": "2026-01-01T00:00:00Z", "error": null}}
+    }
+  }
+}

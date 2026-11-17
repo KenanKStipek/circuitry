@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A Mustache section's own items are checked first: `{{#prime.seed.value}}` pushes an item lacking `missing_field`, so the bare {{missing_field.value}} inside it falls back past the section's own scope to the outer sibling effect named `missing_field` -- fails (the section renders with the tag empty, so params_json fails to parse as JSON) on main.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "Inside nested dynamic `d`, a bare {{x.value}} resolves to d's own child `x` (nearest container wins), not the root effect also named `x` -- fails (renders empty, since main never resolved any bare reference inside a dynamic) on main; a design that instead resolved the root's `x` would also be wrong.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -311,38 +311,90 @@ def validate_bare_input_refs(orch: dict[str, Any]) -> None:
 
     Only names declared in the document's own ``interface.inputs`` are
     policed — undeclared bare keys (loop ``as`` vars, ``_loop_index``,
-    sibling shorthand) stay legal. Scans every template-bearing string
+    sibling shorthand) stay legal, and so does a name also shadowed by an
+    effect in scope (#778): under the bare-sibling-reference rule, that
+    name no longer reaches the declared input at all, so flagging it as a
+    collision with one would be wrong. Scans every template-bearing string
     field the runtime renders with Mustache.
     """
     declared = declared_input_names(orch)
     if not declared:
         return
     effects = orch.get("effects") or orch.get("steps") or []
-    if isinstance(effects, list):
-        _walk_bare_refs(effects, declared, container_path="effects")
     finally_effects = orch.get("finally")
-    if isinstance(finally_effects, list):
-        _walk_bare_refs(finally_effects, declared, container_path="finally")
+    finally_effects = finally_effects if isinstance(finally_effects, list) else []
+    root_scope = _effect_names(effects) | _effect_names(finally_effects)
+    if isinstance(effects, list):
+        _walk_bare_refs(effects, declared, container_path="effects", names_in_scope=root_scope)
+    if finally_effects:
+        _walk_bare_refs(
+            finally_effects, declared, container_path="finally", names_in_scope=root_scope
+        )
 
 
 #: Container fields whose values are lists of child effect dicts.
 _CHILD_LISTS = ("effects", "steps", "body", "then", "else", "finally")
 
 
+def _effect_names(effects: Any) -> frozenset[str]:
+    """The names a bare reference's own runtime fallback would shadow a
+    declared input with (``core.templates.push_bare_effect_scope``): every
+    named effect dict in *effects*, plus — because it writes straight into
+    the enclosing namespace instead of its own — the names inside an
+    unnamed ``if``'s own ``then``/``else`` or an unnamed loop's own
+    ``body``, at any depth through further unnamed ``if``/loop nesting
+    (``core.dynamic._region_effect_names``). A named ``if``/loop owns its
+    own node, so its children stay out of this set.
+    """
+    if not isinstance(effects, list):
+        return frozenset()
+    names: set[str] = set()
+    for effect in effects:
+        if not isinstance(effect, dict):
+            continue
+        name = effect.get("name")
+        if isinstance(name, str):
+            names.add(name)
+            continue
+        effect_type = effect.get("type")
+        if effect_type in ("conditional", "if"):
+            names |= _effect_names(effect.get("then"))
+            names |= _effect_names(effect.get("else"))
+        elif effect_type == "loop":
+            names |= _effect_names(effect.get("body"))
+    return frozenset(names)
+
+
 def _walk_bare_refs(
-    effects: list[Any], declared: frozenset[str], *, container_path: str
+    effects: list[Any],
+    declared: frozenset[str],
+    *,
+    container_path: str,
+    names_in_scope: frozenset[str] = frozenset(),
 ) -> None:
     for idx, effect in enumerate(effects):
         if not isinstance(effect, dict):
             continue
         effect_path = f"{container_path}[{idx}]"
         for field, text in _iter_template_strings(effect):
-            _check_bare_refs(text, declared, location=f"{effect_path}.{field}")
+            _check_bare_refs(
+                text, declared, names_in_scope, location=f"{effect_path}.{field}"
+            )
+        # A nested dynamic/reflector's own body and `finally:` share one
+        # scope (`core.dynamic`'s own `own_names`) — union them once so
+        # either child list sees the other's names, not just its own.
+        own_children = _effect_names(effect.get("effects") or effect.get("steps")) | (
+            _effect_names(effect.get("finally"))
+        )
+        child_scope = names_in_scope | own_children
         for field in _CHILD_LISTS:
             children = effect.get(field)
             if isinstance(children, list):
                 _walk_bare_refs(
-                    children, declared, container_path=f"{effect_path}.{field}"
+                    children,
+                    declared,
+                    container_path=f"{effect_path}.{field}",
+                    names_in_scope=child_scope,
                 )
 
 
@@ -390,12 +442,14 @@ def _nested_strings(value: Any, *, prefix: str) -> list[tuple[str, str]]:
 
 
 def _check_bare_refs(
-    text: str, declared: frozenset[str], *, location: str
+    text: str, declared: frozenset[str], names_in_scope: frozenset[str], *, location: str
 ) -> None:
     for match in _MUSTACHE_TAG.finditer(text):
         key = match.group(1)
         root = key.partition(".")[0]
         if root in NAMESPACES:
+            continue
+        if root in names_in_scope:
             continue
         if root in declared:
             raise ValueError(

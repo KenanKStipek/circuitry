@@ -1,0 +1,9 @@
+name: c778-bare-yield-inputs-overlay
+effects:
+  - type: yield
+    name: a
+    template: "A"
+  - type: yield
+    name: b
+    template: "{{x}} / {{a.value}}"
+    inputs: {x: "X"}

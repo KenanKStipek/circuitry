@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "A `flow: tree` branch's own read of a sibling branch, bare and dotted, renders empty either way -- each branch gets its own context copy, taken before any branch's write lands, so neither spelling can see a concurrent sibling's write (unaffected by the bare-reference fallback; a guard against the fallback ever reaching across tree branches).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

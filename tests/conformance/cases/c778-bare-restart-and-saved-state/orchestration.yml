@@ -1,0 +1,42 @@
+name: c778-bare-restart-and-saved-state
+effects:
+  - type: dynamic
+    name: d
+    resume: restart
+    effects:
+      - type: tool
+        name: x
+        provider: json
+        params: {mode: stringify, input: {marker: "new-x"}}
+      - type: tool
+        name: reader
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{d.x.value}}"
+            dotted: "{{prime.d.x.value}}"
+      - type: tool
+        name: sibling_bare_reader
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{x.value}}"
+            dotted: "{{d.x.value}}"
+  - type: dynamic
+    name: e
+    flow: chain
+    effects:
+      - type: tool
+        name: first
+        provider: json
+        params:
+          mode: stringify
+          input:
+            bare: "{{second.value}}"
+            dotted: "{{prime.e.second.value}}"
+      - type: tool
+        name: second
+        provider: json
+        params: {mode: stringify, input: {marker: "unused-this-run"}}

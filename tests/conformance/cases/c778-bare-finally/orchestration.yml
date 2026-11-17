@@ -1,0 +1,15 @@
+name: c778-bare-finally
+effects:
+  - type: tool
+    name: first
+    provider: json
+    params: {mode: stringify, input: {marker: "finally"}}
+finally:
+  - type: tool
+    name: cleanup
+    provider: json
+    params:
+      mode: stringify
+      input:
+        bare: "{{first.value}}"
+        dotted: "{{prime.first.value}}"

@@ -378,7 +378,10 @@ fn mustache_tag_regex() -> &'static regex::Regex {
 }
 
 /// Hard-errors on bare `{{name}}` refs to this document's declared
-/// inputs. Ports `core/state_ns.py::validate_bare_input_refs`.
+/// inputs. A name also shadowed by an effect in scope is not flagged:
+/// under the bare-sibling-reference rule, that name no longer reaches
+/// the declared input at all (#778). Ports
+/// `core/state_ns.py::validate_bare_input_refs`.
 pub(crate) fn validate_bare_input_refs(document: &Value) -> Result<(), CompileError> {
     let declared = declared_input_names(document);
     if declared.is_empty() {
@@ -388,13 +391,64 @@ pub(crate) fn validate_bare_input_refs(document: &Value) -> Result<(), CompileEr
         return Ok(());
     };
     let effects = dict_get_truthy_or(dict, "effects", "steps");
-    if let Some(Value::List(items)) = effects {
-        walk_bare_refs(items, &declared, "effects")?;
+    let effects_list = match effects {
+        Some(Value::List(items)) => items.as_slice(),
+        _ => &[],
+    };
+    let finally_list = match dict.get(&Value::Str("finally".to_string())) {
+        Some(Value::List(items)) => items.as_slice(),
+        _ => &[],
+    };
+    let root_scope: BTreeSet<String> = effect_names(effects_list)
+        .into_iter()
+        .chain(effect_names(finally_list))
+        .collect();
+    if !effects_list.is_empty() {
+        walk_bare_refs(effects_list, &declared, "effects", &root_scope)?;
     }
-    if let Some(Value::List(items)) = dict.get(&Value::Str("finally".to_string())) {
-        walk_bare_refs(items, &declared, "finally")?;
+    if !finally_list.is_empty() {
+        walk_bare_refs(finally_list, &declared, "finally", &root_scope)?;
     }
     Ok(())
+}
+
+/// The names a bare reference's own runtime fallback would shadow a
+/// declared input with: every named effect dict in *effects*, plus --
+/// because it writes straight into the enclosing namespace instead of
+/// its own -- the names inside an unnamed `if`'s own `then`/`else` or
+/// an unnamed loop's own `body`, at any depth through further unnamed
+/// `if`/loop nesting. A named `if`/loop owns its own node, so its
+/// children stay out of this set. Ports `core/state_ns.py::_effect_names`
+/// (`core/dynamic.py::_region_effect_names`'s own rule).
+fn effect_names(effects: &[Value]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for effect in effects {
+        let Some(dict) = effect.as_dict() else {
+            continue;
+        };
+        if let Some(Value::Str(name)) = dict.get(&Value::Str("name".to_string())) {
+            names.insert(name.clone());
+            continue;
+        }
+        let effect_type = dict.get(&Value::Str("type".to_string()));
+        match effect_type {
+            Some(Value::Str(t)) if t == "conditional" || t == "if" => {
+                for field in ["then", "else"] {
+                    let children = dict.get(&Value::Str(field.to_string()));
+                    if let Some(Value::List(children)) = children {
+                        names.extend(effect_names(children));
+                    }
+                }
+            }
+            Some(Value::Str(t)) if t == "loop" => {
+                if let Some(Value::List(children)) = dict.get(&Value::Str("body".to_string())) {
+                    names.extend(effect_names(children));
+                }
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 fn dict_get_truthy_or<'a>(
@@ -429,6 +483,7 @@ fn walk_bare_refs(
     effects: &[Value],
     declared: &BTreeSet<String>,
     container_path: &str,
+    names_in_scope: &BTreeSet<String>,
 ) -> Result<(), CompileError> {
     for (idx, effect) in effects.iter().enumerate() {
         let Some(dict) = effect.as_dict() else {
@@ -436,11 +491,42 @@ fn walk_bare_refs(
         };
         let effect_path = format!("{container_path}[{idx}]");
         for (field, text) in iter_template_strings(dict) {
-            check_bare_refs(&text, declared, &format!("{effect_path}.{field}"))?;
+            check_bare_refs(
+                &text,
+                declared,
+                names_in_scope,
+                &format!("{effect_path}.{field}"),
+            )?;
         }
+        // A nested dynamic/reflector's own body and `finally:` share one
+        // scope -- union them once so either child list sees the
+        // other's names, not just its own (matches
+        // `core/state_ns.py::_walk_bare_refs`).
+        let own_effects = match dict.get(&Value::Str("effects".to_string())) {
+            Some(Value::List(items)) => items.as_slice(),
+            _ => match dict.get(&Value::Str("steps".to_string())) {
+                Some(Value::List(items)) => items.as_slice(),
+                _ => &[],
+            },
+        };
+        let own_finally = match dict.get(&Value::Str("finally".to_string())) {
+            Some(Value::List(items)) => items.as_slice(),
+            _ => &[],
+        };
+        let own_children: BTreeSet<String> = effect_names(own_effects)
+            .into_iter()
+            .chain(effect_names(own_finally))
+            .collect();
+        let mut child_scope = names_in_scope.clone();
+        child_scope.extend(own_children);
         for field in CHILD_LISTS {
             if let Some(Value::List(children)) = dict.get(&Value::Str(field.to_string())) {
-                walk_bare_refs(children, declared, &format!("{effect_path}.{field}"))?;
+                walk_bare_refs(
+                    children,
+                    declared,
+                    &format!("{effect_path}.{field}"),
+                    &child_scope,
+                )?;
             }
         }
     }
@@ -508,12 +594,16 @@ fn nested_strings(value: &Value, prefix: &str) -> Vec<(String, String)> {
 fn check_bare_refs(
     text: &str,
     declared: &BTreeSet<String>,
+    names_in_scope: &BTreeSet<String>,
     location: &str,
 ) -> Result<(), CompileError> {
     for capture in mustache_tag_regex().captures_iter(text) {
         let key = &capture[1];
         let root = key.split('.').next().unwrap_or(key);
         if is_namespace(root) {
+            continue;
+        }
+        if names_in_scope.contains(root) {
             continue;
         }
         if declared.contains(root) {
@@ -893,6 +983,104 @@ mod tests {
                 .contains("bare '{{topic}}' refers to declared interface input 'topic'")
         );
         assert!(err.0.contains("write '{{input.topic}}'"));
+    }
+
+    #[test]
+    fn bare_input_refs_allows_a_name_shadowed_by_an_effect_in_scope() {
+        // #778: an effect named the same as a declared input shadows it
+        // for a bare reference -- the document compiles, and the bare
+        // reference resolves to the effect at run time, never the
+        // declared input.
+        let mut interface = Dict::new();
+        let mut inputs = Dict::new();
+        inputs.insert(Value::Str("x".to_string()), Value::Dict(Dict::new()));
+        interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+
+        let mut effect_x = Dict::new();
+        effect_x.insert(
+            Value::Str("type".to_string()),
+            Value::Str("tool".to_string()),
+        );
+        effect_x.insert(Value::Str("name".to_string()), Value::Str("x".to_string()));
+
+        let mut reader = Dict::new();
+        reader.insert(
+            Value::Str("type".to_string()),
+            Value::Str("tool".to_string()),
+        );
+        reader.insert(
+            Value::Str("name".to_string()),
+            Value::Str("reader".to_string()),
+        );
+        reader.insert(
+            Value::Str("template".to_string()),
+            Value::Str("{{x.value}}".to_string()),
+        );
+
+        let mut document = Dict::new();
+        document.insert(Value::Str("interface".to_string()), Value::Dict(interface));
+        document.insert(
+            Value::Str("effects".to_string()),
+            Value::List(vec![Value::Dict(effect_x), Value::Dict(reader)]),
+        );
+
+        assert!(validate_bare_input_refs(&Value::Dict(document)).is_ok());
+    }
+
+    #[test]
+    fn bare_input_refs_rejects_a_declared_name_shadowed_only_inside_a_named_if() {
+        // A named `if` owns its own node -- its children's names do not
+        // escape into the enclosing namespace, so a bare reference at
+        // the root still collides with the declared input.
+        let mut interface = Dict::new();
+        let mut inputs = Dict::new();
+        inputs.insert(Value::Str("x".to_string()), Value::Dict(Dict::new()));
+        interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+
+        let mut effect_x = Dict::new();
+        effect_x.insert(
+            Value::Str("type".to_string()),
+            Value::Str("tool".to_string()),
+        );
+        effect_x.insert(Value::Str("name".to_string()), Value::Str("x".to_string()));
+
+        let mut named_if = Dict::new();
+        named_if.insert(Value::Str("type".to_string()), Value::Str("if".to_string()));
+        named_if.insert(
+            Value::Str("name".to_string()),
+            Value::Str("gate".to_string()),
+        );
+        named_if.insert(
+            Value::Str("then".to_string()),
+            Value::List(vec![Value::Dict(effect_x)]),
+        );
+
+        let mut reader = Dict::new();
+        reader.insert(
+            Value::Str("type".to_string()),
+            Value::Str("tool".to_string()),
+        );
+        reader.insert(
+            Value::Str("name".to_string()),
+            Value::Str("reader".to_string()),
+        );
+        reader.insert(
+            Value::Str("template".to_string()),
+            Value::Str("{{x.value}}".to_string()),
+        );
+
+        let mut document = Dict::new();
+        document.insert(Value::Str("interface".to_string()), Value::Dict(interface));
+        document.insert(
+            Value::Str("effects".to_string()),
+            Value::List(vec![Value::Dict(named_if), Value::Dict(reader)]),
+        );
+
+        let err = validate_bare_input_refs(&Value::Dict(document)).unwrap_err();
+        assert!(
+            err.0
+                .contains("bare '{{x.value}}' refers to declared interface input 'x'")
+        );
     }
 
     #[test]

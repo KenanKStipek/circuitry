@@ -23,7 +23,8 @@
 //! inherited chain into one `Frozen` entry before dispatch, matching
 //! that one-time snapshot exactly -- nothing else can mutate any of a
 //! tree's own ancestors while its isolated branches run. `exec::
-//! conditional`'s own `if` branch overlay (Quirk Q1's `scope_ctx`) is
+//! conditional`'s own `if` branch overlay (runtime-semantics §2.4's
+//! `scope_ctx`) is
 //! *not* a second `Frozen` case, even though it is also rebuilt once
 //! per branch step: a branch's own later step can still create a
 //! container nested further under an ancestor the overlay already
@@ -54,19 +55,72 @@ pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)
 }
 
+/// `core/dynamic.py::DynamicRuntime.execute`'s own `own_names`: every
+/// named effect in *body* (a chain's own `Block` list, or a tree's own
+/// `Parallel` branch list) and in *finally* (always a `Block`, when
+/// present) -- issue #778's own bare-sibling-reference fallback reads
+/// this as one container's own effect names, body and `finally:`
+/// together.
+fn region_effect_names(
+    body: &Region,
+    finally: Option<&Region>,
+) -> std::collections::BTreeSet<String> {
+    // Ports `core/dynamic.py::_region_effect_names` (#778): the names
+    // that write straight into the enclosing container's own namespace
+    // -- every named op in *region*, plus -- because it has no
+    // namespace of its own to write into instead -- the names an
+    // unnamed `if`'s own branches or an unnamed loop's own body write
+    // there too, at any depth through further unnamed `if`/loop
+    // nesting. A named `if`/loop, like a nested `dynamic`/`use`/
+    // `reflector`, owns its own node and its children's names stay out
+    // of this set.
+    fn names_of(region: &Region, out: &mut std::collections::BTreeSet<String>) {
+        let ops: &[Op] = match region {
+            Region::Block { ops, .. } => ops,
+            Region::Parallel { branches, .. } => branches,
+            Region::If { .. } | Region::Loop { .. } | Region::TryFinally { .. } => &[],
+        };
+        for op in ops {
+            if let Some(name) = &op.name {
+                out.insert(name.clone());
+                continue;
+            }
+            match &op.kind {
+                NodeKind::Control(Region::If { then_, else_, .. }) => {
+                    names_of(then_, out);
+                    if let Some(else_) = else_ {
+                        names_of(else_, out);
+                    }
+                }
+                NodeKind::Control(Region::Loop { body, .. }) => {
+                    names_of(body, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    names_of(body, &mut names);
+    if let Some(finally) = finally {
+        names_of(finally, &mut names);
+    }
+    names
+}
+
 /// Runs *op* -- the document root, or a nested `dynamic` -- against
 /// *store*, writing its own node under *parent* at `op.name` (always
 /// `Some`: an unnamed `dynamic` cannot be compiled, unlike an unnamed
-/// `if`/`loop`). *ctx_chain* is Quirk Q1's `ctx_override` parameter
-/// (`core/dynamic.py::DynamicRuntime.execute`), not yet materialized:
-/// empty for "no override" (the document root, or an ordinary dynamic
-/// nested directly in a chain/tree with no enclosing scope overlay), or
-/// carrying the enclosing `if` branch's own overlaid ctx as a single
-/// [`CtxSource::Frozen`] entry for a dynamic nested inside one
-/// (DESIGN.md §6.3's own re-merge quirk) -- this dynamic's own children
-/// always get *ctx_chain* extended with one more [`CtxSource::Live`]
-/// entry for *parent* (never collapsed into a `Value` here: see this
-/// module's own doc comment on why that has to stay live).
+/// `if`/`loop`). *ctx_chain* is `core/dynamic.py::DynamicRuntime.execute`'s
+/// own `ctx_override` parameter, not yet materialized: empty for "no
+/// override" (the document root, or an ordinary dynamic nested directly
+/// in a chain/tree with no enclosing scope overlay), or carrying the
+/// enclosing `if` branch's own overlaid ctx as a single
+/// [`CtxSource::Frozen`] entry for a dynamic nested inside one -- this
+/// dynamic's own children always get *ctx_chain* extended with one more
+/// [`CtxSource::Live`] entry for *parent*, its own self-alias (DESIGN.md
+/// §6.3) widening the chain by exactly one flat key, never collapsed
+/// into a `Value` here: see this module's own doc comment on why that
+/// has to stay live.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_dynamic<'a>(
     op: &'a Op,
@@ -82,6 +136,17 @@ pub(crate) fn execute_dynamic<'a>(
     // -- `core/dynamic.py::DynamicRuntime.resume`, decided by the
     // caller.
     resume_active: bool,
+    // `core/dynamic.py::DynamicRuntime.execute`'s own `ctx_override is
+    // None` (issue #778's `push_bare_effect_scope`): `true` for the
+    // document's real root, a `use`/decomposition/split child's own
+    // root, and a reflector's own inner dynamic -- every call that
+    // starts a brand new, independent program execution, sharing no
+    // bare-sibling-reference chain with whatever (if anything) is
+    // already running; `false` for a plain nested `dynamic:` effect
+    // reached through the generic `exec::execute_op` dispatch, which
+    // always nests under the chain already running. See [`crate::
+    // Frame::with_bare_effect_scope`].
+    isolated: bool,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
         let name = op
@@ -121,6 +186,19 @@ pub(crate) fn execute_dynamic<'a>(
             .dynamic_flow()
             .expect("a dynamic's own body is always Block or Parallel");
 
+        // `core/templates.py::push_bare_effect_scope` (issue #778):
+        // this dynamic's own body-and-`finally:` effect names, pushed
+        // onto *frame*'s own bare-sibling-reference chain for the rest
+        // of this call -- both the body dispatch below and `finally:`
+        // share this one pushed scope, exactly as `core/dynamic.py`'s
+        // own single `push_bare_effect_scope` call (before the body
+        // even starts) covers both. Shadows the *frame* parameter: every
+        // later use in this function -- `effect_path` included, which
+        // this field never affects -- reads the pushed frame instead.
+        let scoped_frame =
+            frame.with_bare_effect_scope(name, region_effect_names(body, finally), isolated);
+        let frame = &scoped_frame;
+
         store.set_leaf(&dyn_node, key("value"), Value::None);
         let meta_node = store
             .ensure_dict(&dyn_node, key("meta"))
@@ -131,20 +209,50 @@ pub(crate) fn execute_dynamic<'a>(
         let instance = observer.effect_start(&effect_path);
 
         // *ctx_chain* for this dynamic's own children always extends the
-        // *inherited* chain with one more live entry for *parent* -- the
-        // **enclosing** scope this dynamic itself was created under,
-        // exactly as `core/dynamic.py::DynamicRuntime.execute`'s own `ctx
-        // = store.state if ctx_override is None else ...` reads
-        // `store.state` (the parameter *store*, not the `child_store`
-        // this dynamic's own children write into). Pushing `&dyn_node`
-        // here instead would have every child read this dynamic's own
-        // node as if it were one level higher up the tree than it really
-        // is -- the Quirk Q1 overlay rebuild inside a nested `if` branch
-        // (`tests/conditional.rs::
-        // a_later_branch_effect_sees_an_earlier_siblings_write_by_bare_
-        // name`) is what first caught this getting that backwards.
+        // *inherited* chain with one more entry -- exactly
+        // `core/dynamic.py::DynamicRuntime.execute`'s own `ctx =
+        // store.state if ctx_override is None else {**ctx_override,
+        // self.defn.name: dyn}`:
+        //
+        // - *isolated* (`ctx_override is None`): *parent* itself, live,
+        //   in full -- the document's real root, and a `use`/
+        //   decomposition/split child's own root, each see the *whole*
+        //   enclosing store state unmodified (`input`, `runtime`, ...
+        //   every top-level sibling of this dynamic's own node
+        //   included), the same as Python's own `ctx = store.state`.
+        // - not *isolated*: only this dynamic's own self-alias, `name
+        //   -> dyn_node` -- Python's own `{**ctx_override, self.defn.
+        //   name: dyn}` adds *just* this one key on top of whatever
+        //   *ctx_override* already carried (never re-exposing the rest
+        //   of *parent*'s own top level a second time: *ctx_chain*
+        //   already carries it, from this same branch the very first
+        //   time an ancestor dynamic pushed it). A bare top-level alias
+        //   to this dynamic's own live node
+        //   (`test_nested_dynamic_in_loop_still_sees_root_inputs_and_
+        //   siblings`'s own `{{wrap.inner_first.value}}`) -- pushing
+        //   `Live(parent.clone())` here instead would flatten every one
+        //   of this dynamic's own *siblings* in as bare top-level names
+        //   too: a nested dynamic's own child would then outrank the new
+        //   bare-sibling-reference fallback (this function's own
+        //   `scoped_frame`, above) for any name it shares with one of
+        //   those siblings, exactly backwards from nearest-wins. A
+        //   detached, single-entry node ([`crate::node_from_entries`],
+        //   the same shape `exec::conditional::build_overlay`'s own
+        //   loop/`if`-branch overlay already builds) shares *dyn_node*'s
+        //   own live `Slot`s without copying anything -- a later write
+        //   through *dyn_node* is still visible through this entry,
+        //   unchanged.
         let mut child_chain: CtxChain = ctx_chain.clone();
-        child_chain.push(CtxSource::Live(parent.clone()));
+        if isolated {
+            child_chain.push(CtxSource::Live(parent.clone()));
+        } else {
+            let mut self_entry = indexmap::IndexMap::new();
+            self_entry.insert(
+                Value::Str(name.to_string()),
+                crate::Slot::Node(dyn_node.clone()),
+            );
+            child_chain.push(CtxSource::Live(crate::node_from_entries(self_entry)));
+        }
 
         let body_result = match body {
             Region::Block { ops, .. } => {
@@ -781,5 +889,187 @@ fn combine_tree_errors(mut errors: Vec<VmError>) -> VmError {
         message: parts.join("\n"),
         cause: electricity_tools::ErrorCause::None,
         cause_class: None,
+    }
+}
+
+#[cfg(test)]
+mod region_effect_names_tests {
+    use super::region_effect_names;
+    use electricity_bytecode::effects::{RetryPolicy, ToolOp};
+    use electricity_bytecode::region::{Condition, LoopSpec};
+    use electricity_bytecode::{
+        EffectPath, LeafKind, NodeKind, OnError, Op, ParamNode, Region, ResumeMode,
+    };
+
+    fn tool_op() -> ToolOp {
+        ToolOp {
+            provider: "json".to_string(),
+            params: ParamNode::Map(indexmap::IndexMap::new()),
+            params_json: None,
+            prompt: None,
+            model: None,
+            timeout_ms: None,
+            retries: RetryPolicy::default(),
+            expect: None,
+            description: None,
+            group: None,
+            secret_headers: indexmap::IndexMap::new(),
+            prompt_file: None,
+            limited: false,
+            confine_to: None,
+        }
+    }
+
+    fn named_leaf(name: &str) -> Op {
+        Op {
+            path: EffectPath::root().push_name(name),
+            name: Some(name.to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(tool_op()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+            resume_mode: ResumeMode::Continue,
+        }
+    }
+
+    fn block(ops: Vec<Op>) -> Region {
+        Region::Block { ops, overlay: true }
+    }
+
+    fn unnamed_if(then_ops: Vec<Op>, else_ops: Option<Vec<Op>>) -> Op {
+        Op {
+            path: EffectPath::root(),
+            name: None,
+            kind: NodeKind::Control(Region::If {
+                cond: Condition::Cel {
+                    expr: "true".to_string(),
+                    strict: false,
+                },
+                then_: Box::new(block(then_ops)),
+                else_: else_ops.map(|ops| Box::new(block(ops))),
+                threshold: 0.5,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+            resume_mode: ResumeMode::Continue,
+        }
+    }
+
+    fn named_if(name: &str, then_ops: Vec<Op>) -> Op {
+        let mut op = unnamed_if(then_ops, None);
+        op.name = Some(name.to_string());
+        op
+    }
+
+    fn unnamed_loop(body_ops: Vec<Op>) -> Op {
+        Op {
+            path: EffectPath::root(),
+            name: None,
+            kind: NodeKind::Control(Region::Loop {
+                name: None,
+                spec: LoopSpec::Each {
+                    in_path: "input.items".to_string(),
+                    as_name: "item".to_string(),
+                    truncate: false,
+                },
+                body: Box::new(block(body_ops)),
+                flow: electricity_bytecode::LoopFlow::Chain,
+                max_concurrency: None,
+                max_iterations: None,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+            resume_mode: ResumeMode::Continue,
+        }
+    }
+
+    fn named_loop(name: &str, body_ops: Vec<Op>) -> Op {
+        let mut op = unnamed_loop(body_ops);
+        op.name = Some(name.to_string());
+        if let NodeKind::Control(Region::Loop { name: n, .. }) = &mut op.kind {
+            *n = Some(name.to_string());
+        }
+        op
+    }
+
+    #[test]
+    fn collects_every_named_op_at_the_top_level() {
+        let body = block(vec![named_leaf("a"), named_leaf("b")]);
+        let names = region_effect_names(&body, None);
+        assert_eq!(names, ["a", "b"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[test]
+    fn descends_into_an_unnamed_ifs_then_and_else_branches() {
+        let body = block(vec![unnamed_if(
+            vec![named_leaf("a")],
+            Some(vec![named_leaf("b")]),
+        )]);
+        let names = region_effect_names(&body, None);
+        assert_eq!(names, ["a", "b"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[test]
+    fn descends_into_an_unnamed_loops_body() {
+        let body = block(vec![unnamed_loop(vec![named_leaf("a")])]);
+        let names = region_effect_names(&body, None);
+        assert_eq!(names, ["a"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[test]
+    fn descends_through_further_unnamed_nesting_at_any_depth() {
+        let body = block(vec![unnamed_if(
+            vec![unnamed_loop(vec![unnamed_if(
+                vec![named_leaf("deep")],
+                None,
+            )])],
+            None,
+        )]);
+        let names = region_effect_names(&body, None);
+        assert_eq!(names, ["deep"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[test]
+    fn a_named_if_or_loop_owns_its_own_node_and_its_children_stay_out() {
+        let body = block(vec![
+            named_if("gate", vec![named_leaf("inner_if")]),
+            named_loop("each", vec![named_leaf("inner_loop")]),
+        ]);
+        let names = region_effect_names(&body, None);
+        assert_eq!(
+            names,
+            ["gate", "each"].iter().map(|s| s.to_string()).collect()
+        );
+    }
+
+    #[test]
+    fn unions_body_and_finally() {
+        let body = block(vec![named_leaf("a")]);
+        let finally = block(vec![named_leaf("b")]);
+        let names = region_effect_names(&body, Some(&finally));
+        assert_eq!(names, ["a", "b"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[test]
+    fn finally_also_descends_into_its_own_unnamed_if() {
+        let body = block(vec![named_leaf("a")]);
+        let finally = block(vec![unnamed_if(vec![named_leaf("b")], None)]);
+        let names = region_effect_names(&body, Some(&finally));
+        assert_eq!(names, ["a", "b"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[test]
+    fn a_trees_parallel_branches_collect_the_same_way_a_chains_block_does() {
+        let body = Region::Parallel {
+            branches: vec![named_leaf("a"), unnamed_if(vec![named_leaf("b")], None)],
+            max_concurrency: None,
+            stop_on_error: true,
+        };
+        let names = region_effect_names(&body, None);
+        assert_eq!(names, ["a", "b"].iter().map(|s| s.to_string()).collect());
     }
 }

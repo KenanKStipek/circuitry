@@ -16,6 +16,7 @@
 use crate::adapter::{CallContext, GenerateOptions, GenerateResult};
 use crate::{CancellationToken, RunContext, VmError};
 use electricity_bytecode::{EffectPath, TemplateText};
+use electricity_template::ScopeRoot;
 use electricity_tools::PyExc;
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -81,10 +82,10 @@ pub struct ModelConditionFailure {
 /// (render, dispatch, parse) comes back inside
 /// [`ModelConditionOutcome::verdict`] instead, for the caller's own
 /// `on_error` handling to decide what to do with.
-pub async fn evaluate_model_condition(
+pub async fn evaluate_model_condition<R: ScopeRoot>(
     kind: ConditionKind,
     template: &TemplateText,
-    ctx: &Value,
+    ctx: &R,
     path: &EffectPath,
     run_ctx: &RunContext<'_>,
     token: &CancellationToken,
@@ -178,6 +179,75 @@ pub enum ExpectCallError {
     Raised { message: String, py_class: PyExc },
 }
 
+/// A private overlay root for a model-mode `expect:`'s own `value`/
+/// `meta` (#778) -- `core/expect.py::evaluate_expect`'s own
+/// `{**ctx, "value": value, "meta": meta}` shallow merge, ported the
+/// same shape as [`crate::compose`]'s own `HiddenOverlay` and
+/// [`crate::exec::yield_::InputsOverlay`]: a `value`/`meta` key shadows
+/// a same-named top-level key in *inner*, and every other lookup
+/// (bare-fallback chain included) delegates straight through. Replaces
+/// the old `ctx.whole()`-then-merge-into-a-plain-`Value` approach, so
+/// *inner* stays a frame-carrying [`ScopeRoot`] (a store-backed
+/// `LiveRoot`, say) all the way down to the render -- a bare reference
+/// inside the template still resolves through *inner*'s own enclosing-
+/// container fallback chain, which a plain `Value` snapshot has no way
+/// to carry.
+struct ExpectOverlay<'a, R> {
+    value: &'a Value,
+    meta: &'a Value,
+    inner: &'a R,
+}
+
+impl<R: ScopeRoot> ScopeRoot for ExpectOverlay<'_, R> {
+    fn lookup(&self, key: &str) -> Result<Option<Value>, String> {
+        let mut parts = key.split('.');
+        let first = parts.next().expect("split yields at least one segment");
+        let base = match first {
+            "value" => Some(self.value.clone()),
+            "meta" => Some(self.meta.clone()),
+            _ => None,
+        };
+        if let Some(mut current) = base {
+            for part in parts {
+                match electricity_template::step(&current, part)? {
+                    Some(next) => current = next,
+                    None => return Ok(None),
+                }
+            }
+            return Ok(Some(current));
+        }
+        self.inner.lookup(key)
+    }
+
+    fn whole(&self) -> Value {
+        let mut base = self.inner.whole();
+        if let Value::Dict(dict) = &mut base {
+            dict.insert(Value::from("value"), self.value.clone());
+            dict.insert(Value::from("meta"), self.meta.clone());
+        }
+        base
+    }
+
+    fn contains(&self, key: &str) -> bool {
+        let first = key
+            .split('.')
+            .next()
+            .expect("split yields at least one segment");
+        if first == "value" || first == "meta" {
+            return matches!(self.lookup(key), Ok(Some(_)));
+        }
+        self.inner.contains(key)
+    }
+
+    /// Forwards to *inner* unchanged -- neither `value` nor `meta` is
+    /// ever itself a declared effect name an enclosing container's own
+    /// fallback chain would list, so this overlay has no fallback of
+    /// its own to add.
+    fn bare_fallback(&self, head: &str) -> Option<String> {
+        self.inner.bare_fallback(head)
+    }
+}
+
 /// `core/expect.py::evaluate_expect`'s own `mode: model` half.
 /// *timeout_seconds* is the caller's own choice (issue #513 Scope §7:
 /// the tool's own resolved timeout for a `tool` expect, the run
@@ -190,27 +260,25 @@ pub enum ExpectCallError {
 /// call (`meta.expect` already popped by the caller before the
 /// snapshot was taken).
 #[allow(clippy::too_many_arguments)]
-pub async fn evaluate_model_expect(
+pub async fn evaluate_model_expect<R: ScopeRoot>(
     template: &TemplateText,
     value: &Value,
     meta: &Value,
-    ctx: &Value,
+    ctx: &R,
     path: &EffectPath,
     timeout_seconds: u32,
     run_ctx: &RunContext<'_>,
     token: &CancellationToken,
 ) -> Result<ModelExpectOutcome, ExpectCallError> {
-    let mut render_map: IndexMap<Value, Value> = match ctx {
-        Value::Dict(map) => map.clone(),
-        _ => IndexMap::new(),
+    let overlay = ExpectOverlay {
+        value,
+        meta,
+        inner: ctx,
     };
-    render_map.insert(Value::from("value"), value.clone());
-    render_map.insert(Value::from("meta"), meta.clone());
-    let render_ctx = Value::Dict(render_map);
 
     let rendered = electricity_template::render_template_with_root(
         &template.source,
-        &render_ctx,
+        &overlay,
         "expect.template",
     )
     .map_err(|err| ExpectCallError::Raised {
@@ -533,6 +601,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_model_if_resolves_a_bare_reference_through_the_frames_fallback_chain() {
+        // #778: a model-mode `if` template renders against
+        // a frame-carrying root now, not a plain `Value` snapshot --
+        // `{{x.value}}` here misses the ctx's own normal top level
+        // (its only child is "outer", not "x" directly), so it must
+        // resolve through `Frame::bare_effect_chain`'s own fallback:
+        // "outer" names an effect "x", so the retry looks up
+        // "outer.x.value" against the same live chain instead.
+        use crate::Frame;
+        use crate::Store;
+        use crate::exec::live_scope::LiveRoot;
+        use crate::exec::{CtxChain, CtxSource};
+
+        let store = Store::new();
+        let outer = store
+            .ensure_dict(&store.root, Value::from("outer"))
+            .unwrap();
+        let x = store.ensure_dict(&outer, Value::from("x")).unwrap();
+        store.set_leaf(&x, Value::from("value"), Value::from("ahead"));
+        let chain: CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
+        let frame = Frame::root().with_bare_effect_scope(
+            "outer",
+            std::iter::once("x".to_string()).collect(),
+            true,
+        );
+        let live_root = LiveRoot::new(&chain, &store, &frame);
+
+        let adapter = Rc::new(FakeAdapter::replying(Ok(reply("yes", 1, 2))));
+        with_run_ctx!(adapter.clone(), false, |run_ctx| {
+            let template = plain_template("go {{x.value}}?");
+            let token = CancellationToken::new();
+            let path = EffectPath::root();
+            let outcome = evaluate_model_condition(
+                ConditionKind::If,
+                &template,
+                &live_root,
+                &path,
+                &run_ctx,
+                &token,
+            )
+            .await
+            .expect("not cancelled");
+            assert_eq!(outcome.verdict, Ok(true));
+            let calls = adapter.calls.borrow();
+            assert!(calls[0].1.contains("go ahead?"), "{}", calls[0].1);
+        });
+    }
+
+    #[tokio::test]
     async fn while_prompt_bytes_match_the_reference_exactly() {
         let adapter = Rc::new(FakeAdapter::replying(Ok(reply("no", 1, 2))));
         with_run_ctx!(adapter.clone(), false, |run_ctx| {
@@ -717,6 +834,54 @@ mod tests {
             };
             let (result, ()) = tokio::join!(eval, cancel);
             assert!(matches!(result, Err(VmError::Cancelled)));
+        });
+    }
+
+    #[tokio::test]
+    async fn a_model_expect_resolves_a_bare_reference_through_the_frames_fallback_chain() {
+        // #778: a model-mode `expect:` template renders
+        // against `ExpectOverlay` wrapping a frame-carrying root now,
+        // not a plain `Value` snapshot -- same shape as the `if` test
+        // above, plus `value`/`meta` still shadow a same-named bare
+        // top-level key exactly as before this issue.
+        use crate::Frame;
+        use crate::Store;
+        use crate::exec::live_scope::LiveRoot;
+        use crate::exec::{CtxChain, CtxSource};
+
+        let store = Store::new();
+        let outer = store
+            .ensure_dict(&store.root, Value::from("outer"))
+            .unwrap();
+        let x = store.ensure_dict(&outer, Value::from("x")).unwrap();
+        store.set_leaf(&x, Value::from("value"), Value::from("ahead"));
+        let chain: CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
+        let frame = Frame::root().with_bare_effect_scope(
+            "outer",
+            std::iter::once("x".to_string()).collect(),
+            true,
+        );
+        let live_root = LiveRoot::new(&chain, &store, &frame);
+
+        let adapter = Rc::new(FakeAdapter::replying(Ok(reply("yes", 1, 1))));
+        with_run_ctx!(adapter.clone(), false, |run_ctx| {
+            let template = plain_template("go {{x.value}}?");
+            let token = CancellationToken::new();
+            let path = EffectPath::root();
+            evaluate_model_expect(
+                &template,
+                &Value::None,
+                &Value::None,
+                &live_root,
+                &path,
+                7,
+                &run_ctx,
+                &token,
+            )
+            .await
+            .expect("not raised");
+            let calls = adapter.calls.borrow();
+            assert!(calls[0].1.contains("go ahead?"), "{}", calls[0].1);
         });
     }
 

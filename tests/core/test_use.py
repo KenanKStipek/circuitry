@@ -1397,3 +1397,66 @@ def test_canonical_json_digest_breaks_a_text_tie_by_key_type() -> None:
     doc_a = {"true": 1, True: 2, "effects": []}
     doc_b = {True: 2, "true": 1, "effects": []}
     assert _canonical_json_digest(doc_a) == _canonical_json_digest(doc_b)
+
+
+def test_canonical_json_digest_all_int_keys_matches_mains_json_text_order() -> None:
+    """An all-int-keyed plan must keep hashing exactly as it did on main
+    (#810) -- by each key's own JSON text (``"1"``, ``"10"``, ``"2"``),
+    never by the int itself (``1``, ``2``, ``10``) -- so #778's
+    ``--pretty``-only numeric order
+    (:func:`circuitry.core.saved_state.pretty_key_order`) never leaks into
+    the digest. The expected digest is computed independently here, by
+    main's own JSON-text-then-type sort, not by calling
+    :func:`circuitry.core.saved_state.canonical_key_order` itself.
+    """
+    import hashlib
+    import json
+
+    doc = {10: "ten", 1: "one", 2: "two", "effects": []}
+
+    def _key_text(key: object) -> str:
+        if isinstance(key, str):
+            return key
+        if key is True:
+            return "true"
+        if key is False:
+            return "false"
+        if key is None:
+            return "null"
+        assert isinstance(key, int)
+        return str(key)
+
+    _rank = {bool: 0, int: 1, float: 2, type(None): 3, str: 4}
+    ordered = dict(
+        sorted(
+            doc.items(),
+            key=lambda kv: (
+                _key_text(kv[0]),
+                _rank[bool if isinstance(kv[0], bool) else type(kv[0])],
+            ),
+        )
+    )
+    assert list(ordered.keys()) == [1, 10, 2, "effects"]
+    expected = hashlib.sha256(
+        json.dumps(
+            ordered, sort_keys=False, separators=(",", ":"), ensure_ascii=False, default=str
+        ).encode("utf-8")
+    ).hexdigest()
+    assert _canonical_json_digest(doc) == expected
+
+
+def test_canonical_json_digest_non_ascii_keys_matches_mains_json_text_order() -> None:
+    """Non-ASCII string keys hash exactly as on main (#810): the JSON text
+    of a string key is the key itself, so this is plain
+    ``sort_keys=True`` order, code-point by code-point.
+    """
+    import hashlib
+    import json
+
+    doc = {"\u00f1": 1, "z": 2, "a": 3, "\u00e9": 4, "effects": []}
+    expected = hashlib.sha256(
+        json.dumps(
+            doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        ).encode("utf-8")
+    ).hexdigest()
+    assert _canonical_json_digest(doc) == expected

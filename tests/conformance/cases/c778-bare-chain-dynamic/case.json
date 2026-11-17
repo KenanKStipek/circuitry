@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778",
+  "description": "Inside a nested chain `dynamic`, a bare {{first.value}} resolves exactly as the dotted {{prime.stage.first.value}} form does -- fails (renders empty) on main, where DynamicRuntime never built a scope overlay at all.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

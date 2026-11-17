@@ -58,7 +58,7 @@
 
 use super::{CtxChain, CtxSource, live_ctx};
 use crate::params::ParamsCtx;
-use crate::{NodeRef, Slot, Store};
+use crate::{Frame, NodeRef, Slot, Store};
 use electricity_value::Value;
 use indexmap::IndexMap;
 
@@ -186,11 +186,25 @@ fn project_live_child(store: &Store, step: &LiveStep, part: &str) -> Option<Live
 pub(crate) struct LiveRoot<'a> {
     pub(crate) chain: &'a CtxChain,
     pub(crate) store: &'a Store,
+    /// This render's own enclosing-effect-container chain
+    /// ([`Frame::bare_effect_chain`], issue #778) -- every real
+    /// template-rendering call site passes whatever [`Frame`] it
+    /// already carries, so a bare reference inside whatever it renders
+    /// resolves through this type's own `bare_fallback` override below.
+    /// A caller with no real [`Frame`] of its own (a test fixture, a
+    /// seam that never goes through a bare reference's own fallback in
+    /// the first place -- CEL and `from:` paths are unchanged by this
+    /// issue) passes [`Frame::root`], whose own chain is always empty.
+    frame: &'a Frame,
 }
 
 impl<'a> LiveRoot<'a> {
-    pub(crate) fn new(chain: &'a CtxChain, store: &'a Store) -> Self {
-        LiveRoot { chain, store }
+    pub(crate) fn new(chain: &'a CtxChain, store: &'a Store, frame: &'a Frame) -> Self {
+        LiveRoot {
+            chain,
+            store,
+            frame,
+        }
     }
 }
 
@@ -264,6 +278,21 @@ impl electricity_template::ScopeRoot for LiveRoot<'_> {
             };
         }
         true
+    }
+
+    /// `core/templates.py::_get_key`'s own bare-sibling-reference
+    /// fallback (issue #778): the nearest enclosing effect container
+    /// (`self.frame`'s own chain, nearest first) whose own effect
+    /// names include *head*, as that container's own self-alias --
+    /// never a computed dotted path (#778) -- or `None` with
+    /// an empty chain (`self.frame` is [`Frame::root`]) or no match
+    /// anywhere on the chain, same as before this issue existed.
+    fn bare_fallback(&self, head: &str) -> Option<String> {
+        self.frame
+            .bare_effect_chain()
+            .iter()
+            .find(|(_, names)| names.contains(head))
+            .map(|(path, _)| path.clone())
     }
 }
 
@@ -569,7 +598,8 @@ mod differential_tests {
         let old_ctx = live_ctx(chain, store);
         let old = render_template(template, &old_ctx, "template").map_err(|e| e.to_string());
 
-        let live_root = LiveRoot::new(chain, store);
+        let frame = crate::Frame::root();
+        let live_root = LiveRoot::new(chain, store, &frame);
         let new =
             render_template_with_root(template, &live_root, "template").map_err(|e| e.to_string());
 
@@ -585,7 +615,8 @@ mod differential_tests {
         let old_ctx = live_ctx(chain, store);
         let old = old_ctx.contains(path);
 
-        let live_root = LiveRoot::new(chain, store);
+        let frame = crate::Frame::root();
+        let live_root = LiveRoot::new(chain, store, &frame);
         let new = live_root.contains(path);
 
         assert_eq!(old, new, "{case}: contains({path:?}) diverged");
@@ -595,7 +626,8 @@ mod differential_tests {
         let old_ctx = live_ctx(chain, store);
         let old = old_ctx.resolve_from(path);
 
-        let live_root = LiveRoot::new(chain, store);
+        let frame = crate::Frame::root();
+        let live_root = LiveRoot::new(chain, store, &frame);
         let new = live_root.resolve_from(path);
 
         assert_eq!(old, new, "{case}: {{from: {path}}} diverged");

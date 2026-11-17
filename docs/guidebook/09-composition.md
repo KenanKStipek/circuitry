@@ -135,7 +135,7 @@ interface:
 
 The interface is also what `cof info` prints, what `cof list` shows as inputs, and what the [wizard](12-surfaces.md) reads when it composes library entries into a draft. Declare one on anything reusable-shaped.
 
-A declared input has one spelling inside the document — `{{input.repo}}` in templates, `state.input.repo` in CEL — and the compiler holds you to it:
+A declared input has one spelling inside the document — `{{input.repo}}` in templates, `state.input.repo` in CEL — and the compiler holds you to it, unless an effect somewhere in scope is also named `repo`: then the effect wins (the same nearest-wins rule bare sibling references follow everywhere else), and `repo` the declared input is unreachable bare at all from there:
 
 ```yaml
 # ✗ a declared input read bare is a compile error
