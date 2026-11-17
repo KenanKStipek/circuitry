@@ -1,4 +1,4 @@
-//! Round-7 regression: a single-hop-per-level `$defs` chain of `$ref`s
+//! Regression test: a single-hop-per-level `$defs` chain of `$ref`s
 //! (`L0 -> L1 -> ... -> LN`) used to overflow the native stack --
 //! `thread 'main' has overflowed its stack`, an immediate process abort
 //! with no state written at all -- well under `engine::MAX_RECURSION_

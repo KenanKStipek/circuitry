@@ -47,7 +47,7 @@ _HEADER = """\
 //! (issue #511) without a dependency on `electricity-tools`, which
 //! itself depends on `electricity-bytecode`. `registry::build_plugin`'s
 //! own unknown-plugin message lists the same list, Python's full
-//! registry (issue #449's gate lane, item 2).
+//! registry (issue #449, item 2).
 """
 
 

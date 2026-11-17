@@ -183,7 +183,7 @@ pub const MAX_NODES: usize = 1_000_000;
 //   scalar can't contain a line break without folding) but an
 //   ordinary string containing that character here (electricity-yaml
 //   has no divergence-case shape for "Circuitry fails, electricity-yaml
-//   loads a value" -- D4's own gap, below) -- so that one shape is
+//   loads a value" -- the gap described below) -- so that one shape is
 //   pinned directly against the behaviour instead, in
 //   `tests/reader_divergences.rs`.
 //
@@ -255,5 +255,5 @@ pub const MAX_NODES: usize = 1_000_000;
 // doc comment), and the "Circuitry fails, electricity-yaml loads a
 // value" shape just above (a line-break character inside a plain
 // scalar) all have Circuitry on the *failing* side, which this crate's
-// `known_divergence` corpus kind has no way to express (D4, PR #388) -- documented here in prose instead, and pinned
+// `known_divergence` corpus kind has no way to express (PR #388) -- documented here in prose instead, and pinned
 // directly against the behaviour in `tests/reader_divergences.rs`.

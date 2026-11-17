@@ -1075,7 +1075,7 @@ fn validate_prompt_schema_impl(
     let fully_supported =
         is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema);
     let result = if engine::recursion_exceeded_peek() {
-        // Round-7 fix: the support walk itself already hit its own hop
+        // The support walk itself already hit its own hop
         // cap (`engine::MAX_RECURSION_DEPTH`) resolving *schema*'s own
         // `$ref` graph -- never because of a genuinely unsupported
         // keyword. Falling through to the crate branch below used to

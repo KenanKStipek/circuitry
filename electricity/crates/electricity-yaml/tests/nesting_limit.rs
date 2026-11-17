@@ -1,4 +1,4 @@
-//! Decision A (the fix-pass notes on PR #388): a fixed,
+//! As decided on PR #388: a fixed,
 //! documented nesting limit (`electricity_yaml::MAX_DEPTH`, 512), its
 //! own error kind, and -- the actual point of the limit -- never a
 //! stack overflow, checked by running the composer on a 2 MiB thread, a
@@ -150,7 +150,7 @@ fn merge_chain_n_100_000_does_not_crash() {
     assert!(matches!(err, YamlError::NestingTooDeep { .. }));
 }
 
-/// Decision B (the fix-pass notes on PR #388): a fixed,
+/// As decided on PR #388: a fixed,
 /// documented budget on the total number of nodes alias expansion may
 /// construct (`electricity_yaml::MAX_NODES`), checked *before* each
 /// clone using the anchored node's own already-known size -- never by
@@ -213,7 +213,7 @@ fn ten_thousand_references_to_a_ten_thousand_item_anchor_is_a_distinct_node_budg
 }
 
 /// `n` levels of a single-item *block* sequence (`- 1`, `- - 1`, ...) --
-/// the D3 fix-pass gap: every depth test above used a block mapping or
+/// the one shape not yet covered: every depth test above used a block mapping or
 /// a *flow* sequence; a flow sequence can't reach `MAX_DEPTH` at all
 /// (saphyr-parser 0.1.0's own flow-nesting counter is a `u8`, overflowing
 /// with its own, unrelated error at 256 levels, well below 512 --
@@ -244,7 +244,7 @@ fn block_sequence_one_past_the_limit_is_a_distinct_nesting_error() {
 
 /// A deeply nested *complex mapping key* (`? ... : v`) -- the explicit
 /// `?` indicator a plain `a: b` mapping never uses, and the other gap
-/// in D3's test coverage: every existing depth test nests through an
+/// in the depth tests' coverage: every existing depth test nests through an
 /// ordinary value position, never a key. `n` is chosen so the whole
 /// mapping (`1 +` the key's own depth, `Node::depth_of_pairs`) lands
 /// exactly on `MAX_DEPTH`; one level deeper must report

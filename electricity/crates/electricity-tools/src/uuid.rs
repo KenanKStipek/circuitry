@@ -315,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_huge_count_with_an_invalid_v5_call_fails_fast_without_preallocating() {
-        // Pre-#460-fix-pass, `Vec::with_capacity(count as usize)` ran
+        // Before the #460 fix, `Vec::with_capacity(count as usize)` ran
         // *before* the loop that would otherwise raise on its very
         // first iteration -- a huge `count` aborted the process before
         // `uuid5` ever got a chance to reject the missing `name`.
