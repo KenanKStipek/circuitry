@@ -70,6 +70,86 @@ def test_resume_restart_dynamic_child_is_read_live_not_a_stale_snapshot() -> Non
     assert store.state["prime"]["dotted_reader"]["value"] == "new"
 
 
+def test_dynamic_second_child_reads_its_own_first_child_through_its_self_alias() -> None:
+    """A dynamic ``d``'s own second child can read its first child through
+    ``d``'s own self-alias (``{{d.x.value}}``), not only a name bare of any
+    prefix -- ``d`` is itself a live top-level key in the context it
+    renders its own children against (#778).
+    """
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "d",
+                "effects": [
+                    _prompt("x", "x-val"),
+                    _prompt("reader", "{{d.x.value}}"),
+                ],
+            },
+        ],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+    DynamicRuntime(root, adapter=EchoAdapter(), model="m").execute(store=store)
+    assert store.state["prime"]["d"]["reader"]["value"] == "x-val"
+
+
+def test_dynamic_second_child_reads_its_restarted_first_child_through_its_self_alias() -> None:
+    """The same read, from inside a ``resume: restart`` dynamic -- its
+    second child's ``{{d.x.value}}`` sees the node ``d`` just rewrote this
+    run, never the dropped, stale one (#778).
+    """
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "d",
+                "resume": "restart",
+                "effects": [
+                    _prompt("x", "new-x"),
+                    _prompt("reader", "{{d.x.value}}"),
+                ],
+            },
+        ],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store(
+        {
+            "prime": {
+                "d": {
+                    "x": {"value": "stale", "meta": {}},
+                    "reader": {"value": "stale-reader", "meta": {}},
+                }
+            }
+        }
+    )
+    DynamicRuntime(root, adapter=EchoAdapter(), model="m", resume=True).execute(
+        store=store
+    )
+    assert store.state["prime"]["d"]["reader"]["value"] == "new-x"
+
+
+def test_tree_branch_sibling_read_renders_empty_bare_and_dotted() -> None:
+    """A ``flow: tree`` branch's own read of a sibling branch, bare or
+    dotted, renders empty -- each branch gets its own context copy, taken
+    before any branch's write lands (``cancellation.submit_with_context``),
+    so neither spelling can see a concurrent sibling's write (#778).
+    """
+    orch = {
+        "flow": "tree",
+        "effects": [
+            _prompt("a", "a-val"),
+            _prompt("bare_reader", "v={{a.value}}"),
+            _prompt("dotted_reader", "v={{prime.a.value}}"),
+        ],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+    DynamicRuntime(root, adapter=EchoAdapter(), model="m").execute(store=store)
+    assert store.state["prime"]["bare_reader"]["value"] == "v="
+    assert store.state["prime"]["dotted_reader"]["value"] == "v="
+
+
 def test_builtin_run_id_is_not_hidden_by_an_effect_of_the_same_name() -> None:
     """``_run_id`` (and any other built-in context key) keeps its meaning
     even when an effect happens to share its name -- the bare-reference
