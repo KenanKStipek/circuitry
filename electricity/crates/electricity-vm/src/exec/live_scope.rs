@@ -449,7 +449,7 @@ mod differential_tests {
     //! *new* one ([`LiveRoot`]/[`build_cel_state`]), and assert the two
     //! are identical -- output text, missing-key fallbacks, and error
     //! text alike. Every case below is chosen to exercise one of the
-    //! parity risks the lane notes call out by name: the Mustache scope
+    //! parity risks this module's own doc comment calls out by name: the Mustache scope
     //! chain (section push/pop, inverted sections, a section over a
     //! list/dict/scalar), store aliases (`last` aliasing an `iter_<N>`
     //! sibling), a whole-subtree splice (key order/aliasing preserved

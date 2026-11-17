@@ -1,4 +1,4 @@
-//! Lane B2: `dynamic` (chain and tree), ported from `core/dynamic.py::
+//! `dynamic` (chain and tree), ported from `core/dynamic.py::
 //! DynamicRuntime.execute` -- the document root (a non-overlay `dynamic`
 //! named `prime`) and every nested `dynamic` effect both run through
 //! [`execute_dynamic`], exactly as `DynamicRuntime` is the one Python
@@ -638,7 +638,7 @@ fn execute_tree<'a>(
         // `RunObserver::dispatch`'s own declared parameter order is
         // `(path, branches, concurrency)` (`observer.rs`) -- *n* (the
         // total) first, *concurrency* second. Each branch is named
-        // distinctly by the document itself (lane A's own `Frame`
+        // distinctly by the document itself (`Frame`'s own
         // module doc comment: unlike a loop's own `flow: tree` pass,
         // an ordinary `dynamic` tree branch's compiled path is already
         // globally unique), so *frame* passes straight through to every
@@ -739,8 +739,8 @@ fn execute_tree<'a>(
             }
 
             // PR #462: a `VmError::Refused`
-            // branch (lane I's own mid-run child refusal, M1 lane I
-            // prerequisites, issue #448, item U3) used to fall into the
+            // branch (a `use` effect's own mid-run child refusal, issue
+            // #448, item U3) used to fall into the
             // generic `Err(e)` arm below like any ordinary failure --
             // folded into `tree_errors`, then foldable again into one
             // `VmError::Message` summary by `combine_tree_errors` once a

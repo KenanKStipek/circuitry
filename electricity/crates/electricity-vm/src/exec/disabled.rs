@@ -1,4 +1,4 @@
-//! Disabled effects (`core/disabled.py`) -- issue #518 (lane J2).
+//! Disabled effects (`core/disabled.py`) -- issue #518.
 //!
 //! [`electricity_bytecode::Op::enabled`] is set `false` by a profile's
 //! own per-effect `effects.<path>.enabled: false`

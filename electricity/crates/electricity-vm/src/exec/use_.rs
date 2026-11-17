@@ -1,7 +1,7 @@
-//! `use` effect execution (`core/use.py::UseRuntime.execute`) -- M1
-//! lane I (issue #469). A child orchestration, loaded from a `path:`
+//! `use` effect execution (`core/use.py::UseRuntime.execute`) --
+//! issue #469. A child orchestration, loaded from a `path:`
 //! or rendered from `inline:`, runs isolated ([`run_isolated`], shared
-//! with M1-L2's decomposition lane) and its outputs are mapped back
+//! with decomposition) and its outputs are mapped back
 //! under the parent node in one of three modes (explicit `outputs:`,
 //! auto-generated from the child's own `interface.outputs`, or full
 //! passthrough of the child's own `prime` children).
@@ -1420,7 +1420,7 @@ async fn attempt_once<R: ParamsCtx>(
 
     // Refused before the child ever runs -- a freshly compiled child
     // program the parent's own up-front walker could never have seen
-    // (lane A's `first_unsupported`, rechecked here against the exact
+    // (`first_unsupported`, rechecked here against the exact
     // `Supported` value the parent run was already checked against).
     if let Some(refusal) = electricity_bytecode::first_unsupported(
         &child_program,
@@ -1566,8 +1566,7 @@ async fn attempt_once<R: ParamsCtx>(
             // execute_prompt`'s own dispatch-time `UnsupportedAdapter`
             // check, which has no child document of its own to name)
             // is claimed by *this* level -- the nearest enclosing `use`
-            // that actually ran the effect that raised it (issue #498
-            // ruling 4).
+            // that actually ran the effect that raised it (issue #498).
             return Err(AttemptProblem::Fatal(VmError::Refused {
                 refusal,
                 child_label: child_label.or_else(|| Some(loaded.label.clone())),
@@ -2422,7 +2421,7 @@ async fn run_isolated_inner(
 /// *initial_state* (never the parent's own store) -- there is no
 /// `core/use.py::_run_isolated` to port this from: `UseRuntime.execute`
 /// builds its own child `Store` inline, with no separate function of
-/// its own. Shared by `use` (this lane) and decomposition (lane L2).
+/// its own. Shared by `use` and decomposition.
 ///
 /// Returns the [`Store`] *and* the run's own result, always, rather
 /// than discarding the store on an `Err` the way a plain `Result<Store,
@@ -2468,7 +2467,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::rc::Rc;
 
-    /// PR #472 (ruling R5): a
+    /// PR #472: a
     /// retryable child-run failure must *collect* its own
     /// `record_children` record, never apply it -- only [`execute_use`]
     /// applies it, and only once it knows this attempt is the last one.

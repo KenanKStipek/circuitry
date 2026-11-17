@@ -1,7 +1,7 @@
 //! Model-mode `if`/`while` and model-mode `expect:` (`core/
 //! conditional.py::_evaluate_model`, `core/loop.py::_evaluate_model`,
-//! `core/expect.py::evaluate_expect` mode `model`), filled in (issue
-//! #513, lane G2).
+//! `core/expect.py::evaluate_expect` mode `model`), filled in by issue
+//! #513.
 //!
 //! Routed from [`super::conditional`] (a named/unnamed `if`),
 //! [`super::loop_`] (a named/unnamed `while`) and [`super::tool`]/
