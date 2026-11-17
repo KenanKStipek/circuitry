@@ -32,6 +32,7 @@ use electricity_bytecode::param::ParamNode;
 use electricity_bytecode::{EffectPath, Op, first_unsupported};
 use electricity_compiler::DocumentOrigin;
 use electricity_config::{ComplexitySettings, DecompositionSettings, SplittingSettings};
+use electricity_template::ScopeRoot;
 use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 use electricity_yaml::{DumpError, DumpOptions};
@@ -1436,15 +1437,50 @@ fn candidate_references(expanded_sources: &[String]) -> Result<Vec<String>, Stri
     Ok(ordered)
 }
 
+/// A frame-carrying wrapper around an already-materialized split/
+/// decomposition [`Value`] (finding 2, #778): split and decomposition
+/// build *ctx* through dotted-path `Value` surgery (`dotted_get`/
+/// `set_dotted_copy`/an `extra_state` merge) a store-backed
+/// `ScopeRoot` has no way to do directly, so the plain `Value` stays
+/// the render root -- this only adds *frame*'s own enclosing-
+/// container fallback chain on top, the one thing [`Value`]'s own
+/// [`ScopeRoot`] impl always answers `None` for. *ctx* itself already
+/// carries every chain entry's own self-alias as a literal top-level
+/// key (`exec::live_ctx`'s own flattening rule, independent of this
+/// issue), so this never needs live store access to resolve one.
+struct ValueWithFrameFallback<'a> {
+    value: &'a Value,
+    frame: &'a Frame,
+}
+
+impl ScopeRoot for ValueWithFrameFallback<'_> {
+    fn lookup(&self, key: &str) -> Result<Option<Value>, String> {
+        self.value.lookup(key)
+    }
+
+    fn whole(&self) -> Value {
+        self.value.whole()
+    }
+
+    fn bare_fallback(&self, head: &str) -> Option<String> {
+        self.frame
+            .bare_effect_chain()
+            .iter()
+            .find(|(_, names)| names.contains(head))
+            .map(|(path, _)| path.clone())
+    }
+}
+
 /// `core/decompose.py::_render_reference_alone`.
-fn render_reference_alone(reference: &str, ctx: &Value) -> Result<String, String> {
+fn render_reference_alone(reference: &str, ctx: &Value, frame: &Frame) -> Result<String, String> {
     let mut template = String::with_capacity(reference.len() + 6);
     template.push_str("{{{");
     template.push_str(reference);
     template.push_str("}}}");
+    let root = ValueWithFrameFallback { value: ctx, frame };
     electricity_template::render_template_with_root_and_escape(
         &template,
-        ctx,
+        &root,
         "split reference",
         false,
     )
@@ -1611,6 +1647,7 @@ fn prepare_split(
     prompt: &PromptOp,
     name: &str,
     ctx: &Value,
+    frame: &Frame,
     declared_prompts: &indexmap::IndexMap<String, String>,
     effect_names: &std::collections::BTreeSet<String>,
     budget: i64,
@@ -1672,7 +1709,7 @@ fn prepare_split(
     let mut best_reference: Option<String> = None;
     let mut best_tokens: i64 = -1;
     for reference in &references {
-        let rendered = render_reference_alone(reference, ctx)?;
+        let rendered = render_reference_alone(reference, ctx, frame)?;
         let tokens = crate::split::estimate_tokens(&rendered);
         if tokens > best_tokens {
             best_tokens = tokens;
@@ -1728,10 +1765,14 @@ fn prepare_split(
     let merged_ctx = Value::Dict(merged_dict);
 
     let mut rendered_fixed = Vec::with_capacity(sources.len());
+    let merged_root = ValueWithFrameFallback {
+        value: &merged_ctx,
+        frame,
+    };
     for (index, text) in expanded_texts.iter().enumerate() {
         let rendered = electricity_template::render_template_with_root_and_escape(
             text,
-            &merged_ctx,
+            &merged_root,
             &sources[index].label,
             false,
         )
@@ -2383,6 +2424,7 @@ async fn maybe_split(
         prompt,
         name,
         &ctx,
+        frame,
         run_ctx.declared_prompts,
         run_ctx.effect_names,
         budget,
@@ -3875,6 +3917,30 @@ mod tests {
     }
 
     #[test]
+    fn value_with_frame_fallback_resolves_a_bare_reference_through_the_frames_chain() {
+        // Finding 2, #778: split/decomposition's own renders use
+        // `ValueWithFrameFallback` now, not a bare `Value` -- a bare
+        // reference naming an effect in the frame's own chain must
+        // still resolve, the same mechanism `exec::live_scope::
+        // LiveRoot::bare_fallback` provides for a live root.
+        let mut outer = Dict::new();
+        let mut x = Dict::new();
+        x.insert(key("value"), Value::from("ahead"));
+        outer.insert(key("x"), Value::Dict(x));
+        let mut ctx_dict = Dict::new();
+        ctx_dict.insert(key("outer"), Value::Dict(outer));
+        let ctx = Value::Dict(ctx_dict);
+        let frame = Frame::root().with_bare_effect_scope(
+            "outer",
+            std::iter::once("x".to_string()).collect(),
+            true,
+        );
+
+        let rendered = render_reference_alone("x.value", &ctx, &frame).unwrap();
+        assert_eq!(rendered, "ahead");
+    }
+
+    #[test]
     fn prepare_split_picks_the_reference_and_cuts_it_matching_a_cof_recorded_split() {
         let prompt = template_op("Summarize: {{input.doc}}");
         let doc = "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg \
@@ -3889,8 +3955,16 @@ mod tests {
         // `tests/conformance/cases/split-text-join/expected.json`'s own
         // `meta.decomposition`: budget 20, estimated_tokens 25, split
         // into 2 parts of size 11 each.
-        let prep =
-            prepare_split(&prompt, "big", &ctx, &declared_prompts, &effect_names, 20).unwrap();
+        let prep = prepare_split(
+            &prompt,
+            "big",
+            &ctx,
+            &Frame::root(),
+            &declared_prompts,
+            &effect_names,
+            20,
+        )
+        .unwrap();
         assert_eq!(prep.ref_path, "input.doc");
         assert_eq!(prep.kind, "string");
         assert_eq!(prep.sizes, vec![11, 11]);

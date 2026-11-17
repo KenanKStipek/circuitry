@@ -316,12 +316,16 @@ async fn decide_and_run<'a>(
         // `outcome.verdict` instead, for the same `on_error` handling
         // the CEL arm above already does.
         Condition::Model { template } => {
-            let ctx = super::live_ctx(ctx_chain, store);
+            // Finding 2, #778: a frame-carrying root, not a bare
+            // `super::live_ctx` snapshot -- a bare reference inside
+            // *template* must still resolve through this frame's own
+            // enclosing-container fallback chain.
+            let live_root = super::live_scope::LiveRoot::new(ctx_chain, store, frame);
             let effect_path = frame.effect_path(&op.path);
             let outcome = super::condition_model::evaluate_model_condition(
                 super::condition_model::ConditionKind::If,
                 template,
-                &ctx,
+                &live_root,
                 &effect_path,
                 run_ctx,
                 token,

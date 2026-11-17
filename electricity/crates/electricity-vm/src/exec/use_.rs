@@ -1729,13 +1729,17 @@ async fn attempt_once<R: ParamsCtx>(
             // AdapterCallError`] class here, even a non-retryable
             // one).
             ExpectCondition::Model { template } => {
+                // Finding 2, #778: *ctx* itself (a frame-carrying root),
+                // not `state` (`ctx.whole()`'s plain-`Value` snapshot) --
+                // a bare reference inside *template* must still resolve
+                // through *ctx*'s own enclosing-container fallback chain.
                 let effect_path = frame.effect_path(&op.path);
                 let summary = expect_model_summary(&template.source);
                 match crate::exec::condition_model::evaluate_model_expect(
                     template,
                     &value_for_expect,
                     &meta_snapshot,
-                    &state,
+                    ctx,
                     &effect_path,
                     run_ctx.adapter_timeout_seconds,
                     run_ctx,

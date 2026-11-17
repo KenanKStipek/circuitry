@@ -1732,12 +1732,17 @@ async fn run_while<'a>(
                 // "write after the decision" ordering quirk here: the
                 // 7 keys land in the same place regardless of outcome.
                 Condition::Model { template } => {
-                    let ctx = super::live_ctx(&cond_chain, store);
+                    // Finding 2, #778: a frame-carrying root, not a
+                    // bare `super::live_ctx` snapshot -- a bare
+                    // reference inside *template* must still resolve
+                    // through this frame's own enclosing-container
+                    // fallback chain.
+                    let live_root = super::live_scope::LiveRoot::new(&cond_chain, store, frame);
                     let effect_path = frame.effect_path(&op.path);
                     let outcome = super::condition_model::evaluate_model_condition(
                         super::condition_model::ConditionKind::While,
                         template,
-                        &ctx,
+                        &live_root,
                         &effect_path,
                         run_ctx,
                         token,

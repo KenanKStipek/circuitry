@@ -92,6 +92,18 @@ impl<R: ScopeRoot> ScopeRoot for InputsOverlay<'_, R> {
         }
         self.inner.contains(key)
     }
+
+    /// Forwards to *inner* unchanged (finding 2, #778): an `inputs:`
+    /// key is never itself a declared effect name an enclosing
+    /// container's own fallback chain would list, so this overlay has
+    /// no fallback of its own to add -- without this override,
+    /// [`ScopeRoot::bare_fallback`]'s default (`None`) would silence
+    /// *inner*'s own chain for every `yield` with a non-empty
+    /// `inputs:`, the same regression [`crate::compose::HiddenOverlay`]
+    /// fixes for a `{{> name}}` partial.
+    fn bare_fallback(&self, head: &str) -> Option<String> {
+        self.inner.bare_fallback(head)
+    }
 }
 
 /// Runs a `yield` effect: renders *yield_op*'s own `template` (with
@@ -613,6 +625,31 @@ mod tests {
             0,
             "a presence check must never materialize the whole loop subtree"
         );
+    }
+
+    #[test]
+    fn inputs_overlay_forwards_bare_fallback_to_its_inner_root() {
+        // Finding 2, #778: a `yield` with a non-empty `inputs:` must
+        // still resolve a bare sibling reference through whatever
+        // chain its own `LiveRoot` carries -- the overlay has no
+        // fallback of its own to add, so it must forward, never fall
+        // back to the trait's own default (`None`).
+        let store = Store::new();
+        let chain: CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
+        let frame = Frame::root().with_bare_effect_scope(
+            "prime",
+            std::iter::once("x".to_string()).collect(),
+            true,
+        );
+        let live_root = LiveRoot::new(&chain, &store, &frame);
+        let inputs = Dict::new();
+        let overlay = InputsOverlay {
+            inputs: &inputs,
+            inner: &live_root,
+        };
+
+        assert_eq!(overlay.bare_fallback("x"), Some("prime".to_string()));
+        assert_eq!(overlay.bare_fallback("unrelated"), None);
     }
 
     #[tokio::test]
