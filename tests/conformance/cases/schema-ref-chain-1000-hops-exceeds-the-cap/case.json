@@ -1,6 +1,6 @@
 {
   "spec_case": "core/compiler.py::_compile_prompt, issue #778's own step 5",
-  "description": "A `$defs` chain of 1000 single-hop `$ref`s (`L0 -> L1 -> ... -> L1000 = {type: object}`): issue #498's own round-7 fix documented this as the accepted boundary both engines agreed on, relying on Python's own `RecursionError` threshold (which varies with the process's call-stack depth, and even with whether a CEL expression has compiled yet in this process). An explicit, shared cap (200 consecutive $ref resolutions) now refuses this chain at compile time, deterministically, before any reply is considered.",
+  "description": "A `$defs` chain of 1000 single-hop `$ref`s (`L0 -> L1 -> ... -> L1000 = {type: object}`): issue #498 documented this as the accepted boundary both engines agreed on, relying on Python's own `RecursionError` threshold (which varies with the process's call-stack depth, and even with whether a CEL expression has compiled yet in this process). An explicit, shared cap (200 consecutive $ref resolutions) now refuses this chain at compile time, deterministically, before any reply is considered.",
   "engines": ["python", "electricity"],
   "expect": "failure",
   "error_compare": "exact"

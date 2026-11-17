@@ -1416,8 +1416,8 @@ def _communicate_promptly(
         if is_text_mode:
             assert isinstance(input, str)
             data: bytes = input.encode(stdin.encoding, stdin.errors)
-            # `detach()`, not a plain `.buffer` read (#385 review
-            # regression, confirmed by direct measurement): once this
+            # `detach()`, not a plain `.buffer` read (a regression in #385,
+            # confirmed by direct measurement): once this
             # function returns, `stdin` -- the local name for the
             # `TextIOWrapper` -- goes out of scope and is garbage
             # collected almost at once. Its own finalizer still calls
@@ -1669,8 +1669,8 @@ def run_tracked(
     # Only threads whose own `.start()` actually succeeded land here --
     # joining one that never started raises `RuntimeError: cannot join
     # thread before it is started`, masking whatever `.start()` itself
-    # raised (#636 review's own `reader_started` flag, generalized from
-    # one thread to this list).
+    # raised (#636's `reader_started` flag, generalized from one thread
+    # to this list).
     started_threads: list[tuple[threading.Thread, float | None]] = []
     with proc, token.track(proc):
         try:

@@ -1,5 +1,5 @@
 """An error inside an unnamed conditional must name the failing branch
-effect, not surface bare (#258/#269 review follow-up). ``DynamicRuntime`` and
+effect, not surface bare (#258, #269). ``DynamicRuntime`` and
 ``LoopRuntime`` both prefix a bare exception with the failing child's own
 name when the container itself has no name of its own; ``ConditionalRuntime``
 must do the same.
