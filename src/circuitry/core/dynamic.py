@@ -340,10 +340,12 @@ class DynamicRuntime:
         # bindings, root inputs, absolute state paths. This dynamic's own
         # effects write straight into it, live, with no overlay of its own:
         # a bare reference to one of this dynamic's own children resolves
-        # through `core.templates`'s own fallback, off the exact same
-        # dotted `prime.<name>` path the canonical spelling already reads
-        # live off `child_store.state` -- bare and dotted are the same
-        # lookup, not two mechanisms kept in sync (#778).
+        # through `core.templates`'s own fallback, via this dynamic's own
+        # self-alias -- the single flat `self.defn.name: dyn` key below --
+        # never a dotted path built from an ancestor's own name. Bare and
+        # dotted land on the same live node either way, reached
+        # differently: bare through the self-alias chain, dotted through
+        # `child_store.state`'s own nesting (#778).
         #
         # `ctx_override` is widened with only this dynamic's own entry in
         # *store* (``store.state[self.defn.name]`` -- the very ``dyn`` dict
@@ -372,8 +374,10 @@ class DynamicRuntime:
         # effect can shadow, or be shadowed by, a body effect the same way
         # two body effects can shadow each other. This dynamic's own entry
         # on the bare-reference chain (`core.templates`) carries both: a
-        # bare head naming one of them resolves through this dynamic's own
-        # dotted path, nearest container first. `isolated=True` starts a
+        # bare head naming one of them resolves to this dynamic's own
+        # self-alias plus the rest of the reference, nearest container
+        # first -- never a dotted path built from an ancestor's own name.
+        # `isolated=True` starts a
         # fresh chain rooted at this dynamic's own name instead of nesting
         # under whatever chain is already running -- the document's real
         # root, and a `use`/reflector/decomposition child's own root (each

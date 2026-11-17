@@ -1,7 +1,13 @@
-//! `core/use.py::_canonical_key_order`/`_KEY_TYPE_RANK` (issue #778):
-//! the one key order both [`crate::dumps`]'s `--pretty` callers and
-//! `electricity-vm`'s reflector-plan digest need, shared here instead
-//! of each engine (or, before #778, each crate) keeping its own copy.
+//! `core/saved_state.py::canonical_key_order`/`pretty_key_order`/
+//! `_KEY_TYPE_RANK` (issue #778): two key orders, both needed on both
+//! engines -- [`canonical_key_order`] for `electricity-vm`'s
+//! reflector-plan digest (#810's own numeric-first order, restored
+//! after `--pretty`'s own `sorted()`-first order briefly replaced it),
+//! and [`pretty_key_order`] for [`crate::dumps`]'s `--pretty` callers
+//! (`sorted()`-first, falling back to [`canonical_key_order`] only for
+//! a dict mixing key types `sorted()` itself can't compare) -- shared
+//! here instead of each engine (or, before #778, each crate) keeping
+//! its own copy.
 //!
 //! `sort_keys=True`'s own native-value comparison (`sorted(dct.items())`,
 //! [`crate::WriteError::IncomparableKeys`]) raises for a dict mixing key
@@ -17,7 +23,7 @@ use crate::{WriteError, stringify_key};
 use electricity_value::{Dict, Value};
 use std::cmp::Ordering;
 
-/// `core/use.py::_KEY_TYPE_RANK` -- the tiebreak order [`canonical_key_order`]
+/// `core/saved_state.py::_KEY_TYPE_RANK` -- the tiebreak order [`canonical_key_order`]
 /// uses when two keys of different types write the same JSON text (e.g. the
 /// string `"true"` beside the bool `true`) -- arbitrary but fixed, so the
 /// order is total and the same on both engines.
@@ -32,7 +38,7 @@ pub fn key_type_rank(key: &Value) -> u8 {
     }
 }
 
-/// `core/use.py::_canonical_key_order` -- *value* with every dict's
+/// `core/saved_state.py::canonical_key_order` -- *value* with every dict's
 /// entries reordered by the JSON text each key would write, then by
 /// [`key_type_rank`] as a tiebreak -- so a dict mixing key types `<`
 /// can't compare (e.g. a YAML 1.1 `on:` key read as the bool `true`
