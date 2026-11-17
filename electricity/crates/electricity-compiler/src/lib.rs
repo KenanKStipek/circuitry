@@ -263,7 +263,7 @@ pub enum RunCheckError {
     Composition(Vec<String>),
     /// A `use` cycle: `Cycle: a → b → a`, already formatted.
     Cycle(String),
-    /// Lane A stub: the pipeline step that would have produced one of
+    /// The pipeline step that would have produced one of
     /// the variants above isn't implemented yet.
     NotImplemented(String),
 }

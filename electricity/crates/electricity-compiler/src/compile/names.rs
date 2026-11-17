@@ -1,4 +1,4 @@
-//! Lane C: `_validate_name` (`core/compiler.py`) -- an effect's `name:`
+//! `_validate_name` (`core/compiler.py`) -- an effect's `name:`
 //! field: must be a string, non-empty, no leading/trailing or internal
 //! whitespace, no `.`, not the reserved `iter_<n>` loop-pass pattern,
 //! not a structural-slot name the runtime itself writes (`value`,

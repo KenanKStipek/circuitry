@@ -1,4 +1,4 @@
-//! Lane B: `structural_errors`/`unknown_key_warnings`, porting
+//! `structural_errors`/`unknown_key_warnings`, porting
 //! `core/document_check.py`'s structural pass: near-miss unknown keys
 //! ([`crate::difflib`]), JSON Schema through [`crate::schema_instance`],
 //! `group:` placement, and `interface.inputs` checks.
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn a_yaml_bool_like_key_under_additional_properties_false_is_reported() {
-        // Issue #528's review: `on:`/`yes:`/`off:`/`no:`/`y:`/
+        // Issue #528: `on:`/`yes:`/`off:`/`no:`/`y:`/
         // `n:` parse to a Python `bool`, not a string, under PyYAML's
         // implicit resolver -- `additionalProperties: false`'s own
         // property-name scan (`_utils.find_additional_properties`) never
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn a_yaml_int_like_key_under_interface_inputs_descends_into_its_value() {
-        // Issue #528's review: `interface.inputs`'s own
+        // Issue #528: `interface.inputs`'s own
         // `additionalProperties` is a subschema, not `false`, so a
         // non-string key (`1:`, read as a Python `int`) doesn't just need
         // *reporting* -- Python still validates its value against that

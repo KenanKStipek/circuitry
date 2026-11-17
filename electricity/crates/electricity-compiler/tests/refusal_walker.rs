@@ -131,7 +131,7 @@ fn a_test_tools_provider_is_never_refused_it_is_not_a_cof_plugin_at_all() {
     // #511's fix means the walker leaves it for the real "Unknown
     // plugin" dispatch failure, with or without it listed in
     // *providers* (unlike a genuine, known-but-unbuilt cof plugin,
-    // which stays refused until its own M1 lane lands).
+    // which stays refused until a builder for it lands).
     let program = compile_doc(
         "sleep",
         "effects:\n\

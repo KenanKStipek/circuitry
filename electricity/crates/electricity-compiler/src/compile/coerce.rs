@@ -1,4 +1,4 @@
-//! Lane C: the Python coercions `core/compiler.py` applies to a raw
+//! The Python coercions `core/compiler.py` applies to a raw
 //! document value -- `int(...)`, `float(...)`, `str()`, truthiness, and
 //! the `a or b or default` truthy-chaining idiom it uses throughout for
 //! a field with a fallback -- plus `on_error:` normalization (an

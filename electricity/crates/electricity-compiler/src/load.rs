@@ -1,4 +1,4 @@
-//! Lane B: `load_document`, porting `cli/orchestration_loader.py`'s
+//! `load_document`, porting `cli/orchestration_loader.py`'s
 //! `load_orchestration_file`.
 //!
 //! The suffix picks the format (`.yml`/`.yaml` -> `electricity-yaml`,

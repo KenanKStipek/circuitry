@@ -18,8 +18,8 @@
 //! 2. **Reading**, `path.read_text(encoding="utf-8")`: strict UTF-8 (an
 //!    invalid byte gives CPython's own `UnicodeDecodeError` text,
 //!    unwrapped -- [`describe_utf8_error`], ported locally rather than
-//!    reusing `prompt_files.rs`'s private copy, a different lane's
-//!    file); universal newlines (`\r\n`/a lone `\r` -> `\n`); any other
+//!    reusing `prompt_files.rs`'s private copy, which isn't exported;
+//!    universal newlines (`\r\n`/a lone `\r` -> `\n`); any other
 //!    I/O failure gets electricity's own wrapped text.
 //! 3. **YAML**, `electricity_yaml::load_yaml_last_key_wins` (plain
 //!    `yaml.safe_load` semantics already -- no further loader needed):
@@ -46,8 +46,8 @@ fn name_repr(name: &str) -> String {
 
 /// Python's `str(PurePosixPath(given))`: collapses repeated `/`, drops
 /// `.` segments, strips a trailing `/`, keeps `..` unresolved. Ported
-/// locally (not reused from `load.rs`'s own private copy, a different
-/// lane's file) for every `{path}` in this module's own messages.
+/// locally (not reused from `load.rs`'s own private copy, which isn't
+/// exported) for every `{path}` in this module's own messages.
 ///
 /// One narrow divergence: `PurePosixPath` keeps exactly two leading
 /// slashes (POSIX reserves `//foo` as implementation-defined), but this
@@ -116,7 +116,7 @@ fn is_truthy(value: &Value) -> bool {
 
 /// `UnicodeDecodeError.__str__` -- a local port of
 /// `prompt_files.rs`'s own `describe_utf8_error`/`find_utf8_error`/
-/// `utf8_lead_shape` (a different lane's file, so duplicated here
+/// `utf8_lead_shape` (private there, so duplicated here
 /// rather than exposed from there): `'utf-8' codec can't decode byte
 /// 0xXX in position N: <reason>` for a single bad byte, or `can't
 /// decode bytes in position N-M: <reason>` when one or more otherwise-
@@ -225,7 +225,7 @@ pub fn parse_profile_document(path: &Path, name: &str) -> Result<Value, ProfileE
     if !errors.is_empty() {
         // Python sorts by `str(err)` (third-party `jsonschema` text,
         // which starts with the message) -- not reproducible here
-        // (DESIGN.md §1, the M1-J1 ruling); sort by `(message,
+        // (DESIGN.md §1, issue #488); sort by `(message,
         // location)` instead, the closest Rust analogue, and treat a
         // multi-error failure as a set of lines plus the exact header
         // when comparing (never by this order itself).
@@ -247,8 +247,8 @@ pub fn parse_profile_document(path: &Path, name: &str) -> Result<Value, ProfileE
 
 /// `cli/profiles.py::load_profile`, narrowed to electricity's own
 /// explicit-path discovery (DESIGN.md §1): discovery itself
-/// (`discover_profile_path`'s name-based search) is out of scope for
-/// this lane and this milestone -- *path* is always given directly.
+/// (`discover_profile_path`'s name-based search) is not implemented here
+/// -- *path* is always given directly.
 /// *document* is the raw orchestration document the run is checking
 /// the profile's `effects` keys against.
 pub fn load_profile(path: &Path, document: &Value) -> Result<ProfileSettings, ProfileError> {

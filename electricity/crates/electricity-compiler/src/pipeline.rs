@@ -1,4 +1,4 @@
-//! Lane B: `check_report`/`check_for_run`, matching
+//! `check_report`/`check_for_run`, matching
 //! `cli/runtime_shim.py`'s `validate(...)` and
 //! `run(RunRequest(..., validate_only=True))` -- the ordering of
 //! structural checks, concurrency-configuration errors, compilation,
@@ -50,7 +50,7 @@ fn runtime_block(document: &Value) -> Option<&Value> {
 
 /// The document's `runtime:` block merged over *options*' config-file
 /// runtime block, through [`electricity_config::merge_runtime`] (issue
-/// issue #431: `cli/effective_settings.py::_merge_runtime`'s real
+/// #431: `cli/effective_settings.py::_merge_runtime`'s real
 /// deep merge -- `plugins`/`adapters` one level deeper than the rest,
 /// the shell `allowed_commands` ceiling re-intersected afterward --
 /// replacing this function's own pre-#431 shallow, top-level-only
@@ -749,7 +749,7 @@ pub fn apply_declared_inputs(
 /// coercion; every key at or after it (including the one that failed)
 /// keeps its pre-coercion seeded value, exactly as `check_interface_
 /// inputs`'s own eager, mutate-as-you-go Python loop leaves `state[
-/// "input"]` when it raises partway through. Lane D2's own run wiring
+/// "input"]` when it raises partway through. `electricity`'s own run wiring
 /// calls this only once [`pre_state_checks`] itself has already failed
 /// (whether at this same step or an earlier one) -- `pre_state_checks`'s
 /// `Err` discards the partial namespace outright, since every other
@@ -960,7 +960,7 @@ pub struct Loaded {
     pub confinement_root: PathBuf,
 }
 
-/// Phase 1 of [`check_for_run`]'s own order (issue #431's gate lane,
+/// Phase 1 of [`check_for_run`]'s own order (issue #431,
 /// "Seams" section): *path*'s load error, exactly as `check_for_run`
 /// already reported it (`cli/runtime_shim.py::run`'s own `_load_
 /// document` step, which a bad path/parse fails before anything else
@@ -998,7 +998,7 @@ pub fn prepare_document(path: &Path, options: &CheckOptions) -> Result<Loaded, R
 /// block the concurrency/group checks run against -- [`check_for_run`]
 /// passes [`merged_runtime_block`]'s own result, now
 /// [`electricity_config::merge_runtime`]'s real deep merge (issue
-/// issue #431); a caller with a real [`electricity_config::
+/// #431); a caller with a real [`electricity_config::
 /// EffectiveSettings`] (run wiring) passes its own `runtime`
 /// field instead, which that same function also produces.
 ///
@@ -1780,7 +1780,7 @@ mod tests {
         // `1:` parses as `Value::Int(1)`, not the string `"1"` -- its
         // own `default:` must land under that exact literal key, the
         // same key Python's own `inputs[key] = default` would write to
-        // (issue #432's review).
+        // (issue #432).
         let doc = interface_doc_with_key(
             Value::Int(1.into()),
             vec![

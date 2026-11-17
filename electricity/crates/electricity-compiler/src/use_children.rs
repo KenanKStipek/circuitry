@@ -1,5 +1,5 @@
-//! Lane I prerequisites (issue #448, item U4): every literal
-//! `use:` child statically reachable from a document -- ported from
+//! Every literal
+//! `use:` child statically reachable from a document (issue #448, item U4) -- ported from
 //! `core/cycle_check.py::iter_use_children`. Two walks, both built on
 //! [`collect_use_paths`]/[`collect_use_inline`]:
 //!
@@ -40,11 +40,9 @@
 //! **A fresh, self-contained walk, not a reuse of [`crate::cycles`]'s
 //! own private helpers.** `crate::cycles::detect_cycles` already loads
 //! every literal child for its own three-color DFS, but keeps every
-//! helper that does so private to that file (an M0 file, predating the
-//! M1 lane split entirely -- not any M1 lane's own), and M1 lanes
-//! C/D1/H are running in parallel on this crate's other files right
-//! now -- adding `pub(crate)` to `cycles.rs`'s own internals would be
-//! an edit to a file this PR has no need to touch otherwise. The
+//! helper that does so private to that file; making them `pub(crate)`
+//! would mean editing a file this module otherwise has no need to
+//! touch, so this module duplicates the walk instead. The
 //! read/parse behaviour below is intentionally identical: absolute
 //! path, then the working directory, then the parent document's own
 //! directory; an unreadable or unparseable child counts as an empty

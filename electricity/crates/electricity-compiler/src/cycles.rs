@@ -1,4 +1,4 @@
-//! Lane C: ports `core/cycle_check.py`'s `detect_cycles` -- a static
+//! Ports `core/cycle_check.py`'s `detect_cycles` -- a static
 //! `use` cycle walk over `path:`/`orchestration:` references (`ref:` is
 //! rejected at compile time, DESIGN.md §4, so there is no library
 //! lookup and no `ref:` edge to walk; `inline:` uses are skipped, the

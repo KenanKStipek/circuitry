@@ -1,4 +1,4 @@
-//! Lane C: `_check_templates` (`core/compiler.py`) -- walks a raw
+//! `_check_templates` (`core/compiler.py`) -- walks a raw
 //! document value recursively, rejecting the first malformed Mustache
 //! template among its string leaves, and builds the matching
 //! [`TemplateText`] for a checked scalar field.
