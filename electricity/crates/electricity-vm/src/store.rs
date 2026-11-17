@@ -94,7 +94,7 @@ pub struct Node {
     hidden: Option<Value>,
     /// *fallback*'s own direct-entry count, frozen at the moment this
     /// overlay was built -- any key *fallback* gains at or after that
-    /// position (issue #501's second review) is invisible through this
+    /// position (issue #501) is invisible through this
     /// overlay, exactly as if it didn't exist. `core/scope.py::
     /// scope_ctx`'s own `prime = dict(ctx.get("prime") or {})` takes
     /// this same one-time snapshot of `prime`'s own key SET after every
@@ -263,7 +263,7 @@ pub fn node_with_fallback_hiding(
 
 /// [`node_with_fallback`], plus [`Node::watermark`] -- *fallback*'s own
 /// direct-entry count as of right now, so any key it gains afterward
-/// stays invisible through this overlay (issue #501's second review:
+/// stays invisible through this overlay (issue #501:
 /// `exec::loop_::step_overlay`'s own use).
 pub fn node_with_fallback_watermarked(
     entries: IndexMap<Value, Slot>,
@@ -561,7 +561,7 @@ impl Store {
     /// full content, not `{"$ref": ...}`. This is what a template/CEL
     /// evaluation's own `ctx` is built from (DESIGN.md §6.7's own
     /// `scope_ctx`/`local_writes` overlay rule on top of this snapshot is
-    /// lane B2's own interpreter's job, not this crate's) -- Circuitry's
+    /// the interpreter's own job, not this crate's) -- Circuitry's
     /// templates and CEL expressions read the *live* dicts, never a
     /// compacted saved form (`docs/orchestration-reference.md:545`,
     /// `core/saved_state.py`/`cli/runtime_shim.py`/`mcp/server.py` only
@@ -576,7 +576,7 @@ impl Store {
     /// wins its whole key, in whichever position it first appears"
     /// [`IndexMap::insert`] already gives every other merge in this
     /// crate -- *including* a key some enclosing overlay shadows (issue
-    /// #501's second review: a placeholder at that key's own
+    /// #501: a placeholder at that key's own
     /// *natural* position, the same one Python's `{**d, k: v}`/`prime[
     /// name] = own` would have left it at, holds that position until
     /// whichever shallower hop actually owns the key overwrites it --
@@ -584,8 +584,8 @@ impl Store {
     /// value without moving it, so the final position is the first,
     /// deepest place this key was ever seen, never wherever the
     /// shallowest hop happened to insert it after skipping every deeper
-    /// one). A key some overlay *does* shadow (on the first
-    /// review: without the skip half of this, a key `with_prev_
+    /// one). A key some overlay *does* shadow (without the skip half
+    /// of this, a key `with_prev_
     /// overlay`'s three stacked overlays all happen to leave untouched
     /// -- the common case, since each only ever adds `prev`/the loop
     /// name/`prime` -- would still get resolved once per overlay hop on
@@ -601,7 +601,7 @@ impl Store {
     /// applied before paying for the value instead of after, without
     /// also reordering it the way plain omission would. [`Node::hidden`]
     /// is skipped entirely -- no placeholder, no later owner to overwrite
-    /// it -- unconditionally (per the first review) -- see its
+    /// it -- unconditionally -- see its
     /// own doc comment.
     pub fn snapshot(&self, node: &NodeRef) -> Value {
         #[cfg(test)]

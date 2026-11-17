@@ -215,8 +215,8 @@ fn unknown_band_error(name: &str, override_repr: &str, settings: &ComplexitySett
 /// `resolve_complexity_settings`'s own failure branch (`core/prompt.py:
 /// 914-926`) is not ported: `run_ctx.complexity` is already resolved
 /// and validated before the run starts (`electricity_config::complexity::
-/// validate_complexity`, lane K1/D1), so that branch is unreachable here
-/// (issue #516 §7 ruling 6).
+/// validate_complexity`), so that branch is unreachable here
+/// (issue #516 §7).
 pub(crate) fn score_and_route(
     op: &Op,
     prompt: &PromptOp,

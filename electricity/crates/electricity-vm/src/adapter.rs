@@ -1,9 +1,9 @@
-//! The model-adapter seam (issue #449's gate lane, item 4) --
+//! The model-adapter seam (issue #449, item 4) --
 //! `adapters/base.py`/`adapters/factory.py`, ported. The trait lives in
 //! this crate, not `electricity-adapters`, following DESIGN.md §2's own
 //! dependency direction: the VM defines the trait boundary, and the
-//! crate that implements concrete adapters (`electricity-adapters`,
-//! lane F1/F2) depends on this one, never the reverse.
+//! crate that implements concrete adapters (`electricity-adapters`)
+//! depends on this one, never the reverse.
 //!
 //! [`Adapter`] itself has no stub implementor in this crate -- every
 //! concrete adapter (the Rust `scripted` adapter, `host_claude`'s
@@ -197,9 +197,8 @@ pub trait Adapter {
     /// `preflight.py`'s own per-adapter readiness probe -- `async`
     /// (PR #454: `ollama.py`'s own `check()`
     /// probes the daemon over the network, `adapters/ollama.py:220-`,
-    /// so a synchronous signature here would have forced lane F2 to
-    /// widen this trait's own "final and complete" method once it
-    /// ported that adapter).
+    /// so a synchronous signature here would have forced porting that
+    /// adapter to widen this trait's own "final and complete" method).
     async fn check(&self) -> CheckResult;
 
     /// `adapters.models.call_list_models`'s own fallback -- `[]` for an
@@ -209,7 +208,7 @@ pub trait Adapter {
         Vec::new()
     }
 
-    /// Whether this adapter accepts image inputs at all -- lane R's own
+    /// Whether this adapter accepts image inputs at all --
     /// `image_asset_warnings` (`runtime_shim.py:1610-1640`) warns once
     /// per run when a prompt attaches
     /// an image to an adapter that can't use it. `false` for every
@@ -665,7 +664,7 @@ mod tests {
     fn an_adapter_circuitry_supports_but_this_crate_cannot_build_yet_is_still_unknown_here() {
         // `ollama` is in Circuitry's own registry (and so in the
         // "Supported adapters" list the message above names), but this
-        // crate has no builder for it yet (lane F2).
+        // crate has no builder for it yet.
         let registry = AdapterRegistry::new();
         let err = match registry.build("ollama", &Value::None) {
             Err(err) => err,

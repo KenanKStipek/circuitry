@@ -1,8 +1,8 @@
 //! `adapters/_retry.py`, ported -- shared retry classification for any
-//! retrying effect (prompt, tool, `use`), issue #449's gate lane item 5.
+//! retrying effect (prompt, tool, `use`), issue #449, item 5.
 //! Moved out of `exec/tool.rs`'s own private copy (`RETRY_BACKOFF_CAP_MS`,
-//! `full_jitter_backoff_ms`) so lane E's HTTP-family tool branch and
-//! lane F2's adapter dispatch share one implementation instead of each
+//! `full_jitter_backoff_ms`) so the HTTP-family tool branch and
+//! adapter dispatch share one implementation instead of each
 //! growing their own.
 
 use rand::Rng;
@@ -31,7 +31,7 @@ fn is_http_family_provider(provider: &str) -> bool {
 /// `core/tool.py::ToolRuntime._is_retryable_failure` (PR #454) --
 /// *provider* already normalized (`.strip().lower()`);
 /// *status_code* is a status an *unraised*, `ok: false` result itself
-/// carried (lane E's own HTTP tool -- no M0/M1-A provider ever
+/// carried (the HTTP tool -- no M0/M1-A provider ever
 /// produces one); *cause* is the raised [`electricity_tools::ToolError`]'s
 /// own [`electricity_tools::ErrorCause`], when the failure was raised
 /// rather than returned. A non-HTTP-family provider (every provider
@@ -45,7 +45,7 @@ fn is_http_family_provider(provider: &str) -> bool {
 /// a failed `expect:` carries no classification of its own, and the
 /// motivating case (a flaky image-generation result) is exactly "try
 /// again". Checked before the HTTP-family short-circuit below, not
-/// just folded into one of *cause*'s own arms, so lane E's own
+/// just folded into one of *cause*'s own arms, so the
 /// HTTP-family expect check doesn't have to invent a dedicated
 /// [`electricity_tools::ErrorCause`] variant just to reach it.
 pub fn is_tool_failure_retryable(

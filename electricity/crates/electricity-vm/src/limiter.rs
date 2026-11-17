@@ -24,7 +24,7 @@
 //! to grab before missing the other one is released before it returns).
 //! This crate never writes the store itself -- a caller that wants
 //! `meta.waiting_for` writes it from inside its own `report` callback
-//! (`exec::dynamic`/`exec::tool`, lane B/C); cancellation is the same
+//! (`exec::dynamic`/`exec::tool`); cancellation is the same
 //! caller's own `select!` against `token.cancelled()` racing the
 //! `acquire`/`acquire_reporting` future, not something this crate
 //! polls for on its own (`core/concurrency.py::RunConcurrencyLimiter.

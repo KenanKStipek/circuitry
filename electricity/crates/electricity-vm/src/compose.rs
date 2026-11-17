@@ -3,12 +3,12 @@
 //! every composable field in the VM uses (runtime-semantics.md §3.4's
 //! own table): a tool's `prompt`/`params`/`params_json`, a `use`
 //! effect's `inputs`/`inline`, a `yield` effect's `template`, and
-//! (once lane G lands) a `prompt` effect's own `template`/`messages[].
+//! a `prompt` effect's own `template`/`messages[].
 //! content`. **Not** for a model-mode `if`/`while`/`expect` template or
-//! an asset `ref` (lane G/G2): those render plain Mustache with no
+//! an asset `ref`: those render plain Mustache with no
 //! `{{> name}}` expansion at all -- a partial tag there is a compile-time
-//! error, never something this function ever sees (the rulings on
-//! issue #487: "the compose function is for composable fields only").
+//! error, never something this function ever sees (issue #487:
+//! "the compose function is for composable fields only").
 //!
 //! [`render_with_composition`] runs in two phases, exactly like the
 //! Python port:
@@ -450,7 +450,7 @@ impl<R: ScopeRoot> ScopeRoot for HiddenOverlay<'_, R> {
 /// For composable fields only (runtime-semantics.md §3.4's own table):
 /// a model-mode `if`/`while`/`expect` template or an asset `ref`
 /// renders through [`electricity_template::render_template_with_root`]
-/// directly instead (lane G/G2), with `escape: true` and no `{{> name}}`
+/// directly instead, with `escape: true` and no `{{> name}}`
 /// expansion -- a partial tag there is a compile-time error the walker
 /// already rejects, never something this function is ever asked to
 /// expand.

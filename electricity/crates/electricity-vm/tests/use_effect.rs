@@ -1,4 +1,4 @@
-//! M1 lane I (issue #469): `use` effect execution -- integration tests
+//! Issue #469: `use` effect execution -- integration tests
 //! against real, compiled child documents under `tests/fixtures/use/`
 //! (the process cwd for a `cargo test` binary is this crate's own
 //! root, confirmed directly: `std::env::current_dir()` -- so a
@@ -578,7 +578,7 @@ async fn a_refused_path_child_never_runs_its_own_earlier_json_step() {
     assert!(error_text.contains(PREVIEW_MARKER), "got {error_text:?}");
 }
 
-/// Ruling R3 on PR #472's review (issue #469's own test
+/// PR #472 (issue #469's own test
 /// plan: "A use inside a tree dynamic ... no false cycle between
 /// sibling passes"). Not a conformance case: a named `dynamic`
 /// container's own `meta.adapter` picks up the same use-triggered
