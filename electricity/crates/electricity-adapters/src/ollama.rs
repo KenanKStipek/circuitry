@@ -1,8 +1,8 @@
 //! `adapters/ollama.py::OllamaAdapter`, ported -- native Ollama,
 //! `/api/generate`/`/api/chat`, over [`crate::transport`]. Issue
 //! #503's top priority: lands before the OpenAI-compatible family,
-//! which Ollama is *not* routed through (ruling 1: this adapter talks
-//! Ollama's own wire format, never the `/v1` compatibility shim).
+//! which Ollama is *not* routed through: this adapter talks
+//! Ollama's own wire format, never the `/v1` compatibility shim.
 
 use crate::config::{cfg_value_or, rstrip_base_url, stream_flag};
 use crate::curl_text::{curl_failure_message, parse_error_body, redact_host_url};
@@ -666,7 +666,7 @@ impl Adapter for OllamaAdapter {
             // `AttributeError` is swallowed into an ordinary `host:`
             // entry, never `call_check`'s own "check() raised ..." text
             // (confirmed by running `OllamaAdapter(base_url=5).check()`
-            // directly, post-F8: `CheckResult(ok=False, missing=['host:5'])`).
+            // directly: `CheckResult(ok=False, missing=['host:5'])`).
             Err(_) => {
                 return CheckResult {
                     ok: false,
@@ -991,7 +991,7 @@ mod tests {
     #[tokio::test]
     async fn check_reports_a_non_string_base_url_as_an_ordinary_missing_host() {
         // Confirmed by running `OllamaAdapter(base_url=5).check()`
-        // directly post-F8 (`curl_support.redact_host_url`'s own `str()`
+        // directly (`curl_support.redact_host_url`'s own `str()`
         // coercion): Python's own `check()` wraps the probe in a broad
         // `except Exception`, so the `AttributeError` from `self.
         // base_url.rstrip("/")` is swallowed into an ordinary `host:`

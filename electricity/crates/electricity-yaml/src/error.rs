@@ -54,7 +54,7 @@ pub enum YamlError {
     /// date/time CPython's own `datetime.date`/`datetime.time`
     /// constructors reject (`scalar::TimestampFailure::Invalid`'s own
     /// doc comment) -- *message* is CPython's own `ValueError` text,
-    /// unchanged. `validate_yaml` (#521's lane L2a) is the only caller
+    /// unchanged. `validate_yaml` (issue #521) is the only caller
     /// that re-raises this one rather than returning it as an ordinary
     /// parse error, matching `core/yaml_load.py::load_yaml`, which lets
     /// this exact `ValueError` escape uncaught.

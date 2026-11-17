@@ -2,7 +2,7 @@
 //! (`scripts/generate_yaml_dump_corpus.py`) -- real PyYAML's own
 //! `yaml.dump(value, default_flow_style=False, sort_keys=...)` output
 //! for every case, compared byte for byte against this crate's own
-//! [`dump`] (issue #506's lane L1).
+//! [`dump`] (issue #506).
 
 use electricity_value::{Dict, IntValue, Value};
 use electricity_yaml::{DumpOptions, dump};

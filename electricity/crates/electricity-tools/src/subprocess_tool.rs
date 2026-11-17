@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// One instance per binary-wrapping plugin file (`awk.rs`,
-/// `imagemagick.rs`, `ffmpeg.rs`, and lane C's own later additions),
+/// `imagemagick.rs`, `ffmpeg.rs`, and any later additions),
 /// each supplying its own *name*/*binary_candidates* -- `plugins/
 /// _subprocess.py::GenericSubprocessTool`'s own four fields.
 pub struct GenericSubprocessTool {
@@ -174,7 +174,7 @@ pub(crate) fn merged_env(
     // such variable (CPython copes by decoding with surrogateescape;
     // a variable that round-trip only matters if a plugin's own
     // argv/output ever needed to reproduce its *exact* bytes, which
-    // none of this lane's four tools do). A variable that still isn't
+    // none of `shell`/`awk`/`imagemagick`/`ffmpeg` do). A variable that still isn't
     // valid UTF-8 after this is simply dropped from the inherited set
     // rather than panicking -- safe to skip: the overwhelming common
     // case (every variable is valid UTF-8) is unaffected, and the

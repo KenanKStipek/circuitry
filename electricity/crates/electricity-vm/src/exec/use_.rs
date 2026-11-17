@@ -1,7 +1,7 @@
-//! `use` effect execution (`core/use.py::UseRuntime.execute`) -- M1
-//! lane I (issue #469). A child orchestration, loaded from a `path:`
+//! `use` effect execution (`core/use.py::UseRuntime.execute`) --
+//! issue #469. A child orchestration, loaded from a `path:`
 //! or rendered from `inline:`, runs isolated ([`run_isolated`], shared
-//! with M1-L2's decomposition lane) and its outputs are mapped back
+//! with decomposition) and its outputs are mapped back
 //! under the parent node in one of three modes (explicit `outputs:`,
 //! auto-generated from the child's own `interface.outputs`, or full
 //! passthrough of the child's own `prime` children).
@@ -41,8 +41,8 @@
 //! child's own execution finishes, success or failure, before
 //! [`run_isolated`] ever returns to its caller -- so [`execute_use`]'s
 //! own merge write always lands after the graft is gone, never racing
-//! it. This is generic to *any* [`run_isolated`] caller (this lane's
-//! own `use`, and M1-L2's decomposition): both need the identical "a
+//! it. This is generic to *any* [`run_isolated`] caller (`use`
+//! and decomposition): both need the identical "a
 //! child root's own pair is a duplicate; the parent should see the
 //! child's own running state" behaviour, so it lives here rather than
 //! being re-derived once per caller.
@@ -69,12 +69,11 @@
 //! (the top-level `-e` path's own default-fill/require/coerce mutation,
 //! `core/interface_inputs.py::check_interface_inputs`'s real body) was
 //! `fn`, not `pub fn` -- widened to `pub` (and re-exported) rather than
-//! duplicated a second time here, since this lane's own `interface.
+//! duplicated a second time here, since this module's own `interface.
 //! inputs` check against a `use` child's rendered inputs is exactly the
 //! same mutation against a different *namespace* (rendered inputs, not
 //! the CLI `-e` text-only one `build_input_namespace`'s own preamble
-//! builds) -- a minimal, additive visibility change to a file no other
-//! M1 lane edits, not a reshape of its behaviour.
+//! builds) -- a minimal, additive visibility change, not a reshape of its behaviour.
 
 use crate::exec::live_scope::LiveRoot;
 use crate::exec::{CtxChain, store_err};
@@ -291,8 +290,8 @@ fn write_attempts(store: &Store, meta_node: &NodeRef, attempts: &[Value]) {
 // walk (a mapping segment by exact key, a list segment by Python-
 // style, negative-wrapping index, `None` on any missing key/out-of-
 // range index/non-container segment) against any `ParamsCtx` -- a
-// plain already-materialized `Value` or, since issue #463 (PR #482
-// review), a live `LiveRoot` -- so this module calls that shared
+// plain already-materialized `Value` or, since issue #463 (PR #482),
+// a live `LiveRoot` -- so this module calls that shared
 // primitive directly rather than keeping its own second copy of it;
 // only the *caller's* contract around a `None` result (no `default:`,
 // passed through rather than raised -- `crate::params`'s own doc
@@ -1420,7 +1419,7 @@ async fn attempt_once<R: ParamsCtx>(
 
     // Refused before the child ever runs -- a freshly compiled child
     // program the parent's own up-front walker could never have seen
-    // (lane A's `first_unsupported`, rechecked here against the exact
+    // (`first_unsupported`, rechecked here against the exact
     // `Supported` value the parent run was already checked against).
     if let Some(refusal) = electricity_bytecode::first_unsupported(
         &child_program,
@@ -1566,8 +1565,7 @@ async fn attempt_once<R: ParamsCtx>(
             // execute_prompt`'s own dispatch-time `UnsupportedAdapter`
             // check, which has no child document of its own to name)
             // is claimed by *this* level -- the nearest enclosing `use`
-            // that actually ran the effect that raised it (issue #498
-            // ruling 4).
+            // that actually ran the effect that raised it (issue #498).
             return Err(AttemptProblem::Fatal(VmError::Refused {
                 refusal,
                 child_label: child_label.or_else(|| Some(loaded.label.clone())),
@@ -1814,7 +1812,7 @@ fn record_use_cancelled(
 
 /// `core/use.py::UseRuntime.execute` -- see this module's own doc
 /// comment for the overall design. No longer a `live_ctx` snapshot
-/// taken eagerly here (issue #463, PR #482's review): a `use`
+/// taken eagerly here (issue #463, PR #482): a `use`
 /// effect's own input render/`expect:` call sites resolve
 /// `live_scope::LiveRoot` lazily, the same way `exec::tool` already
 /// does, so a `use` effect inside a loop is O(N) total, not O(N^2).
@@ -1850,7 +1848,7 @@ pub(crate) async fn execute_use(
 /// [`execute_use`]'s own real body, generic over *ctx*'s own
 /// [`ParamsCtx`] rather than requiring an already-resolved [`Value`]
 /// (`R = Value` is still exactly that, so every existing caller --
-/// `tests/use_corpus.rs`'s golden-corpus replay, from PR #472's review,
+/// `tests/use_corpus.rs`'s golden-corpus replay, from PR #472,
 /// which cannot name a [`CtxChain`]/[`CtxSource`] of its own:
 /// both are `pub(crate)` to `exec/mod.rs` -- keeps compiling and
 /// behaving unchanged). `core/use.py`'s own `UseRuntime.execute(store,
@@ -2422,7 +2420,7 @@ async fn run_isolated_inner(
 /// *initial_state* (never the parent's own store) -- there is no
 /// `core/use.py::_run_isolated` to port this from: `UseRuntime.execute`
 /// builds its own child `Store` inline, with no separate function of
-/// its own. Shared by `use` (this lane) and decomposition (lane L2).
+/// its own. Shared by `use` and decomposition.
 ///
 /// Returns the [`Store`] *and* the run's own result, always, rather
 /// than discarding the store on an `Err` the way a plain `Result<Store,
@@ -2468,7 +2466,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::rc::Rc;
 
-    /// PR #472 (ruling R5): a
+    /// PR #472: a
     /// retryable child-run failure must *collect* its own
     /// `record_children` record, never apply it -- only [`execute_use`]
     /// applies it, and only once it knows this attempt is the last one.
@@ -2766,7 +2764,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
 
     /// Captures the *timeout_seconds* a `use` effect's own model
     /// `expect:` dispatches with, replying `"yes"` so the attempt
-    /// succeeds -- issue #513's review: a `use` effect has no
+    /// succeeds -- issue #513: a `use` effect has no
     /// timeout of its own, so this call site must forward
     /// `run_ctx.adapter_timeout_seconds` verbatim, never a tool-shaped
     /// resolved value (that's `tool.rs`'s own call site instead).
@@ -2810,7 +2808,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         }
     }
 
-    /// Issue #513's review: the outer `execute_use_with_ctx`
+    /// Issue #513: the outer `execute_use_with_ctx`
     /// retry check, not just `attempt_once`'s own `Raised`
     /// classification, must not retry a `TemplateError` -- a render
     /// failure in the expect template itself (subscripting an `int`
@@ -3208,7 +3206,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     /// A minimal, leaked `RunContext` carrying *declared_prompts*/
     /// *effect_names* -- the two inputs this module's own composition
     /// tests (`{{> name}}` through `use.inline`/`use.inputs`, issue
-    /// #492's review) actually vary; every other field is the
+    /// #492) actually vary; every other field is the
     /// same inert M0-H shape `attempt_once`'s own existing test above
     /// builds by hand.
     fn run_ctx_for_composition<'a>(

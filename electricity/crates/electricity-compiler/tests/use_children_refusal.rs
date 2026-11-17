@@ -1,12 +1,12 @@
-//! Proves the seam `use_children::iter_use_path_children` exposes (M1
-//! lane I prerequisites, issue #448, item U4): walking a document's own
+//! Proves the seam `use_children::iter_use_path_children` exposes
+//! (issue #448, item U4): walking a document's own
 //! literal `use: {path:}` children, compiling each one, and checking it
 //! against `electricity_bytecode::first_unsupported` and
 //! `electricity_config::orchestration_denials` -- the same
 //! two checks the parent document already got, now run against a child
 //! no static walk over the *parent* alone could ever see. Wiring either
 //! check into a real run (so a `use` effect whose own child needs this
-//! is actually refused before the run reaches it) stays lane I's own
+//! is actually refused before the run reaches it) is a separate
 //! job; this only proves the walk feeds both correctly.
 //!
 //! M0 behaviour is unchanged either way: a document with a `use` effect
@@ -29,11 +29,11 @@ fn tmp_dir(tag: &str) -> PathBuf {
     dir
 }
 
-/// A test-only [`Supported`] with `use_` on and nothing else -- M1
-/// lane I has not landed, so this is never `Supported::current`'s own
-/// value; it only exists to let a test compile a document containing a
-/// `use` effect past the walker's own `RefusalReason::Use` check, the
-/// same way lane I's own tests (once it lands) will need to.
+/// A test-only [`Supported`] with `use_` on and nothing else -- `use`
+/// support has not landed yet, so this is never `Supported::current`'s
+/// own value; it only exists to let a test compile a document containing
+/// a `use` effect past the walker's own `RefusalReason::Use` check, the
+/// same way the real tests (once it lands) will need to.
 fn supported_with_use_only() -> Supported<'static> {
     Supported {
         use_: true,

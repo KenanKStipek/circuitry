@@ -1,7 +1,7 @@
 //! `run_tool`: the VM's own tool-dispatch entry point -- looks a `tool`
 //! effect's `provider:` up in an [`electricity_tools::ToolRegistry`] and
-//! runs it. The dispatch seam itself is final (lane B/C never edit this
-//! file to wire a new provider in; they only build the registry they
+//! runs it. The dispatch seam itself is final (nothing here is edited
+//! to wire a new provider in; callers only build the registry they
 //! pass to it); *provider* normalization already matches `plugins/
 //! factory.py::build_plugin`'s own `.strip().lower()` (below), and the
 //! "unknown provider" text is already exact -- [`electricity_tools::
@@ -10,7 +10,7 @@
 //! plugin_names::PLUGIN_NAMES`), not just this crate's own
 //! [`electricity_tools::ToolRegistry`].
 //!
-//! [`execute_tool`] is the lane C's own owning entry point for a `tool`
+//! [`execute_tool`] is the owning entry point for a `tool`
 //! effect -- a close port of `core/tool.py::ToolRuntime.execute`. It
 //! owns:
 //!
@@ -33,14 +33,14 @@
 //!   [`crate::VmError::Cancelled`]'s own doc comment).
 //!
 //! The HTTP-family status-code/`Retry-After` machinery (`core/tool.py`'s
-//! own `_HTTP_FAMILY_PROVIDERS`/`_is_retryable_failure`) is lane E's own
-//! fill (issue #485): [`http_family_provider`] below, `meta.status_code`
+//! own `_HTTP_FAMILY_PROVIDERS`/`_is_retryable_failure`) is issue #485's
+//! own fill: [`http_family_provider`] below, `meta.status_code`
 //! and `Retry-After`-aware backoff in [`execute_tool`]'s own result
 //! branch. Still deliberately out of scope for M0-H, all because the
 //! only provider this milestone ever dispatches through [`run_tool`] is
 //! `json` (issue #431's Scope section):
 //! - `meta.binary` (`core/tool.py:822-823`) is generic across every
-//!   provider instead, so this gate wires it here (M1 gate seam S2):
+//!   provider instead, so this gate wires it here:
 //!   `json`'s own `ToolResult.raw` never carries a `binary` key, so the
 //!   write is still a no-op for every M0 case;
 //! - `expect: {mode: model, ...}` -- refused before a run starts
@@ -108,7 +108,7 @@ impl ResolvedPlugin<'_> {
 /// still register) always wins when one is registered under
 /// *provider*'s own normalized name. Only a *provider* with no such
 /// entry falls through to [`electricity_tools::build_plugin`] (issue
-/// #449's gate lane item 2) -- called fresh on *this* call, i.e. once
+/// #449, item 2) -- called fresh on *this* call, i.e. once
 /// per attempt, exactly where `core/tool.py::ToolRuntime.execute` calls
 /// Python's own `build_plugin` every attempt -- so a per-plugin config
 /// error on that path fails just the one attempt. `json` is never
@@ -139,7 +139,7 @@ pub fn resolve_plugin<'a>(
     Ok(ResolvedPlugin::Built(plugin))
 }
 
-/// Dispatches *params* (already rendered -- lane B/C's own `params.rs`:
+/// Dispatches *params* (already rendered -- `params.rs`'s own job:
 /// `{from: ...}` resolved, templates rendered, `params_json`
 /// deep-merged; out of scope for this function) through *plugin*
 /// ([`resolve_plugin`]'s own result, resolved by the caller *before*
@@ -224,9 +224,9 @@ fn http_family_provider(provider: &str) -> bool {
 
 /// `core/tool.py::ToolRuntime._resolve_timeout_seconds`. *runtime_config*
 /// is the merged `runtime:` block [`RunContext::runtime_config`] carries;
-/// lane D is the one that ever populates `runtime.tools.timeout_seconds`
-/// in it, so this always falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]
-/// until then. A `timeout_ms: {from: ...}` is read from *ctx* here, for
+/// a configured `runtime.tools.timeout_seconds` there applies, otherwise
+/// this falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]. A `timeout_ms:
+/// {from: ...}` is read from *ctx* here, for
 /// each attempt (issue #564), and fails with the text `tool`'s own
 /// `meta.error` records.
 fn resolve_timeout_seconds<R: ParamsCtx>(
@@ -1153,14 +1153,14 @@ pub async fn execute_tool<R: ParamsCtx>(
         // Published the moment a fresh attempt's own `meta` is visible,
         // the same way `--live-state` would catch up with Python's own
         // plain dict mutations here (never behind a `store.set` of their
-        // own, but always live through the same shared node) -- lane
-        // D2's own mirror only ever learns a run changed shape by
+        // own, but always live through the same shared node) --
+        // electricity's own live-state mirror only ever learns a run changed shape by
         // polling `RunObserver::write`'s own call count, never by
         // diffing the store itself.
         observer.write();
 
         let mut failure: Option<electricity_tools::ToolError> = None;
-        // Lane E (issue #485): `meta.status_code`'s own value, when a
+        // Issue #485: `meta.status_code`'s own value, when a
         // returned result's `raw.status` was an int *and* this
         // provider is HTTP family (`is_http_family_provider`, below).
         // Threaded past the big `match` below so the retry
@@ -1172,7 +1172,7 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `retry-after`/`Retry-After` value, captured before
         // `capped_raw` redacts/consumes `result.raw` below. Only ever
         // set on an `ok: false` returned result -- never a raised
-        // failure or a failed `expect:` (issue #485's own ruling).
+        // failure or a failed `expect:` (issue #485).
         let mut retry_after_for_backoff: Option<String> = None;
         // Issue #724: this attempt's own `result.tokens_sent`/
         // `.tokens_received`, threaded past the big `match` below the
@@ -1758,7 +1758,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 .map(|code| Value::from(i64::from(code)))
                                                 .unwrap_or(Value::None),
                                         );
-                                        // Lane E (issue #485): `meta.status_code`,
+                                        // Issue #485: `meta.status_code`,
                                         // HTTP-family providers only (`core/
                                         // tool.py`'s own `_HTTP_FAMILY_PROVIDERS`
                                         // gate), the provider's own *as-written*
@@ -1813,7 +1813,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                         }
                                         // Generic across every provider (`core/
                                         // tool.py:822-823`): a `meta.binary` write
-                                        // this gate owns, not lane C/E's own HTTP-
+                                        // this gate owns, not the HTTP-
                                         // family status-code machinery -- `json`
                                         // never sets `raw.binary`, so this is a
                                         // no-op for M0's own output; a later
@@ -2113,7 +2113,7 @@ pub async fn execute_tool<R: ParamsCtx>(
             // non-HTTP-family provider (every provider this crate can
             // build today: `json`, plus `sleep`/`fail` under
             // `test-tools`) retries on any failure, unchanged from
-            // M0-H; lane E's own HTTP-family tool is what first makes
+            // M0-H; the HTTP-family tool is what first makes
             // *retryable* ever come back `false` here for a dispatch
             // failure -- never for a failed `expect:`, which is always
             // retryable regardless of provider (`expect_failed` above).
@@ -2128,7 +2128,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                     expect_failed,
                 );
             if !is_last_attempt && retryable {
-                // Lane E (issue #485): a provider's own `Retry-After`
+                // Issue #485: a provider's own `Retry-After`
                 // overrides the computed backoff -- only ever present
                 // for an `ok: false` returned result
                 // (`retry_after_for_backoff`'s own doc comment above:
@@ -3384,7 +3384,7 @@ mod tests {
     /// `core/tool.py::ToolRuntime.execute`'s own `with concurrency_cm:`
     /// ends before a `mode: model` `expect:` -- issue #513's own test
     /// list, item "the tool limiter slot is free during the expect
-    /// call". Blocks inside `generate()` until released, so the probe
+    /// call". Blocks inside `generate()` until released, so the test
     /// below can observe the slot while the call is still pending.
     struct BlockingAdapter {
         started: std::rc::Rc<tokio::sync::Notify>,
@@ -4018,7 +4018,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_build_error_fails_one_attempt_and_is_retried_like_any_other_failure() {
-        // S1 (M1 gate seam round 2): `registry::Builder` is now
+        // `registry::Builder` is now
         // fallible, like `plugins/factory.py::_build_shell`/
         // `plugin_env_override`, which validate their own config and
         // raise. `flaky_build` (`test-tools` feature) fails its first
@@ -4149,10 +4149,10 @@ mod tests {
 
     #[tokio::test]
     async fn meta_binary_is_set_generically_from_any_providers_own_raw_binary_key() {
-        // S2 (M1 gate seam round 2): `core/tool.py:822-823`'s own
+        // `core/tool.py:822-823`'s own
         // `if "binary" in result.raw: meta["binary"] = result.raw[
-        // "binary"]` is generic across every provider, not lane E's
-        // own HTTP-family write -- `json` never produces one, so this
+        // "binary"]` is generic across every provider, not the
+        // HTTP-family write -- `json` never produces one, so this
         // uses a test-only tool whose `raw` does.
         struct BinaryTool;
         #[async_trait::async_trait(?Send)]
@@ -4973,7 +4973,7 @@ mod tests {
     }
 
     #[tokio::test]
-    // The fast path a prior fix pass declined to test in isolation (see
+    // The fast path not tested in isolation elsewhere (see
     // this module's own cancellation-points doc comment above the first
     // of the three `a_cancelled_token_stops_a_queued_*` tests): the
     // synchronous `token.is_set()` guard in front of a *due* retry's own

@@ -7,11 +7,11 @@
 //! [`electricity_tools::http_client`] directly, the same transport
 //! primitive the `http` tool (`electricity_tools::http`) uses, rather
 //! than [`crate::transport::run_curl`]'s curl-flavored header set and
-//! exit-code mapping. Issue #515's own review: every
+//! exit-code mapping. Issue #515: every
 //! point below reuses the `http` tool's own urllib logic directly
 //! (`electricity_tools::http::resolve_proxy_target`/`http_url::urljoin`,
 //! `TimeoutModel::PerOperation`) rather than re-deriving it, the same
-//! ruling that produced `http.rs` in the first place.
+//! reason that produced `http.rs` in the first place.
 //!
 //! Wire format -- ground truth is `apps/expo/src/models/job.rs` in
 //! KenanKStipek/CyberDiner: `POST {expo_url}/beta/jobs` with

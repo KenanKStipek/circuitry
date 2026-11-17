@@ -1,4 +1,4 @@
-//! Lane A: `ParamNode`, the IR for a tool's `params`/`params_json` and a
+//! `ParamNode`, the IR for a tool's `params`/`params_json` and a
 //! `use`'s `inputs` (issue #408's Scope section).
 
 use crate::template::TemplateText;
@@ -14,8 +14,8 @@ use serde::{Serialize, Serializer};
 /// string containing `{{ }}` becomes a `Template`, a `{from: ...}`
 /// mapping becomes `From`, and a nested mapping/list becomes `Map`/`List`
 /// of the same walk applied to its children — matching
-/// `core/templates.py`'s own recursive params-walk (lane C ports the
-/// walk itself; this lane only fixes its output shape).
+/// `core/templates.py`'s own recursive params-walk (the compiler ports
+/// the walk itself; this crate only fixes its output shape).
 ///
 /// `Map` is keyed by [`Value`], not `String`: a YAML/JSON mapping key
 /// need not be a string (`yes:`/`1:` parse as `Value::Bool`/`Value::Int`,
@@ -57,7 +57,7 @@ pub enum ParamNode {
 /// `True`/`False` -> `"true"`/`"false"`, `None` -> `"null"`, a number ->
 /// its decimal text), the same stringification the `json` tool's own
 /// output already applies to a non-string `params`/`params_json` key
-/// (issue #431's gate lane, item 3) -- so `--dump-ir` keeps the
+/// (issue #431, item 3) -- so `--dump-ir` keeps the
 /// `Value`-keyed map's shape readable as a JSON object instead of
 /// failing on the one key shape JSON objects can't represent directly.
 impl Serialize for ParamNode {

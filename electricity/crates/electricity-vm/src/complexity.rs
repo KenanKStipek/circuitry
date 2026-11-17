@@ -159,7 +159,7 @@ fn structure_value(display_depth: u32) -> Value {
 /// `meta["band"] = {"name": ..., "model": ...}` (`core/prompt.py:
 /// ~1000-1027`), inserted (or overwritten, for a pin) after every other
 /// key `ComplexityScore::to_meta` already wrote -- `band` is always the
-/// last key, issue #516 §3.2's own key-order ruling.
+/// last key (issue #516 §3.2).
 fn set_band(meta: &mut Value, name: &str, model: &str) {
     let Value::Dict(dict) = meta else {
         unreachable!("score_and_route only ever builds a Dict meta")
@@ -215,8 +215,8 @@ fn unknown_band_error(name: &str, override_repr: &str, settings: &ComplexitySett
 /// `resolve_complexity_settings`'s own failure branch (`core/prompt.py:
 /// 914-926`) is not ported: `run_ctx.complexity` is already resolved
 /// and validated before the run starts (`electricity_config::complexity::
-/// validate_complexity`, lane K1/D1), so that branch is unreachable here
-/// (issue #516 §7 ruling 6).
+/// validate_complexity`), so that branch is unreachable here
+/// (issue #516 §7).
 pub(crate) fn score_and_route(
     op: &Op,
     prompt: &PromptOp,

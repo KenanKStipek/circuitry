@@ -1657,7 +1657,7 @@ mod last_key_wins_tests {
     use super::{load_yaml, load_yaml_last_key_wins};
     use electricity_value::Value;
 
-    /// Second review of #415: `load_yaml_last_key_wins`
+    /// #415: `load_yaml_last_key_wins`
     /// keeps the *last* value for a repeated own key, at the *first*
     /// occurrence's position -- plain `dict` literal semantics, not
     /// `_UniqueKeyLoader`'s. A corpus case with two *equal* repeated

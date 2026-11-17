@@ -1,5 +1,5 @@
 //! On a 2 MiB thread stack, loading and checking the deepest nesting
-//! `electricity-yaml` accepts must never overflow (issue #408's lane B
+//! `electricity-yaml` accepts must never overflow (issue #408's
 //! acceptance criterion) -- the same standard `electricity-yaml`'s own
 //! `tests/nesting_limit.rs` holds itself to, applied here to
 //! [`load_document`]/[`structural_errors`]/[`check_report`]'s own

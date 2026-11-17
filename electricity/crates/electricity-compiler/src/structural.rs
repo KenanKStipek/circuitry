@@ -1,4 +1,4 @@
-//! Lane B: `structural_errors`/`unknown_key_warnings`, porting
+//! `structural_errors`/`unknown_key_warnings`, porting
 //! `core/document_check.py`'s structural pass: near-miss unknown keys
 //! ([`crate::difflib`]), JSON Schema through [`crate::schema_instance`],
 //! `group:` placement, and `interface.inputs` checks.
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn a_yaml_bool_like_key_under_additional_properties_false_is_reported() {
-        // Issue #528's review: `on:`/`yes:`/`off:`/`no:`/`y:`/
+        // Issue #528: `on:`/`yes:`/`off:`/`no:`/`y:`/
         // `n:` parse to a Python `bool`, not a string, under PyYAML's
         // implicit resolver -- `additionalProperties: false`'s own
         // property-name scan (`_utils.find_additional_properties`) never
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn a_yaml_int_like_key_under_interface_inputs_descends_into_its_value() {
-        // Issue #528's review: `interface.inputs`'s own
+        // Issue #528: `interface.inputs`'s own
         // `additionalProperties` is a subschema, not `false`, so a
         // non-string key (`1:`, read as a Python `int`) doesn't just need
         // *reporting* -- Python still validates its value against that
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn a_date_at_an_object_typed_position_is_exactly_one_error() {
-        // F2 (second-round review): `retries` is `{"type": "object",
+        // `retries` is `{"type": "object",
         // "additionalProperties": false}` -- a marker object there used to
         // also trip "additionalProperties" (leaking the internal marker
         // key name) on top of the "type" error. Python's own `jsonschema`
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn an_integer_beyond_f64_range_is_a_maximum_error_not_a_panic() {
-        // F1/F4 (second-round review): `threshold` is `number`, `minimum:
+        // `threshold` is `number`, `minimum:
         // 0`, `maximum: 1` -- a bare YAML integer this large used to panic
         // inside the `jsonschema` crate (`arbitrary_precision`'s `as_f64`
         // returns `None` for a value that overflows to infinity, and
@@ -890,7 +890,7 @@ mod tests {
         let warnings = unknown_key_warnings(&Value::Dict(dict));
         assert_eq!(warnings.len(), 1);
         // Python's `type(key).__name__` for a `datetime.date` is `"date"`,
-        // not the module-qualified `"datetime.date"` -- F5.
+        // not the module-qualified `"datetime.date"`.
         assert!(
             warnings[0].contains("(YAML read the unquoted key as a date)"),
             "{warnings:?}"
@@ -915,8 +915,7 @@ mod tests {
         let errors = interface_unknown_type_errors(&Value::Dict(dict));
         assert_eq!(errors.len(), 1);
         // `f"interface.inputs.{key}..."` renders an int key as `str(key)`
-        // ("1"), not the blank text `key.as_str().unwrap_or_default()`
-        // -- F5.
+        // ("1"), not the blank text `key.as_str().unwrap_or_default()`.
         assert!(
             errors[0].starts_with("interface.inputs.1.type:"),
             "{errors:?}"
@@ -960,7 +959,7 @@ mod tests {
     /// Replays `electricity/scripts/generate_compiler_difflib_corpus.py`'s
     /// golden cases -- `core.document_check._near_miss` (the `_MISTAKEN_FOR`
     /// table plus `difflib.get_close_matches`, cutoff 0.8) against
-    /// Circuitry's own real known-key sets, not a hand-typed value (F9).
+    /// Circuitry's own real known-key sets, not a hand-typed value.
     #[derive(serde::Deserialize)]
     struct DifflibCase {
         word: String,

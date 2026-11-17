@@ -1,7 +1,7 @@
-//! `RunRequest`/`RunResult`: the shapes lane D's own `run_orchestration`
+//! `RunRequest`/`RunResult`: the shapes `run_orchestration`
 //! (issue #431's run-wiring steps 4-19) takes and returns, once it
 //! replaces this crate's current preview-refusal [`crate::run_orchestration`].
-//! Lane A stub: both types are this crate's final public shape for them;
+//! Both types are this crate's final public shape for them;
 //! neither is wired into anything yet.
 
 use electricity_value::Value;
@@ -35,7 +35,7 @@ pub struct RunRequest {
     pub pretty: bool,
     pub live_state_path: Option<PathBuf>,
     pub events_path: Option<PathBuf>,
-    /// `--profile <path>` (issue #495, lane R) -- an explicit path
+    /// `--profile <path>` (issue #495) -- an explicit path
     /// only (DESIGN §1, §6.11: no name discovery, no
     /// `--profile-from-state`).
     pub profile_path: Option<PathBuf>,
@@ -125,7 +125,7 @@ pub struct RunRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunResult {
     pub ok: bool,
-    /// A loaded profile's own `out:` (issue #495, lane R) -- honoured
+    /// A loaded profile's own `out:` (issue #495) -- honoured
     /// by the caller (`electricity-cli`'s own `main`) only when no
     /// `--out` was given; `None` whenever this run never resolved a
     /// profile, or resolved one with no `out:` of its own, or failed

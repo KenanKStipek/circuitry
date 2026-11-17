@@ -1,4 +1,4 @@
-//! Lane C: the Python coercions `core/compiler.py` applies to a raw
+//! The Python coercions `core/compiler.py` applies to a raw
 //! document value -- `int(...)`, `float(...)`, `str()`, truthiness, and
 //! the `a or b or default` truthy-chaining idiom it uses throughout for
 //! a field with a fallback -- plus `on_error:` normalization (an
@@ -53,7 +53,7 @@ pub(crate) fn get_bool_default(dict: &Dict, key: &str, default: bool) -> bool {
 /// (CPython's leniency around whitespace/underscores/arbitrary
 /// precision is not reproduced, matching `electricity-template`'s own
 /// documented `int()` divergence); anything else, or a string that
-/// doesn't parse, is `0` -- schema validation (lane B) has already
+/// doesn't parse, is `0` -- schema validation has already
 /// rejected a document whose own schema requires an integer here; a
 /// value that reaches this coercion with the wrong Python type at all
 /// is already outside what `cof check` would have accepted, so `0` is

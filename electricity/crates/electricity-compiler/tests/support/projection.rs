@@ -1,9 +1,9 @@
-//! Lane C: projects a compiled [`Program`] back into the shape
+//! Projects a compiled [`Program`] back into the shape
 //! `_compiler_corpus.py`'s `_dump_definition` dumps Circuitry's own
 //! `DynamicDefinition` tree as -- plain dataclass-shaped JSON, field
 //! for field, per `electricity-bytecode`'s own
-//! `tests/definition_fields.rs` mapping. Used only by `golden_compile.rs`
-//! (lane C); nothing outside this crate's own tests reads it.
+//! `tests/definition_fields.rs` mapping. Used only by `golden_compile.rs`;
+//! nothing outside this crate's own tests reads it.
 //!
 //! Three deliberate, narrow exceptions from a literal field-for-field
 //! dump, each documented as such in `electricity-bytecode`'s own crate
@@ -27,9 +27,9 @@
 //!   compiler checks the value but the IR does not carry it. Projected
 //!   as `null` and never compared.
 
-// golden_smoke.rs/no_leaked_paths.rs (lane A) compile this module too
+// golden_smoke.rs/no_leaked_paths.rs compile this module too
 // (via `mod support;`) but never call into it -- only golden_compile.rs
-// (this lane) does, the same reason `reference.rs` carries this same
+// does, the same reason `reference.rs` carries this same
 // allow.
 #![allow(dead_code)]
 
@@ -212,7 +212,7 @@ fn project_timeout_ms(timeout_ms: &Option<electricity_bytecode::effects::Timeout
 }
 
 /// `PromptOp::retries` is the one genuinely `Option` field of the three
-/// (issue #498, lane G seam) -- `null` when the document omitted
+/// (issue #498) -- `null` when the document omitted
 /// `retries:` or gave an empty mapping, a concrete object otherwise, so
 /// this projects it exactly rather than through [`project_retries`]'s
 /// own "always materializes defaults" behaviour.

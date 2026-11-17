@@ -1,8 +1,8 @@
 //! The human-readable text a [`crate::Refusal`] renders as -- moved out
-//! of `electricity` (lib)'s own `src/lib.rs` (M1 lane I prerequisites,
-//! issue #448) so a mid-run refusal (a freshly-compiled `use` child
+//! of `electricity` (lib)'s own `src/lib.rs` (issue #448)
+//! so a mid-run refusal (a freshly-compiled `use` child
 //! that [`crate::first_unsupported`] rejects once its own path is
-//! actually reached, lane I's own job) can report the exact same
+//! actually reached) can report the exact same
 //! preview-marker phrasing an up-front refusal already does, without
 //! `electricity-vm` depending on the `electricity` (lib) crate itself
 //! (DESIGN.md §2's own dependency direction: `vm` never depends on the
@@ -31,8 +31,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PREVIEW_MARKER: &str = "is a preview and can't run this orchestration";
 
 /// `electricity_bytecode::RefusalReason` -> the human-readable half of
-/// the refusal message [`format_refusal`] builds (issue #431's gate
-/// lane: "the refusal message keeps the existing preview marker phrase
+/// the refusal message [`format_refusal`] builds (issue #431:
+/// "the refusal message keeps the existing preview marker phrase
 /// and adds the effect path and the reason").
 pub fn refusal_reason_text(reason: &RefusalReason) -> String {
     match reason {
@@ -77,7 +77,7 @@ pub fn format_refusal(refusal: &Refusal) -> String {
 /// The same preview-marker phrasing as [`format_refusal`], for a
 /// refusal found *mid-run* rather than up front -- a freshly-compiled
 /// `use` child whose own path the static walker could never see ahead
-/// of time (M1 lane I, `electricity_vm::VmError::Refused`). *child_label*
+/// of time (`electricity_vm::VmError::Refused`). *child_label*
 /// names the child document the way `cli/allowlist.py::check_allowlist`'s
 /// own `f"use child {label}: {denial}"` already does for the same kind
 /// of per-child reporting, so a user sees the same wording for a

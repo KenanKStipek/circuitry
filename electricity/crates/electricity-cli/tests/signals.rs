@@ -24,8 +24,7 @@
 //! signal aimed at the group never reaches this test binary's own), and
 //! [`Child::drop`]'s own `TestChild` wrapper SIGKILLs that whole group
 //! on teardown -- including a panicking assertion -- so a timed-out or
-//! still-sleeping child is never left behind as an orphan
-//! (`LANE-CONTRACT.md`'s own rule).
+//! still-sleeping child is never left behind as an orphan.
 
 #![cfg(feature = "test-tools")]
 
@@ -160,9 +159,9 @@ fn live_state_path(home: &TempHome) -> PathBuf {
 /// starts, so its existence is firm evidence the signal handler is
 /// already installed, unlike a fixed sleep: on a quiet machine a few
 /// milliseconds is enough, but a busy one sharing this machine with
-/// other work (`LANE-CONTRACT.md`'s own warning) can stretch process
+/// other work on a shared machine can stretch process
 /// startup well past what looked like a safe fixed margin in testing
-/// -- confirmed directly during this test's own review (PR #441):
+/// -- confirmed directly on a loaded machine (PR #441):
 /// a 200ms fixed sleep here was intermittently too short
 /// under load, sending SIGINT before the handler was installed and
 /// letting the OS's own default disposition kill the child instead.
@@ -692,8 +691,8 @@ finally:
 }
 
 /// Not `#[ignore]`: proves the test harness itself (process group,
-/// signal delivery, teardown) works today, independent of lanes B/C --
-/// a `--help` child isn't long-running, so SIGINT just has to reach it
+/// signal delivery, teardown) works today, without needing any
+/// effect type's own support -- a `--help` child isn't long-running, so SIGINT just has to reach it
 /// (or it finishes before the signal does, either is fine) without
 /// hanging or leaking a process.
 #[test]

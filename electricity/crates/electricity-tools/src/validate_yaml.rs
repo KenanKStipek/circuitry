@@ -1,5 +1,5 @@
 //! `plugins/validate_yaml.py::ValidateYamlPlugin`, ported in full
-//! (issue #521, lane L2a of #448). Made a native tool by #448's
+//! (issue #521, issue #448). Made a native tool by #448's
 //! decision 3, because decomposition's own bundled planner
 //! (`electricity-vm::decompose::PLANNER_YAML`) calls it twice -- every
 //! other plugin in Circuitry's registry stays refused up front until
@@ -112,7 +112,7 @@ impl ToolPlugin for ValidateYamlPlugin {
                 // `OverflowError`/`ValueError` CPython never catches here
                 // (`except (TypeError, ValueError)` doesn't name
                 // `OverflowError`) -- it escapes bare, unwrapped, with no
-                // "must be an integer:" prefix (PR #524's review).
+                // "must be an integer:" prefix (#524).
                 Err(err) if err.py_class == PyExc::OverflowError => {
                     return Err(ToolError {
                         py_class: PyExc::OverflowError,

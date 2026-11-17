@@ -1,7 +1,7 @@
-//! Lane A: default values applied as Circuitry applies them (issue
-//! #408's Scope section). Lane C's compiler reads these when a document
-//! omits the corresponding field; this lane only names them so every
-//! later lane applies the same number.
+//! Default values applied as Circuitry applies them (issue
+//! #408's Scope section). The compiler reads these when a document
+//! omits the corresponding field; this module only names them so every
+//! consumer applies the same number.
 
 /// `ConditionalDefinition.threshold`.
 pub const IF_THRESHOLD: f64 = 0.5;

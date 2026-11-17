@@ -5,9 +5,9 @@
 //! `uuid.rs`/`clock.rs` use too (`as_bool`/`py_truthy`/`get`/the codec
 //! table/the `[Errno N] <strerror>: '<path>'` OS-error formatter) --
 //! `plugins/base.py::_as_bool` and Python's own string-codec machinery
-//! have no other natural home among this lane's own five files, and
+//! have no other natural home among these five files, and
 //! splitting them into a brand-new module would add a `mod` line to
-//! `lib.rs`'s own list (vm-lanes.md: this lane only ever fills a body
+//! `lib.rs`'s own list (vm-lanes.md: a plugin module only ever fills a body
 //! in a file the gate already created).
 
 use crate::{CheckResult, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
@@ -21,14 +21,14 @@ use std::path::{Component, Path, PathBuf};
 // ---------------------------------------------------------------------
 
 /// `params.get(key)`, by `Value::Str` key -- `plugins/json.py`'s own
-/// `get` helper, duplicated here since every plugin in this lane reads
+/// `get` helper, duplicated here since every plugin in this file reads
 /// its own params dict the same way.
 pub(crate) fn get<'a>(params: &'a Value, key: &str) -> Option<&'a Value> {
     params.as_dict()?.get(&Value::Str(key.to_string()))
 }
 
 /// A plain `ValueError`-classed [`ToolError`] -- every validation
-/// failure in this lane's five plugins (`plugins/fs.py`/`env_vars.py`/
+/// failure in these five plugins (`plugins/fs.py`/`env_vars.py`/
 /// `hash.py`/`uuid.py`/`clock.py` all raise bare `ValueError`s for their
 /// own param checks).
 pub(crate) fn value_error(message: impl Into<String>) -> ToolError {
@@ -78,8 +78,7 @@ pub(crate) fn as_bool(value: Option<&Value>, default: bool) -> bool {
 /// `exc.strerror`: the bare OS error message, without Rust's own
 /// `io::Error::to_string()` " (os error N)" suffix -- the same
 /// technique `electricity-config::config::strerror` uses (duplicated
-/// here: that crate isn't this lane's to edit, and isn't a dependency
-/// of this one).
+/// here: that crate isn't a dependency of this one).
 fn strerror(err: &io::Error) -> String {
     let text = err.to_string();
     match text.rfind(" (os error ") {
@@ -202,7 +201,7 @@ pub(crate) fn validate_path(raw: Option<&Value>) -> Result<FsPath, ToolError> {
 // Codec table: `encoding = str(params.get("encoding") or "utf-8")`
 // ---------------------------------------------------------------------
 
-/// The one Python codec family this lane actually implements --
+/// The one Python codec family this module actually implements --
 /// `utf-8`, `ascii` and `latin-1`, plus every alias of theirs
 /// `encodings.aliases.aliases` lists. Any other real Python codec name
 /// (`cp1252`, `utf-16`, `shift_jis`, ...) is a documented narrowing:
@@ -250,7 +249,7 @@ fn normalize_codec_name(name: &str) -> String {
 }
 
 /// `encodings.aliases.aliases`, narrowed to the entries that resolve to
-/// one of the three codecs this lane implements.
+/// one of the three codecs this module implements.
 const UTF8_ALIASES: &[&str] = &["utf8", "u8", "utf", "cp65001", "utf8_ucs2", "utf8_ucs4"];
 const ASCII_ALIASES: &[&str] = &[
     "646",
@@ -361,8 +360,7 @@ fn unicode_encode_error_run(
 /// `UnicodeDecodeError.__str__` -- the exact table CPython's own
 /// UTF-8 decoder uses (duplicated from `electricity-compiler::
 /// prompt_files::describe_utf8_error`/`find_utf8_error`/
-/// `utf8_lead_shape`: that crate isn't this lane's to edit, and isn't
-/// a dependency of this one).
+/// `utf8_lead_shape`: that crate isn't a dependency of this one).
 fn describe_utf8_error(bytes: &[u8]) -> String {
     let (start, consumed, reason) =
         find_utf8_error(bytes).expect("describe_utf8_error called on valid UTF-8");
@@ -480,9 +478,9 @@ fn encode_single_byte(codec: Codec, text: &str, limit: u32) -> Result<Vec<u8>, T
     Ok(chars.into_iter().map(|c| c as u8).collect())
 }
 
-/// What a requested codec name resolves to, three ways -- #460's own
-/// lane D1 fix pass ("R2"): a name CPython itself would also reject
-/// gets `cof run`'s own `LookupError: unknown encoding: x`
+/// What a requested codec name resolves to, three ways (#460): a name
+/// CPython itself would also reject gets `cof run`'s own
+/// `LookupError: unknown encoding: x`
 /// ([`Unknown`](EncodingOutcome::Unknown)); a name CPython accepts but
 /// this preview doesn't implement gets the preview marker instead of a
 /// false `unknown encoding` claim ([`NotImplemented`](EncodingOutcome::NotImplemented)).
@@ -521,7 +519,7 @@ pub(crate) fn classify_encoding(name: &str) -> EncodingOutcome {
 /// The preview-marker refusal for a codec name real `cof run` supports
 /// but this preview doesn't implement -- raised *before* anything
 /// touches the filesystem, unlike the `Unknown`/`UnicodeEncodeError`
-/// cases below, which (R2's own ruling) reproduce `cof run`'s own
+/// cases below, which reproduce `cof run`'s own
 /// filesystem effects first.
 pub(crate) fn preview_marker_codec_error(name: &str) -> ToolError {
     ToolError {
@@ -631,7 +629,7 @@ pub(crate) fn py_is_file(path: &Path, display: &str) -> Result<bool, ToolError> 
 /// `Path.mkdir(parents=True, exist_ok=True)` (CPython's own
 /// `pathlib._local.Path.mkdir`), ported exactly so a failure names the
 /// *directory that actually failed* rather than always the original
-/// write's own leaf path (issue #460's own fix pass): try
+/// write's own leaf path (issue #460): try
 /// creating *path* itself first; on `ENOENT` (a missing parent),
 /// recurse into the parent and retry; on any other `OSError`, swallow
 /// it only if *path* already is a directory (the race-safe `exist_ok`
@@ -719,11 +717,11 @@ impl ToolPlugin for FsPlugin {
                 };
                 // Codec classification happens before anything touches
                 // the filesystem, but only a `NotImplemented` name is
-                // actually raised this early (R2): a name CPython
+                // actually raised this early: a name CPython
                 // itself would reject, or one we do support, instead
                 // waits until after `mkdir`/`open` below, so a failure
                 // leaves the same filesystem state `cof run` does
-                // (issue #460's own fix pass -- CPython's
+                // (issue #460 -- CPython's
                 // `open(path, "w", encoding=...)` already created or
                 // truncated the file before either exception could
                 // fire).
@@ -1235,7 +1233,7 @@ mod tests {
         // CPython's own encoder invokes the error handler once per
         // *run* of consecutive unencodable characters, not once per
         // character (`"\u65e5\u672c".encode("ascii")`'s own text) --
-        // issue #460's own fix pass.
+        // issue #460.
         let err = encode_text(Codec::Ascii, "\u{65e5}\u{672c}").unwrap_err();
         assert_eq!(
             err.message,
@@ -1258,7 +1256,7 @@ mod tests {
         // <root>/file.txt/sub` can never succeed, and CPython's own
         // `Path.mkdir(parents=True, exist_ok=True)` names *that*
         // directory in its error, not the write's own leaf path --
-        // issue #460's own fix pass.
+        // issue #460.
         let dir = TempDir::new();
         let blocker = dir.0.join("file.txt");
         std::fs::write(&blocker, b"").unwrap();
@@ -1289,7 +1287,7 @@ mod tests {
     async fn a_write_that_fails_to_encode_leaves_the_file_truncated_like_cpython() {
         // CPython's own `open(path, "w", encoding=...)` already
         // creates/truncates the file before `fh.write(content)` can
-        // raise `UnicodeEncodeError` -- issue #460's own fix pass:
+        // raise `UnicodeEncodeError` -- issue #460:
         // a prior write's content must not survive a later
         // failed one.
         let dir = TempDir::new();
@@ -1343,7 +1341,7 @@ mod tests {
     async fn a_write_with_a_real_but_unimplemented_codec_touches_nothing() {
         // "utf-16" is a real Python codec (`cof run` would succeed);
         // this preview doesn't implement it, and refuses up front --
-        // R2's own ruling: no file created at all, unlike the
+        // no file is created at all, unlike the
         // `bogus-codec`/`UnicodeEncodeError` cases above.
         let dir = TempDir::new();
         let path = dir.0.join("never-created.txt");
@@ -1405,7 +1403,7 @@ mod tests {
         // `tv_sec`/`tv_nsec` pair represents it as `tv_sec=-11,
         // tv_nsec=700_000_000` (never a negative `tv_nsec`); CPython's
         // `int(st_mtime)` truncates the *true* float value (-10.3)
-        // toward zero, i.e. -10, not -11 -- issue #460's own fix pass.
+        // toward zero, i.e. -10, not -11 (issue #460).
         // Checked against the pure function directly (not
         // a real file's own mtime): a CI sandbox's filesystem isn't
         // guaranteed to keep the exact sub-second value a `set_times`

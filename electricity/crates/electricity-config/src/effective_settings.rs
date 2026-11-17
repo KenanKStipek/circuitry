@@ -5,7 +5,7 @@
 //! merge tier of its own either: `--out` is a run-level CLI flag, not
 //! part of that merge at all) -- so the `cli`/`resume` precedence
 //! tiers `resolve_effective_settings` has are simply never populated
-//! here. `profile` (issue #495, lane R) *is* populated, through
+//! here. `profile` (issue #495) *is* populated, through
 //! [`effective_settings_with_profile`]'s own `profile` parameter --
 //! the one tier this module ranks above `orchestration`/`config` for
 //! `model`/`adapter`, and above `default` for `out`; electricity's own
@@ -40,7 +40,7 @@ use std::path::PathBuf;
 /// table -- [`resolve_complexity_settings`] still *validates* the
 /// block, and still feeds the model-routing precedence below, even
 /// though its own typed result is discarded once validation passes).
-/// `model_locked` (issue #495, lane R) is real: a profile's run-level
+/// `model_locked` (issue #495) is real: a profile's run-level
 /// `model:` is the one tier electricity's own `effective_settings` can
 /// pin ahead of the router (there is still no `--model` CLI tier).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,7 +48,7 @@ pub struct EffectiveSettings {
     pub model: Option<String>,
     pub adapter: Option<String>,
     /// `None` unless a loaded `--profile`'s own `out:` resolves it
-    /// (issue #495, lane R) -- `--out` has no config/document-merge
+    /// (issue #495) -- `--out` has no config/document-merge
     /// precedence tier of its own in Circuitry either (see this
     /// module's own doc comment), so this is `profile`'s own tier
     /// alone; electricity's own `--out` CLI flag still ranks above it,

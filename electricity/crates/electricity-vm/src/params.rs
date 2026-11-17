@@ -1,4 +1,4 @@
-//! Lane C: tool params rendering -- `ParamNode` -> `Value`, the
+//! Tool params rendering -- `ParamNode` -> `Value`, the
 //! `{from: ...}` walk (with `default:`), Mustache leaves, and a tool's
 //! `params_json` overlay (`core/tool.py::_render_params`/
 //! `_render_params_json`/`_deep_merge_params`, ported exactly). Every
@@ -6,7 +6,7 @@
 //! rather than calling `render_template` directly (PR #454): a
 //! document containing a `{{> name}}` partial is refused
 //! before a run starts, so that function's own pass-through path is
-//! this file's whole behaviour today, and lane P's own landing never
+//! this file's whole behaviour today, and `{{> name}}` support never
 //! has to add *declared_prompts*/*effect_names* to this file's own
 //! signatures -- they are already threaded through from
 //! `RunContext`/`execute_tool`. A `use` effect's own `inputs:` follow a
@@ -14,8 +14,7 @@
 //! and a `{from:}` that resolves to `None` passes through as `None`
 //! rather than raising) and isn't rendered here.
 //!
-//! `exec::tool::execute_tool` (this crate's own lane C stub, filled in
-//! once lane B's `Store` lands) is the only caller: it renders a tool's
+//! `exec::tool::execute_tool` is the only caller: it renders a tool's
 //! `params:` through [`render_params`], its `params_json:` (if any)
 //! through [`render_params_json`], and deep-merges the two through
 //! [`deep_merge_params`] -- the `params_json` override takes precedence,

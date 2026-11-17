@@ -3,12 +3,12 @@
 //! providers (DESIGN.md §8.1) -- [`ToolPlugin`] v2, [`ToolCall`],
 //! [`ToolError`], [`PyExc`], [`ErrorCause`], [`ToolResult::validate`],
 //! [`registry::build_plugin`], and one module per provider: [`shell`],
-//! [`awk`], [`imagemagick`], [`ffmpeg`] (lane C, #459/#467); [`fs`],
-//! [`env_vars`], [`hash`], [`uuid`], [`clock`] (lane D1, #460/#464);
-//! [`regex`] (lane D2, #479/#480); [`http`]/[`http_client`] (lane E,
-//! #485/#486); [`validate_yaml`] (lane L2a, #521/#524); [`gh`] (issue
+//! [`awk`], [`imagemagick`], [`ffmpeg`] (#459/#467); [`fs`],
+//! [`env_vars`], [`hash`], [`uuid`], [`clock`] (#460/#464);
+//! [`regex`] (#479/#480); [`http`]/[`http_client`] (#485/#486);
+//! [`validate_yaml`] (#521/#524); [`gh`] (issue
 //! #722); [`cel`] (issue #723); [`systemone`] (issue #724); plus [`json`]
-//! (issue #449's gate lane) and [`agent_cli`],
+//! (issue #449) and [`agent_cli`],
 //! the shared half `electricity-adapters`' `claude_code`/`pi` build on
 //! (issue #520).
 //!
@@ -79,7 +79,7 @@ pub struct ToolResult {
     pub stderr: Option<String>,
     pub exit_code: Option<i32>,
     /// Whether the tool call itself succeeded -- `false` is the one
-    /// signal `ToolRuntime` (lane B/C) treats as a failure without an
+    /// signal `ToolRuntime` treats as a failure without an
     /// exception (`plugins/base.py::ToolResult.ok`'s own doc comment).
     pub ok: bool,
     /// `true` when `value` is the parsed JSON of `stdout` (`parse: json` on a
@@ -167,8 +167,8 @@ impl ToolResult {
 /// classification (`core/tool.py::ToolRuntime._is_retryable_failure`,
 /// `adapters/_retry.py::classify_exception`) -- the same three-way
 /// split an adapter dispatch failure gets, shared by every HTTP-family
-/// tool (`http`, `web_fetch`, `webhook`, `linear`) once lane E wires
-/// `execute_tool`'s own HTTP branch against it.
+/// tool (`http`, `web_fetch`, `webhook`, `linear`) once
+/// `execute_tool`'s own HTTP branch wires against it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorCause {
     /// No classification -- every non-HTTP-family tool failure (a
@@ -206,12 +206,12 @@ pub enum ErrorCause {
 /// `false`, a returned failure) -- the text a `meta.error` entry carries
 /// when a plugin raises rather than returning an unsuccessful result.
 ///
-/// Typed (issue #449's gate lane, widening the M0-H `ToolError(String)`
+/// Typed (issue #449, widening the M0-H `ToolError(String)`
 /// tuple struct): *py_class* names the Python exception class #442's
 /// multi-failure tree text needs; *cause* is what `execute_tool`'s own
 /// retry classification (`electricity_vm::retry`) reads once an
 /// HTTP-family tool can actually produce something other than
-/// [`ErrorCause::None`] (lane E).
+/// [`ErrorCause::None`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolError {
     pub py_class: PyExc,
@@ -256,7 +256,7 @@ pub struct CheckResult {
 }
 
 /// What [`ToolPlugin::execute`] needs that isn't *params* itself
-/// (issue #449's gate lane, item 1) -- `core/tool.py::ToolRuntime.
+/// (issue #449, item 1) -- `core/tool.py::ToolRuntime.
 /// execute`'s own per-attempt call carries all four of these to the
 /// plugin it dispatches to, none of them through *params*:
 ///
@@ -348,7 +348,7 @@ pub trait ToolPlugin {
     fn name(&self) -> &str;
     async fn execute(&self, params: Value, call: &ToolCall<'_>) -> Result<ToolResult, ToolError>;
     /// Never panics -- a misbehaving `check()` degrades to `ok: false`
-    /// (DESIGN.md §8.1's own comment); lane C's own registry, not this
+    /// (DESIGN.md §8.1's own comment); the registry, not this
     /// trait, is what actually has to enforce that by catching a panic
     /// at the call site.
     fn check(&self) -> CheckResult;
@@ -360,7 +360,7 @@ pub trait ToolPlugin {
 /// build -- `json` (and, behind `test-tools`, `sleep`/`fail`) have no
 /// per-plugin config to go stale between attempts, so a singleton
 /// instance is harmless for them; a provider whose builder actually
-/// reads `runtime.plugins.<name>` (lane C's `shell`, for one) is built
+/// reads `runtime.plugins.<name>` (`shell`, for one) is built
 /// fresh per attempt through [`registry::build_plugin`] instead,
 /// **not** registered here.
 #[derive(Default)]

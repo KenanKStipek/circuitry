@@ -171,7 +171,7 @@ pub const MAX_NODES: usize = 1_000_000;
 //   other than the indicator consumed into the *previous* event's own
 //   span).
 // - **Unicode line-break characters inside a scalar** (PR
-//   #388's third review). PyYAML's `Reader.forward` (`reader.py`)
+//   #388). PyYAML's `Reader.forward` (`reader.py`)
 //   counts U+2028 (LINE SEPARATOR), U+2029 (PARAGRAPH SEPARATOR) and
 //   U+0085 (NEL) as line breaks, exactly like `\n`, even inside a
 //   scalar; `saphyr-parser` 0.1.0 never does. Pinned in the golden
@@ -183,7 +183,7 @@ pub const MAX_NODES: usize = 1_000_000;
 //   scalar can't contain a line break without folding) but an
 //   ordinary string containing that character here (electricity-yaml
 //   has no divergence-case shape for "Circuitry fails, electricity-yaml
-//   loads a value" -- D4's own gap, below) -- so that one shape is
+//   loads a value" -- the gap described below) -- so that one shape is
 //   pinned directly against the behaviour instead, in
 //   `tests/reader_divergences.rs`.
 //
@@ -193,14 +193,14 @@ pub const MAX_NODES: usize = 1_000_000;
 //   `Scanner::skip_linebreak`/`skip_nl`), so an anchor reused across one
 //   (`a: &x 1\rb: &x 2\r`) is Circuitry's own duplicate-anchor error in
 //   both loaders -- an ordinary parity case (`generate_yaml_corpus.py`'s
-//   `anchor_cases`), not a divergence. A fourth-review bug in this
+//   `anchor_cases`), not a divergence. A bug in this
 //   crate's own byte-offset bookkeeping (`compose.rs`'s `line_starts`
 //   and `advance_marker`, which previously only recognized `\n`) used
 //   to make it look like one by silently dropping every anchor/tag
 //   prefix and duplicate-key position on the far side of a lone `\r`;
 //   fixed by counting a lone `\r` as a line break there too.
 // - **Unicode decimal digits under an explicit `!!int`/`!!float` tag**
-//   (PR #388's third review): Python's `int()`/`float()`
+//   (PR #388): Python's `int()`/`float()`
 //   accept any Unicode decimal digit (Arabic-Indic, fullwidth, ...),
 //   not just ASCII `0`-`9`; `num_bigint::BigInt::from_str_radix` and
 //   Rust's `f64::from_str` don't. Pinned in the golden corpus (an
@@ -208,8 +208,8 @@ pub const MAX_NODES: usize = 1_000_000;
 //   since here Circuitry succeeds and electricity-yaml fails cleanly
 //   with `InvalidScalar` -- the direction this crate's existing
 //   `known_divergence` kind *can* express.
-// - **NEL (U+0085) inside a quoted or block scalar** (PR #388's fourth
-//   review). PyYAML's `Reader.scan_line_break` (`scanner.py`) folds
+// - **NEL (U+0085) inside a quoted or block scalar** (PR #388).
+//   PyYAML's `Reader.scan_line_break` (`scanner.py`) folds
 //   every line break it recognizes -- `\r`, `\r\n`, and also NEL,
 //   U+2028 and U+2029 -- to a plain `\n` as it scans, so a NEL inside a
 //   double-quoted scalar's text becomes a space (quoted-scalar folding:
@@ -230,7 +230,7 @@ pub const MAX_NODES: usize = 1_000_000;
 //   pinned in the golden corpus or fixed; left as a follow-up.
 // - **A `=` key retagged through one merge, but not through a
 //   sibling's direct (non-merge) reference to the same shared anchor**
-//   (PR #388's third review): `SafeConstructor
+//   (PR #388): `SafeConstructor
 //   .flatten_mapping` only retags a bare `=` key to `str` when
 //   reached *through* `<<:`; PyYAML's `MappingNode`s are shared and
 //   mutable, so once one mapping's merge flattens an anchored source
@@ -255,6 +255,5 @@ pub const MAX_NODES: usize = 1_000_000;
 // doc comment), and the "Circuitry fails, electricity-yaml loads a
 // value" shape just above (a line-break character inside a plain
 // scalar) all have Circuitry on the *failing* side, which this crate's
-// `known_divergence` corpus kind has no way to express (D4, PR #388's
-// third review) -- documented here in prose instead, and pinned
+// `known_divergence` corpus kind has no way to express (PR #388) -- documented here in prose instead, and pinned
 // directly against the behaviour in `tests/reader_divergences.rs`.

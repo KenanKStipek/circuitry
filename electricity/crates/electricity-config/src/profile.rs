@@ -12,8 +12,9 @@
 //! `electricity_bytecode::Program`.
 //!
 //! No run behaviour changes here: nothing in electricity's run wiring
-//! calls any function in this module yet (lane R wires `--profile`; lane
-//! J2 applies a loaded profile's settings onto a compiled program).
+//! calls any function in this module yet (preflight wires `--profile`;
+//! applying a loaded profile's settings onto a compiled program is
+//! separate work).
 
 use crate::complexity::RoutingSettings;
 use crate::util::is_truthy;
@@ -84,7 +85,7 @@ fn dict_get<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
 /// truthy-then-stringify-then-normalize idiom
 /// `electricity_compiler::compose`'s own `effect_type_of` ports
 /// (duplicated here rather than shared across crates, since that
-/// module is private to a different lane's file).
+/// function is private to `electricity-compiler`).
 fn effect_type_of(dict: &Dict) -> String {
     let value = dict_get(dict, "type");
     let raw = if is_truthy(value) {
@@ -278,7 +279,7 @@ fn name_repr(name: &str) -> String {
 /// comparison, `values[1] < values[0]`, for a 2-element list, which
 /// this reproduces directly). A longer list mixing 3+ incomparable
 /// types is not guaranteed to raise with the same operand order CPython
-/// would -- `cli/profiles.py`'s own ruling for this port names that gap
+/// would -- this port's own documented divergence names that gap
 /// explicitly: compare such a case by location, not by exact text.
 fn py_sort_values(mut values: Vec<Value>) -> Result<Vec<Value>, String> {
     if values.len() < 2 {

@@ -14,7 +14,7 @@
 //! The end-to-end section replays `UseRuntime.execute` against
 //! `exec::use_::execute_use_with_ctx` -- a ctx-*value* entry point
 //! (not `execute_use` itself, which takes a `CtxChain`; that type is
-//! `pub(crate)` in `exec/mod.rs`, lane B2/H's file, not nameable from
+//! `pub(crate)` in `exec/mod.rs`, not nameable from
 //! here) that takes *ctx* directly, exactly the way `core/use.py`'s
 //! own `UseRuntime.execute(store, ctx)` does.
 //!
@@ -877,8 +877,8 @@ async fn golden_corpus_end_to_end() {
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
             // `path_cycle`'s own child (`cycle_a.yml`) names a nested
-            // `use` effect -- `Supported::current` (`use_: true`, M1
-            // lane I), not `Supported::m0`, or the runtime refusal
+            // `use` effect -- `Supported::current` (`use_: true`),
+            // not `Supported::m0`, or the runtime refusal
             // check would refuse that nested effect before the cycle
             // check ever runs.
             supported: electricity_bytecode::Supported::current(&[]),

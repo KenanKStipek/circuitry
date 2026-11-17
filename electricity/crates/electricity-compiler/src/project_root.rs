@@ -1,4 +1,4 @@
-//! Lane B: the confinement root `check_for_run` resolves for a document
+//! The confinement root `check_for_run` resolves for a document
 //! with a real file of its own, porting `core/prompt_files.py`'s
 //! `default_project_root` -- the nearest `circuitry.config.json`/
 //! `config.json` at or above the document's directory, else that

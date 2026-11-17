@@ -3,10 +3,10 @@
 //! that may be Circuitry's own exact text or third-party text that only
 //! needs to fail "at the same place" (DESIGN.md §1, §12).
 
-// Lane A's own `golden_smoke.rs` only reads `name`/`files`/`entry`/
+// `golden_smoke.rs` only reads `name`/`files`/`entry`/
 // `run_error`; `validate`/`definition`/`comparison`/`matches` exist for
-// lane B/C/D's `golden_{load,compile,compose}.rs`, which this lane's
-// stub has nothing to check them against yet.
+// `golden_{load,compile,compose}.rs`, which this stub has nothing to
+// check them against yet.
 #![allow(dead_code)]
 
 use electricity_compiler::CheckOptions;
@@ -25,7 +25,7 @@ pub enum FileContent {
         bytes_hex: String,
         /// An octal permission string (e.g. `"000"`) applied with
         /// `chmod` after the file is written -- `_compiler_corpus.py`'s
-        /// own optional `"mode"` key, for a lane D case exercising an
+        /// own optional `"mode"` key, for a case exercising an
         /// unreadable prompt file (`core/prompt_files.py`'s "could not
         /// be read" branch). Not meaningful on Windows; a case that
         /// needs it is Unix-only by nature, same as a symlink-escape
@@ -35,7 +35,7 @@ pub enum FileContent {
     },
     /// *repeat* written *count* times -- `_compiler_corpus.py`'s own
     /// `{"repeat": text, "count": int}`, a generated-content spec for
-    /// a case whose file content is large and uniform (a lane D case
+    /// a case whose file content is large and uniform (a case
     /// one byte over the prompt-file size limit, say), so the golden
     /// file records the short spec rather than the file's own megabyte
     /// of bytes.

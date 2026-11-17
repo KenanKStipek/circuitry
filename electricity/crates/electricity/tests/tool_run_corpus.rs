@@ -1,13 +1,14 @@
 //! Exercises the golden run corpus `electricity/scripts/generate_tool_
-//! run_corpus.py` writes (issue #431's Test strategy section, lane C's
-//! own tool-runtime-focused documents -- `success_chain`, a propagating
+//! run_corpus.py` writes (issue #431's Test strategy section, the
+//! tool-runtime-focused documents -- `success_chain`, a propagating
 //! tool error, `on_error: skip`, retries exhausted against a CEL
 //! `expect:`, a passing `expect:`, a raising `expect:`, an `enabled_tools` allowlist
 //! refusal, a `params_json` merge, non-string param keys end to end,
 //! and redaction surfacing in `meta.params_rendered`).
 //!
 //! Every case's own document root is a `dynamic` chain (Circuitry's own
-//! implicit `prime` container). Lanes B2 and D have both landed, so
+//! implicit `prime` container). The real interpreter and run wiring
+//! have both landed, so
 //! the comparison test below now actually runs each case's document
 //! through `electricity::run_orchestration` and compares against the
 //! committed golden, normalized the same way `_run_corpus.py` does

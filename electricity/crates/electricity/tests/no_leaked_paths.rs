@@ -1,5 +1,5 @@
 //! Every committed file under `tests/golden/` carries no absolute or
-//! temporary local path (issue #431's gate lane, extending
+//! temporary local path (issue #431, extending
 //! `electricity-compiler`'s own `no_leaked_paths.rs` test of the same
 //! name to this crate's own golden run corpus).
 //!

@@ -1,6 +1,6 @@
-//! Regression tests for PR #502's round-6 fix, each pinned against the
-//! exact schema/instance shape `probe-r6`/`probe-nan`/`probe-refgraph`
-//! record against real `cof run`.
+//! Regression tests for PR #502, each pinned against the
+//! exact schema/instance shape confirmed
+//! against real `cof run`.
 
 use electricity_schema::{PromptSchemaCheck, validate_prompt_schema, value_from_json};
 use electricity_value::{Dict, Value};
@@ -13,7 +13,7 @@ fn check(schema: &serde_json::Value, instance: &serde_json::Value) -> PromptSche
 // --- lazy `is_valid` leaking into `anyOf`/`oneOf` branch evaluation,
 // giving a wrong verdict under `not`/`if`/`contains` -------------------
 
-/// `probe-r6` c0: once the first `anyOf` branch fails, lazy mode must
+/// Once the first `anyOf` branch fails, lazy mode must
 /// never make the *second* branch stop after its own first keyword and
 /// count as valid regardless of what that keyword decided -- both
 /// branches genuinely fail `5`, so `not` of that `anyOf` is `Valid`.
@@ -30,7 +30,7 @@ fn not_wrapping_a_failing_any_of_is_valid_lazy_mode_never_leaks_into_the_second_
     assert_eq!(check(&schema, &json!(5)), PromptSchemaCheck::Valid);
 }
 
-/// `probe-r6` c1: `if`'s own condition is the same `anyOf`, so taking
+/// `if`'s own condition is the same `anyOf`, so taking
 /// the wrong branch here would also flip which of `then`/`else` runs.
 #[test]
 fn if_wrapping_a_failing_any_of_takes_the_else_branch() {
@@ -47,7 +47,7 @@ fn if_wrapping_a_failing_any_of_takes_the_else_branch() {
     assert_eq!(check(&schema, &json!(5)), PromptSchemaCheck::Valid);
 }
 
-/// `probe-r6` c2: `contains`'s own `oneOf` must reject `5` the same
+/// `contains`'s own `oneOf` must reject `5` the same
 /// way -- the array element genuinely matches neither branch, so
 /// `contains` finds nothing and the whole array is invalid.
 #[test]
@@ -80,7 +80,7 @@ fn dict(pairs: Vec<(&str, Value)>) -> Value {
     Value::Dict(d)
 }
 
-/// `probe-nan`'s own schema shape: a `$ref` into an unknown key
+/// A `$ref` into an unknown key
 /// (`x-sub`) skips the metaschema check that would otherwise reject a
 /// non-positive `multipleOf`, so a `NaN`/zero divisor must reach
 /// `multiple_of_failed` at all -- it used to `.expect()` a `None`
@@ -164,8 +164,8 @@ fn an_infinite_instance_against_an_infinite_divisor_is_the_nan_text() {
 
 /// *n* mutually-referencing `$defs`, each `{type: object, properties:
 /// {c: {type: array, items: {anyOf: [$ref to every N0..N(n-1)]}}}}`,
-/// root `$ref: N0` -- `probe-refgraph`'s own shape. Before the fix,
-/// `visited` was popped after each `$ref` descent, so every simple path
+/// root `$ref: N0`. `visited` used to be popped after each `$ref`
+/// descent, so every simple path
 /// through this complete-graph-like structure got re-walked from
 /// scratch (factorial in *n*); ten of them took several seconds.
 fn mutual_ref_schema(n: usize) -> serde_json::Value {

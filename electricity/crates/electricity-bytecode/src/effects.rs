@@ -1,4 +1,4 @@
-//! Lane A: the per-effect-type option structs, field for field from
+//! The per-effect-type option structs, field for field from
 //! Circuitry's `PromptDefinition`, `ToolDefinition`, `UseDefinition`,
 //! `YieldDefinition` and `ReflectorDefinition` (issue #408's Scope
 //! section). Each struct's doc comment maps every field back to the
@@ -160,7 +160,7 @@ pub struct PromptOp {
     /// `None` unless `retries:` was a *non-empty* mapping (Python's `if
     /// retries_raw and isinstance(retries_raw, dict)`, `core/compiler.py:
     /// 1582-1589`) -- `retries: {}` is `None` too, so `runtime.
-    /// default_prompt_retries` applies (issue #498, lane G). Unlike
+    /// default_prompt_retries` applies (issue #498). Unlike
     /// `ToolOp`/`UseOp::retries`, which default to `RetryPolicy::default()`
     /// right here because a tool/`use` effect always has *some* retry
     /// policy, a prompt's own run-time default can come from `runtime:`

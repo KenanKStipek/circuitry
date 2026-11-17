@@ -1,4 +1,4 @@
-//! Lane C: `_check_templates` (`core/compiler.py`) -- walks a raw
+//! `_check_templates` (`core/compiler.py`) -- walks a raw
 //! document value recursively, rejecting the first malformed Mustache
 //! template among its string leaves, and builds the matching
 //! [`TemplateText`] for a checked scalar field.
@@ -15,7 +15,7 @@ use electricity_value::Value;
 /// syntax gate (set only by a caller checking one of the composable
 /// fields runtime-semantics §3.4 lists) -- whether the name itself
 /// resolves is `compose::check_prompt_composition`'s separate, later
-/// check (lane D).
+/// check.
 pub(crate) fn check_templates(
     value: &Value,
     effect_path: &str,

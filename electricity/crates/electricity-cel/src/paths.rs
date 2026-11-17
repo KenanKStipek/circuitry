@@ -397,11 +397,11 @@ pub fn rewrite(node: &mut IdedExpr) {
 /// unconditionally: it's read straight from *state* every time, so it's
 /// always the correct thing to place, whether or not something was there
 /// before. Comparing the placed and freshly read *values* for equality
-/// instead — a previous version of this did, to decide both of the above
-/// in one check — was itself the P0 this ported from Python to fix
+/// instead, to decide both of the above in one check, would
+/// reintroduce the exact bug this ported from Python to fix
 /// (overwriting a placed non-dict leaf with `{}` the moment a longer,
 /// `has()`-guarded path tried to extend past it, issue #379)
-/// and *re-broke* the same way for a `NaN` leaf
+/// and *re-break* the same way for a `NaN` leaf
 /// (`has(state.a.n.x) || state.a.n > 0.0`): `NaN != NaN`, so
 /// the equality check wrongly decided a *different* value was now being
 /// placed and overwrote the leaf with `{}` to keep descending.

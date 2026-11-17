@@ -83,12 +83,12 @@ fn prompt_with_messages() {
 
 #[test]
 fn prompt_inputs_and_params_are_raw_literals() {
-    // Issue #449's gate lane hazard: Python's `_compile_prompt` never
+    // Issue #449: Python's `_compile_prompt` never
     // template-checks or Mustache-renders `inputs:`/`params:` -- both
     // merge into the run-time context/adapter call as the raw dict,
     // `{{...}}`-looking text included. Pin that the compiler emits
     // `ParamNode::Literal` for both fields here, not `ParamNode::
-    // Template`, so a later lane can't silently turn them into
+    // Template`, so a later change can't silently turn them into
     // template fields without this snapshot's own diff catching it.
     assert_snapshot(
         "prompt_inputs_and_params_are_raw_literals",

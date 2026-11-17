@@ -23,7 +23,7 @@
 //!   until the effect is killed (#448 decision, "Settled questions").
 //!   The limit itself is sized per call, `max(FLOOR, PER_CHAR *
 //!   (input_len + 1))` ([`electricity_pyre::backtrack_limit_for`],
-//!   moved there in PR #502's round-5 fix so `electricity-schema`
+//!   moved there in PR #502 so `electricity-schema`
 //!   can size its own `pattern`/`patternProperties` limit the same
 //!   way; `PER_CHAR = 100`,
 //!   `FLOOR = 10_000_000`, each measured directly in a release build
@@ -32,7 +32,7 @@
 //!   position of a search, not just the eventual match, and so used
 //!   to fail ordinary multi-hundred-KB inputs through the lookarounds
 //!   this translator emits for `\b`/`\B`/non-MULTILINE `$`/lookbehind
-//!   (PR #480's review) even though the real per-character
+//!   (#480) even though the real per-character
 //!   cost is tiny;
 //! - IGNORECASE: `fancy-regex`'s own Unicode case folding is used
 //!   directly for everything this translator doesn't expand itself
@@ -257,8 +257,8 @@ impl ToolPlugin for RegexPlugin {
         let translated = translate::translate(&pattern, flags).map_err(invalid_pattern)?;
         // `match` anchors the whole pattern at position 0
         // (`\A(?:...)`, a non-capturing wrapper that keeps every group
-        // number) -- compiled once, same as every other mode (F9:
-        // this translator used to compile the pattern twice for
+        // number) -- compiled once, same as every other mode (this
+        // translator used to compile the pattern twice for
         // `match`, once unused).
         let pattern_text = if mode == "match" {
             format!("\\A(?:{})", translated.pattern)
@@ -613,7 +613,7 @@ mod tests {
         // a separate, unconfigurable limit from `backtrack_limit`)
         // ending in a non-whitespace character: `\s+$` cannot ever
         // succeed, so an unanchored search tries this from every start
-        // position -- the review's own `\s+$` case.
+        // position.
         let text = "word ".repeat(1_200_000 / 5) + "x";
         let result = run(dict(vec![
             ("pattern", Value::from(r"\s+$")),
@@ -646,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn catastrophic_but_bounded_pattern_still_returns_no_match_like_cpython() {
-        // The review's own R8 baseline: CPython returns `[]` for this
+        // CPython returns `[]` for this
         // in milliseconds; it used to need just past 1,000,000
         // backtracks in fancy-regex (fancy-regex's old default),
         // which this translator's new per-input limit must still

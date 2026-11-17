@@ -1,5 +1,5 @@
 //! `agent_cli.py`, ported (issue #520, part A): the four steps shared by
-//! the `claude_code` and `pi` adapters (part B, a later lane) and by any
+//! the `claude_code` and `pi` adapters (part B) and by any
 //! future `agent` tool port --
 //!
 //! 1. [`env_removal_names`]/[`child_env`] -- which environment variables
@@ -808,7 +808,7 @@ fn no_answer_message(name: &str, proc: &process::Completed) -> String {
 /// outside it) -- a private copy of `electricity_config::util::py_format_g`
 /// (that one is `pub(crate)` to its own crate, and this module's own doc
 /// convention, like `process.rs`'s `describe_utf8_error`, is to carry a
-/// small duplicate rather than reach across a lane boundary for it).
+/// small duplicate rather than add a cross-crate dependency for it).
 pub(crate) fn py_format_g(x: f64) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() {
@@ -866,11 +866,11 @@ fn strip_trailing_zeros(s: &mut String) {
 /// in `electricity-adapters` itself (additive to this, part A's own
 /// file -- issue #520's own part-A/part-B seam) because `libc`, needed
 /// for [`libc::mkdtemp`], is already a dependency of this crate; part
-/// B's own crate has no dependency on it, and the issue's own ruling 2
+/// B's own crate has no dependency on it, and issue #520
 /// asks for "no new crates and no new dependencies."
 ///
 /// Built from [`std::env::temp_dir`] (`TMPDIR`, or the platform
-/// default) made absolute first (issue #520's own settled question 12:
+/// default) made absolute first (issue #520:
 /// `tempfile.mkdtemp`'s own result is always absolute, even under a
 /// *relative* `TMPDIR` -- confirmed directly: CPython's own
 /// `_candidate_tempdir_list` runs every candidate through
@@ -890,7 +890,7 @@ pub struct TempDirGuard {
 
 impl TempDirGuard {
     /// *prefix* is the whole leading literal before `mkdtemp`'s own
-    /// random suffix (`"circuitry-claude-"`/`"circuitry-pi-"" -- B2),
+    /// random suffix (`"circuitry-claude-"`/`"circuitry-pi-""),
     /// not a directory component of its own.
     pub fn new(prefix: &str) -> std::io::Result<Self> {
         let mut base = absolutize(std::env::temp_dir())?;

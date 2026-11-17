@@ -1,6 +1,6 @@
-//! Regression tests for PR #502's round-5 fix (issue #498's own
+//! Regression tests for PR #502 (issue #498's own
 //! follow-up) -- each pinned against
-//! the exact schema/instance shape `probe-schema9`/`probe-pct` record
+//! the exact schema/instance shape confirmed
 //! against real `cof run`. Parsed through [`electricity_json::loads`],
 //! not `serde_json::Value` (a `BTreeMap`-backed `Map`, alphabetical
 //! regardless of the source text's own order -- several cases here
@@ -21,7 +21,7 @@ fn check(schema_json: &str, instance_json: &str) -> PromptSchemaCheck {
 /// into `f"{type(cause).__name__}: {cause}"` -- never an ordinary
 /// `jsonschema.ValidationError`, so `core/prompt.py::_validate_schema`
 /// never catches it: a generic, non-retryable failure, never a silent
-/// accept (probe-schema9 c0).
+/// accept.
 #[test]
 fn a_ref_that_doesnt_resolve_once_reached_is_pointer_to_nowhere_not_a_silent_accept() {
     let schema = r##"{
@@ -47,7 +47,7 @@ fn a_ref_that_doesnt_resolve_once_reached_is_pointer_to_nowhere_not_a_silent_acc
 /// document it sits -- `\p{L}+` is genuinely Python-`re`-invalid (`bad
 /// escape \p`), so this is always a `SchemaError`, never routed to
 /// crate authority (whose own ECMA-262 regex engine silently accepts
-/// it) and never a wrong accept (probe-schema9 c1).
+/// it) and never a wrong accept.
 #[test]
 fn a_python_invalid_pattern_nested_under_properties_is_a_schema_error() {
     let schema = r#"{"properties": {"z": {"pattern": "\\p{L}+"}}}"#;
@@ -71,8 +71,8 @@ fn a_python_invalid_named_group_pattern_is_a_schema_error() {
 /// A pattern that translates (Python's own `re.compile`
 /// accepts it) but `fancy-regex` can't build at all -- a backreference
 /// inside a lookbehind -- must never be silently treated as a match; it
-/// is an explicit, documented failure instead (probe-schema9 c4,
-/// `electricity-tools::regex`'s own module docs for the same gap).
+/// is an explicit, documented failure instead
+/// (`electricity-tools::regex`'s own module docs cover the same gap).
 #[test]
 fn a_pattern_fancy_regex_cannot_build_is_an_explicit_failure_never_a_silent_match() {
     let schema = r#"{"properties": {"z": {"pattern": "(ab)(?<=\\1)"}}}"#;
@@ -90,7 +90,7 @@ fn a_pattern_fancy_regex_cannot_build_is_an_explicit_failure_never_a_silent_matc
 /// A pattern that exhausts `fancy-regex`'s own backtracking
 /// limit -- even sized the same way `electricity-tools::regex` sizes its
 /// own (`electricity_pyre::backtrack_limit_for`) -- must never be
-/// silently treated as a match either (probe-schema9 c5: `[a-z]+$`
+/// silently treated as a match either (`[a-z]+$`
 /// against 1500 `a`s plus a trailing `!`, which Python's own `re` --
 /// no such limit at all -- rejects instantly).
 #[test]
@@ -106,7 +106,7 @@ fn a_backtrack_limit_error_is_an_explicit_failure_never_a_silent_match() {
 /// `_keywords.multipleOf`'s own `Fraction` fallback --
 /// `int(instance / dB)` overflows for a large `instance`/small `float`
 /// divisor pair, caught only to retry exactly via `Fraction`, which is
-/// exact and never overflows (probe-schema9 c6: `1e308` against
+/// exact and never overflows (`1e308` against
 /// `multipleOf: 0.5` is a real multiple, since `2 * 1e308`'s own exact
 /// binary value has no fractional part).
 #[test]
@@ -125,7 +125,7 @@ fn multiple_of_overflow_falls_back_to_the_exact_fraction_check() {
 /// (a global inline flag, `(?i)`, must lead the *whole* expression, not
 /// reappear after the first alternative) -- never silently treated as
 /// "doesn't match", which would wrongly report `schema_invalid` instead
-/// of the real, non-retryable failure (probe-schema9 c7).
+/// of the real, non-retryable failure.
 #[test]
 fn a_joined_pattern_properties_alternation_that_fails_to_compile_is_a_schema_error() {
     let schema = r#"{

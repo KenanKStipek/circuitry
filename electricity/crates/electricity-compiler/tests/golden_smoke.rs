@@ -2,7 +2,7 @@
 //! golden cases against the real `check_for_run` -- the harness itself
 //! (`tests/support/`) exercised end to end (issue #408's Scope section:
 //! "Plus ONE example generator ... so the harness is exercised end to
-//! end"). Lanes A-D have all landed, so every case is checked against
+//! end"). Every case is checked against
 //! `check_for_run`'s own success/failure outcome, matching Circuitry's
 //! own `run_error` (`DESIGN.md` §1/§12's "fail at the same place"
 //! standard, not matching text -- the real compiler's error text for

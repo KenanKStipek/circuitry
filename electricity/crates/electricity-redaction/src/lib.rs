@@ -1,6 +1,6 @@
 //! electricity-redaction: credential-shaped-value redaction
 //! (`cli/redaction.py::redact`, ported word for word), and the
-//! `meta.raw` size cap (issue #431's Scope section, lane C).
+//! `meta.raw` size cap (issue #431's Scope section).
 //!
 //! This is defense in depth, not a guarantee -- the same caveat
 //! `cli/redaction.py`'s own module docs carry: it targets the common

@@ -1,7 +1,7 @@
 //! `CancellationToken`: the first-signal-wins token tree DESIGN.md
-//! §6.5/§6.9 describes -- a real, self-contained implementation (not a
-//! lane B/C/D stub: no `Program`/`Store` dependency, so there is nothing
-//! here lane A can't finish correctly itself).
+//! §6.5/§6.9 describes -- a real, self-contained implementation, not a
+//! stub: it has no `Program`/`Store` dependency, so there is nothing
+//! here that can't be finished correctly on its own.
 //!
 //! A root token has no parent; [`CancellationToken::child`] makes a new
 //! token whose [`CancellationToken::is_set`]/[`CancellationToken::signum`]
@@ -12,7 +12,7 @@
 //! a branch must not cancel the run, but cancelling the run must cancel
 //! every branch.
 //!
-//! `Send + Sync` (ruling on PR #432's review): lane D's
+//! `Send + Sync` (PR #432): the
 //! signal handler cancels a run from a dedicated signal-handling task or
 //! thread, not from inside the single VM task that's blocked on a tool
 //! call or a `finally:` -- the two must be able to share a token across

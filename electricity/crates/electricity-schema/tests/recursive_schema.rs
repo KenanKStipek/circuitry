@@ -1,14 +1,14 @@
 //! A schema that is itself recursive (a `$ref` cycle back to an
 //! ancestor) describes a real, finite-instance-terminating shape -- a
 //! tree or a linked list -- that Python validates up to roughly 200-240
-//! levels before its own `RecursionError` (PR #502's round-4 fix).
-//! Before that fix, `schema_is_fully_supported` had no
-//! visited set and walked a cyclic schema's own structure forever
+//! levels before its own `RecursionError` (PR #502).
+//! `schema_is_fully_supported` used to have no
+//! visited set and walk a cyclic schema's own structure forever
 //! (bounded only by a plain depth budget), so *every* instance of *any*
 //! recursive schema -- even a depth-1 one -- was wrongly reported as
 //! Python's own uncaught `RecursionError` before `evaluate` ever ran.
 //!
-//! These exercise both shapes `probe-depth`/`probe-schema6` record
+//! These exercise both shapes confirmed
 //! against real `cof run`: a tree (`$defs` + a named `$ref`) and a
 //! linked list (`$ref: "#"`, the root referring to itself).
 
@@ -42,7 +42,7 @@ fn self_ref_schema() -> serde_json::Value {
 
 /// A chain *depth* levels deep, each node `{"v": <leaf_v on the last
 /// level, 1 otherwise>, "c": <next>}`, the last level carrying no `"c"`
-/// at all (matching `probe-depth`'s own fixtures exactly).
+/// at all.
 fn chain(depth: usize, leaf_v: serde_json::Value) -> serde_json::Value {
     assert!(depth >= 1);
     let mut node = json!({"v": leaf_v});
@@ -122,7 +122,7 @@ fn linked_list_shaped_recursive_schema_reports_an_invalid_leaf_200_levels_down()
 /// no instance progress at all) is the one case this engine must still
 /// report as Python's own uncaught `RecursionError` would -- a generic,
 /// non-retryable `SchemaError`, never a crash and never `Valid`/
-/// `Invalid`. `probe-selfref`'s own fixture.
+/// `Invalid`.
 #[test]
 fn a_pure_ref_cycle_reports_the_recursion_error_text_not_a_crash() {
     let schema = json!({"$ref": "#"});

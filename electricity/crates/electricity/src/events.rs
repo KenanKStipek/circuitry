@@ -807,9 +807,9 @@ mod tests {
 
     #[test]
     fn two_overlapping_calls_on_the_same_path_each_end_pairs_with_its_own_start() {
-        // PR #454's own probe: start A, start B
+        // PR #454: start A, start B
         // (both on the same path -- an unnamed `flow: tree` loop's own
-        // concurrent passes, once lane H lands, share exactly this
+        // concurrent passes, once loop support lands, share exactly this
         // shape), then end A, then end B. A bare `Vec::pop` would hand
         // B's own id back for A's own end (and vice versa); removing by
         // the exact id `on_start` returned keeps them straight

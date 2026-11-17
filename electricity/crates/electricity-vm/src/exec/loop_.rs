@@ -1,9 +1,9 @@
 //! `loop` effect execution (`core/loop.py::LoopRuntime.execute`) --
-//! lane H (issue #461), model-mode `while:` filled in by lane G2
-//! (issue #513). Routed from [`crate::exec::execute_op`] once
+//! issue #461, model-mode `while:` filled in by issue #513.
+//! Routed from [`crate::exec::execute_op`] once
 //! [`electricity_bytecode::refusal::Supported::loop_`] is `true`.
 //!
-//! `--resume` (C21/C22) and the interactive progress line are both
+//! `--resume` (runtime-semantics.md C21/C22) and the interactive progress line are both
 //! out of scope (M2-G; electricity's non-TTY stdout never prints one)
 //! -- every pass here always starts at index 0.
 
@@ -189,7 +189,7 @@ pub(crate) async fn execute_loop(
         }
     }
 
-    // S8 (M1 gate seam round 2): `Region::Loop` carries no `LoopId` of
+    // `Region::Loop` carries no `LoopId` of
     // its own -- the compiler puts the placeholder on the first body
     // op's own path, right after this loop's own path segments
     // (`compile_loop`'s own `loop_path = own_path.push_pass(loop_id)`).
@@ -257,9 +257,9 @@ pub(crate) async fn execute_loop(
     // BaseException` (#574): a cancellation is recorded exactly like any
     // other failure -- `completed_passes`, `completed_at`, and the
     // interrupt text as `meta.error` -- so `--resume` keeps the passes
-    // that finished, then propagates unchanged. `VmError::Refused` (#462,
-    // lane I) is fatal for *control* only (`VmError::is_fatal`'s own doc
-    // comment, ruling R1 on PR #462): it falls through to the same write.
+    // that finished, then propagates unchanged. `VmError::Refused` (#462)
+    // is fatal for *control* only (`VmError::is_fatal`'s own doc
+    // comment, PR #462): it falls through to the same write.
     let error_text: Option<String> = outcome.as_ref().err().map(|err| match err {
         VmError::Cancelled => super::interrupted_text(token),
         other => other.to_string(),
@@ -499,7 +499,7 @@ fn resolve_collection(in_path: &str, ctx: &Value) -> Result<Vec<Value>, String> 
 /// `type(x).__name__` -- unqualified, unlike [`Value::type_name`]'s
 /// `"datetime.date"`/`"datetime.datetime"` (meant for a fuller,
 /// Python-repr-style name elsewhere). `_resolve_collection`'s own error
-/// text is the only place this lane needs the bare class name.
+/// text is the only place this module needs the bare class name.
 fn py_class_name(v: &Value) -> &'static str {
     match v {
         Value::Date(_) => "date",
@@ -749,7 +749,7 @@ fn index_overlay(as_name: Option<&str>, item: Option<&Value>, idx: u32) -> Index
 /// read of a node's own direct entries -- *chain*'s own `Live` entry
 /// can itself be one of this module's own overlay nodes
 /// ([`plain_overlay`]'s rare multi-entry/`Frozen` fallback path is the
-/// only caller left after #484; issue #501's review found the
+/// only caller left after #484; issue #501 found the
 /// same direct-entry bug here, in the slow path a loop-inside-a-
 /// `dynamic`-inside-a-loop body takes).
 fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
@@ -822,7 +822,7 @@ fn layered(entries: IndexMap<Value, Slot>, fallback: Option<NodeRef>) -> NodeRef
 /// [`layered`], plus a single *hidden* key *fallback* must never expose
 /// through the result -- [`with_prev_overlay`]'s own use, to keep the
 /// current pass's not-yet-created `iter_<idx>` invisible through its
-/// own `prime.<loop_name>` overlay (issue #501's review). A
+/// own `prime.<loop_name>` overlay (issue #501). A
 /// no-op key if *fallback* is `None`: nothing to hide anything from.
 fn layered_hiding(
     entries: IndexMap<Value, Slot>,
@@ -840,7 +840,7 @@ fn layered_hiding(
 /// later sibling step's own skeleton node, `exec::tool::execute_tool`
 /// `ensure_dict`s one before it ever renders its own params) stays
 /// invisible through the result -- [`step_overlay`]'s own use (issue
-/// #501's second review). A no-op if *fallback* is `None`.
+/// #501). A no-op if *fallback* is `None`.
 fn layered_watermarked(entries: IndexMap<Value, Slot>, fallback: Option<NodeRef>) -> NodeRef {
     match fallback {
         Some(f) => {
@@ -935,8 +935,8 @@ fn plain_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
 /// eventually gain that key once [`execute_loop`]'s own caller
 /// `ensure_dict`s it right after this returns. But a **reused** real
 /// loop node (a named loop inside an unnamed outer loop, or
-/// `--state`-resumed persisted state, issue #501's second review's
-/// own P0) can already carry `iter_<idx>` from an *earlier* run
+/// `--state`-resumed persisted state, issue #501) can already carry
+/// `iter_<idx>` from an *earlier* run
 /// through this same node -- `dict(own_node)`'s own copy, taken at
 /// *this* run's pass start, includes it right along with every other
 /// key already there, same as any other already-present key. Checked
@@ -1027,7 +1027,7 @@ fn build_pass_chain(
 /// explains, except this one was already guaranteed safe for every
 /// caller (no `Frozen`-chain case ever reaches here).
 ///
-/// Issue #501's second review: `prime_fallback` gets
+/// Issue #501: `prime_fallback` gets
 /// [`crate::store::Node::watermark`]ed to its own entry count *before*
 /// *local*'s own step ever ran -- `core/scope.py::scope_ctx`'s own
 /// `prime = dict(ctx.get("prime") or {})` takes that exact one-time
@@ -1602,7 +1602,7 @@ async fn run_each_tree<'a>(
 }
 
 /// `core/loop.py::LoopRuntime.execute`'s own `while` branch -- CEL or
-/// model mode (lane G2/#513), via a `Condition::Model` arm below.
+/// model mode (#513), via a `Condition::Model` arm below.
 #[allow(clippy::too_many_arguments)]
 async fn run_while<'a>(
     op: &'a Op,
@@ -1676,8 +1676,8 @@ async fn run_while<'a>(
             let mut cond_local = IndexMap::new();
             cond_local.insert(key("iter"), Slot::Value(Value::Dict(iter_map)));
             // `{**ctx, "iter": {...}}` -- a top-level-only overlay, no
-            // `prime` mirror, unlike the body's own `step_overlay`
-            // (Q1): Python builds this dict literally, never through
+            // `prime` mirror, unlike the body's own `step_overlay`:
+            // Python builds this dict literally, never through
             // `scope_ctx`. `last_writes` is layered on top of *this*
             // with `step_overlay` below, which *is* `scope_ctx` and
             // does mirror into `prime` -- matching `core/loop.py`'s own
@@ -2069,7 +2069,7 @@ fn write_model_while_reply(
 /// (`meta.disabled` exactly `true`, `core/loop.py:1190`; `core/
 /// disabled.py::is_disabled_node`) is left out entirely, same as a pass
 /// that failed before the target ever produced a value -- never a
-/// `None` entry standing in for it (issue #518, lane J2).
+/// `None` entry standing in for it (issue #518).
 fn collect_values(
     store: &Store,
     node: &NodeRef,
@@ -2514,7 +2514,7 @@ mod prev_overlay_differential_tests {
         );
     }
 
-    /// Issue #501's second review, on `Store::snapshot`: a
+    /// Issue #501, on `Store::snapshot`: a
     /// shadowed key (`shots`, shadowed by `with_prev_overlay`'s own
     /// `prime` overlay once `prev` exists) must keep its own natural
     /// position -- here, before `other`, exactly as `loop_shaped_store`

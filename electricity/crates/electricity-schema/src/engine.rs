@@ -2,14 +2,14 @@
 //! order-preserving `electricity_value::Value` trees rather than on
 //! `serde_json::Value` (a `BTreeMap`-backed `Map` this workspace never turns
 //! `preserve_order` on for -- see `electricity-vm/Cargo.toml`'s own
-//! dev-dependency comment) -- issue #498 ruling 6, tightened twice over by
-//! PR #502's review and follow-up probes.
+//! dev-dependency comment) -- issue #498, tightened twice over by
+//! PR #502 and its own follow-up.
 //!
 //! This module (via [`schema_is_fully_supported`]) is the accept/reject
 //! *authority* whenever a schema uses only the keywords it implements and
 //! the draft is 2020-12 or unstated -- `validate_prompt_schema` never
 //! builds or even consults the `jsonschema` Rust crate (0.26) on that path
-//! at all (PR #502's round-4 fix: the crate's own build step
+//! at all (PR #502: the crate's own build step
 //! resolves a `$ref` eagerly where Python resolves lazily, and can't
 //! represent a schema-literal `NaN`/`Infinity`, so either used to produce
 //! a false `SchemaError` or a wrong verdict for a schema this module
@@ -18,7 +18,7 @@
 //! `anyOf`/`oneOf` *branch* on that path, since this module itself never
 //! finished the top-level walk that would let it trust its own verdict.
 //! Once the gate holds, [`schema_accepts`]/[`evaluate_branch`] decide
-//! every branch too (PR #502's round-6 fix): the crate's own
+//! every branch too (PR #502): the crate's own
 //! `serde_json::Value`-based error objects were never a good *text*
 //! source anyway -- they lose the schema author's own key order (so a
 //! `type: [string, null]` list, or a multi-property object's own repr,
@@ -56,7 +56,7 @@
 //! non-root `$id`, the Draft 7 tuple form of `items`). A keyword Python's
 //! own `Draft202012Validator.VALIDATORS` dict doesn't implement at all
 //! (`dependencies`, a stray typo, ...) is a plain annotation here too,
-//! never a reason to fall back to the crate (PR #502's round-4 fix) --
+//! never a reason to fall back to the crate (PR #502) --
 //! [`evaluate`] simply finds nothing for it, the same way
 //! Python's own validator never would have either.
 
@@ -660,8 +660,7 @@ thread_local! {
     /// schema node too) revisits one almost immediately. Rust has no
     /// `RecursionError` to catch a cycle like that -- left unchecked it's
     /// a stack overflow, an immediate process abort with no state at all
-    /// (issue #498's own follow-up; PR #502's
-    /// own round-4 fix).
+    /// (issue #498's own follow-up; PR #502).
     static EVAL_STACK: std::cell::RefCell<std::collections::HashSet<(usize, usize)>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
     /// Set once a cycle is detected, or the safety cap below is hit,
@@ -807,7 +806,7 @@ impl Drop for EvalGuard {
     }
 }
 
-/// A `HashSet`, not the `Vec` this used to be (PR #502's round-4 fix):
+/// A `HashSet`, not the `Vec` this used to be (PR #502):
 /// a per-level linear scan over an already-O(depth)-sized
 /// stack made the *cycle check itself* O(depth) on every single
 /// `evaluate` call, needlessly squaring the cost of an otherwise-linear
@@ -1245,7 +1244,7 @@ pub(crate) fn evaluate<'a>(
                 // even an empty `{}`) -- not whether any pattern inside
                 // it actually compiled, matching `_keywords.
                 // additionalProperties`'s own `if "patternProperties" in
-                // schema:` check exactly (review of PR #502's own
+                // schema:` check exactly (PR #502's own
                 // follow-up).
                 let has_pattern_properties = schema
                     .as_dict()
@@ -1266,7 +1265,7 @@ pub(crate) fn evaluate<'a>(
                 // at all, or every key the empty string) is falsy in
                 // Python (`if not patterns or ...`), so it never matches
                 // *any* property, not even one the empty-string pattern
-                // would otherwise match trivially (probe-schema7 c7).
+                // would otherwise match trivially.
                 let joined_pattern: String = schema
                     .as_dict()
                     .and_then(|d| get(d, "patternProperties"))
@@ -1288,7 +1287,7 @@ pub(crate) fn evaluate<'a>(
                 // alternative), so this is the one place in the engine
                 // that can still reach a translation `Err` on a schema
                 // it otherwise accepts (issue #498's own
-                // follow-up, probe-schema9 c7).
+                // follow-up).
                 let has_joined_pattern = !joined_pattern.is_empty();
                 let joined_translation =
                     has_joined_pattern.then(|| translated_pattern(&joined_pattern));
@@ -2224,7 +2223,7 @@ fn limit_equals(limit: &Value, n: i64) -> bool {
 /// text sign-independent, `-Infinity` included), but otherwise
 /// succeeds: an infinite quotient from two genuinely *finite* operands
 /// (`1e308` against `multipleOf: 0.5`, issue #498's own
-/// follow-up, probe-schema9 c6) is `f64`'s own range
+/// follow-up) is `f64`'s own range
 /// overflowing computing `i / d`, not either operand itself being
 /// non-finite, so [`fraction_multiple_of_failed`] gets a clean run.
 /// `core/prompt.py`'s own generic `except Exception` (not `except
@@ -2513,8 +2512,8 @@ fn python_regex_is_valid(pattern: &str) -> bool {
 /// (`re.compile`), checked unconditionally and *before* any instance is
 /// ever validated, regardless of which draft, regardless of whether
 /// anything else about the schema is otherwise supported or even
-/// reachable (issue #498's own follow-up,
-/// probe-schema9 c1/c2: confirmed directly that `\p{L}+` and
+/// reachable (issue #498's own follow-up:
+/// confirmed directly that `\p{L}+` and
 /// `(?<year>\d{4})` -- each genuinely Python-`re`-invalid -- raise
 /// `jsonschema.SchemaError` from *every* schema position the metaschema
 /// recurses into as a subschema, `$defs`/`definitions`/`dependencies`
@@ -2663,11 +2662,9 @@ fn translated_pattern(pattern: &str) -> Result<std::rc::Rc<str>, String> {
 /// ordinary-length instance can exhaust through a lookaround this
 /// translation emits (non-MULTILINE `$`, `\b`/`\B`, a lookbehind) even
 /// though Python's own `re` (no such limit at all) matches it instantly
-/// (issue #498's own follow-up, probe-schema9
-/// c5). Never silently treats a *build* failure (fancy-regex rejecting
+/// (issue #498's own follow-up). Never silently treats a *build* failure (fancy-regex rejecting
 /// syntax Python's own `re` accepts, e.g. a backreference inside a
-/// lookbehind -- `electricity-tools::regex`'s own module docs,
-/// probe-schema9 c4) or this *match* call's own backtrack-limit
+/// lookbehind -- `electricity-tools::regex`'s own module docs) or this *match* call's own backtrack-limit
 /// error as a match: either one calls [`raise_python_exception`]
 /// instead, a documented, narrower divergence (`DESIGN.md` §13)
 /// `validate_prompt_schema` reports as a generic, non-retryable failure
@@ -2712,7 +2709,7 @@ fn pattern_is_match(pattern: &str, text: &str) -> bool {
 /// `examples`, `deprecated`, `readOnly`, `writeOnly`, and every
 /// `content*`/`format` keyword -- Python's own reference implementation
 /// never validates `format` without an explicit `format_checker`, so it
-/// is an annotation here too, issue #498 ruling 6's own module docs).
+/// is an annotation here too, issue #498).
 /// `minContains`/`maxContains` ride along with `contains`, never
 /// meaningful alone, so they're listed as leaves too.
 const SUPPORTED_LEAF_KEYWORDS: &[&str] = &[
@@ -2756,8 +2753,8 @@ thread_local! {
     /// Memoizes [`schema_is_fully_supported`] by schema-node identity --
     /// today, called at most once per [`crate::validate_prompt_schema`]
     /// call (the top-level accept-authority gate; [`evaluate_branch`]/
-    /// [`schema_accepts`] no longer re-run it per branch, PR #502's
-    /// round-6 fix), but a node this pass already resolved gets the
+    /// [`schema_accepts`] no longer re-run it per branch, PR #502),
+    /// but a node this pass already resolved gets the
     /// answer back without a second walk rather than relying on every
     /// caller to know that invariant holds. Cleared at the start of
     /// every [`crate::validate_prompt_schema`] call ([`clear_pattern_cache`]
@@ -2775,11 +2772,11 @@ pub(crate) fn clear_fully_supported_cache() {
 /// `prefixItems`/`allOf`/`anyOf`/`oneOf`/`not`/`if`/`then`/`else`/
 /// `dependentSchemas`/`contains`/`propertyNames`, and whatever a `$ref`
 /// resolves to) uses *only* keywords [`evaluate`] implements -- the
-/// authority test issue #498's own follow-up (ruling R6)
+/// authority test issue #498's own follow-up
 /// requires: this engine decides accept/reject itself only when this
 /// returns `true`, never the `jsonschema` crate (whose own lossy
 /// `serde_json`/ECMA-regex/format-by-default behavior is exactly what
-/// the follow-up's own probes caught diverging from Python). Memoized
+/// the follow-up caught diverging from Python). Memoized
 /// by schema-node identity ([`FULLY_SUPPORTED_CACHE`]).
 ///
 /// A `$ref` target already seen *anywhere* in this call's own walk
@@ -2802,14 +2799,14 @@ pub(crate) fn clear_fully_supported_cache() {
 /// it always was (`$defs: {loop: {$ref: '#/$defs/loop'}}`, or the
 /// degenerate `{"$ref": "#"}`) -- the recursive shape a real document's
 /// `schema:` legitimately uses to describe a tree or a linked list.
-/// Judging a cycle like that "unsupported" (PR #502's round-4 fix)
+/// Judging a cycle like that "unsupported" (PR #502)
 /// used to fail every instance of every recursive schema,
 /// even a depth-1 one, before [`evaluate`] ever ran: `MAX_RECURSION_
 /// DEPTH`-many `$ref` hops through the same handful of cyclic nodes
 /// always eventually tripped the old plain depth budget and reported
 /// Python's own uncaught `RecursionError` text regardless of the
 /// instance at hand. Never popping `seen` means it can no longer double
-/// as that depth budget (PR #502's round-6 fix: without
+/// as that depth budget (PR #502: without
 /// this, a schema with many mutually-referencing `$ref` targets re-
 /// walked the identical subtree once per path between them, genuinely
 /// factorial in the number of targets -- ten of them, each referencing
@@ -2915,8 +2912,7 @@ fn schema_is_fully_supported_inner(
                 // subtree's own base, so a schema using one is routed
                 // to the crate instead, which does resolve it correctly
                 // (confirmed directly) -- never a silent, wrong verdict
-                // (issue #498's own follow-up,
-                // probe-schema7 c14) -- *except* directly on the
+                // (issue #498's own follow-up) -- *except* directly on the
                 // schema `not`/`if`/`contains` hands to `is_valid`
                 // (`id_is_annotation`, issue #507's own item
                 // 2): Python's own `evolve(schema=...).is_valid(...)`
@@ -2946,8 +2942,8 @@ fn schema_is_fully_supported_inner(
                 // `is_2020_12_or_unset` check), so a nested `$schema`
                 // routes to the crate instead rather than silently
                 // validating that subtree under the wrong draft (issue
-                // #498's own follow-up, P2 "nested
-                // `$schema`") -- `not`/`if`/`contains`'s own quirk is
+                // #498's own follow-up, on a nested
+                // `$schema`) -- `not`/`if`/`contains`'s own quirk is
                 // specific to `$id`/subresource scope, never `$schema`
                 // (`evolve()` doesn't change which validator class
                 // handles the nested schema either way), so this one
@@ -2962,12 +2958,11 @@ fn schema_is_fully_supported_inner(
                 // `$ref` lazily, only once the validator actually
                 // descends into it, so a dangling pointer an instance
                 // never reaches is never an error at all (issue #498's
-                // own follow-up, probe-schema7
-                // c15) -- [`evaluate`]'s own "$ref" arm is equally lazy
+                // own follow-up) -- [`evaluate`]'s own "$ref" arm is equally lazy
                 // (silently does nothing when `resolve_ref` fails). An
                 // `$anchor`/`$id`-relative/remote `$ref` shape
                 // ([`is_same_document_pointer_syntax`]) stays
-                // unsupported outright, the same as before this fix.
+                // unsupported outright either way.
                 "$ref" => v.as_str().is_some_and(|pointer| {
                     if !is_same_document_pointer_syntax(pointer) {
                         return false;
@@ -3091,8 +3086,7 @@ fn schema_is_fully_supported_inner(
                 // typo (`descripton`) -- is never walked into and never
                 // affects validity either way, matching Python's own
                 // unknown-keyword-is-an-annotation rule exactly (issue
-                // #498's own follow-up;
-                // probe-schema7 c3/c4).
+                // #498's own follow-up).
                 _ => true,
             }
         }),
@@ -3462,7 +3456,7 @@ fn longest_ref_chain(
 /// *root* -- a single AND over every node that `root` can reach at all,
 /// `anyOf`/`oneOf` branches included -- so a branch *this* function
 /// sees was already confirmed supported before `evaluate` ever started
-/// (PR #502's round-6 fix: re-running the check per branch, on a schema
+/// (PR #502: re-running the check per branch, on a schema
 /// with many mutually-referencing `$ref` targets, revisited the same
 /// nodes often enough to turn a sub-second check into several seconds).
 fn schema_accepts(branch: &Value, instance: &Value, root: &Value) -> bool {
@@ -3483,7 +3477,7 @@ fn schema_accepts(branch: &Value, instance: &Value, root: &Value) -> bool {
 /// recursively, for a `$ref` branch nested inside another anyOf/oneOf:
 /// genuinely exponential in nesting depth once a document goes deep
 /// enough to fail at every level (issue #498's own
-/// follow-up, probe-schema7 c18/c19 -- `tests/
+/// follow-up -- `tests/
 /// nested_any_of_depth.rs` pins 30 levels staying well under a second).
 fn evaluate_branch<'a>(
     branch: &'a Value,

@@ -1,4 +1,4 @@
-//! Lane D: ports `core/prompt_files.py` — reading a `{file: ...}`
+//! Ports `core/prompt_files.py` — reading a `{file: ...}`
 //! prompt source at compile time: literal/relative paths with no
 //! `{{ }}`, confinement to the nearest `circuitry.config.json`/
 //! `config.json` (checked after following symlinks, non-strict
@@ -6,15 +6,14 @@
 //! over-1-MiB/not-UTF-8/unreadable errors, universal-newline
 //! translation, and the refusal for [`crate::DocumentOrigin::Generated`].
 //!
-//! Called first from `compile::compile_document` (lane C), matching
+//! Called first from `compile::compile_document`, matching
 //! `core/compiler.py::compile_orchestration`'s order: declared prompts
 //! read before the composition checks ([`crate::compose`]) before any
 //! effect compiles.
 //!
 //! Confinement is checked against `origin`'s own `confinement_root` —
 //! this module never walks for the nearest `circuitry.config.json`/
-//! `config.json` itself (lane B's own job, building
-//! [`crate::DocumentOrigin`]).
+//! `config.json` itself (that's [`crate::DocumentOrigin`]'s own job).
 //!
 //! # Known divergences
 //!
@@ -127,7 +126,7 @@ fn dict_get<'a>(document: &'a Value, key: &str) -> Option<&'a Value> {
 /// -- `core/prompt_files.py::resolve_text_or_file`.
 ///
 /// Used both by [`compile_declared_prompts`] (every `prompts:` entry)
-/// and -- once lane C wires it in -- by a `prompt`/`yield` effect's own
+/// and -- once the compile step wires it in -- by a `prompt`/`yield` effect's own
 /// `template`/`messages[].content`, the only other fields `{file: ...}`
 /// is allowed on.
 pub(crate) fn resolve_text_or_file(

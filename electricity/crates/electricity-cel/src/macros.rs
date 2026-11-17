@@ -3,8 +3,7 @@
 //! expression, not just a field selection, and to turn *any* failure to
 //! evaluate it into `false` rather than only the narrower set `cel`'s
 //! own safe-navigation primitives (`.?`/`[?]`) can be built from
-//! (DESIGN.md §7.2, issue #379 and its fourth
-//! review).
+//! (DESIGN.md §7.2, issue #379).
 //!
 //! `cel`'s own `has_macro_expander` (`parser/macros.rs`) only accepts a
 //! field selection as `has()`'s argument — `has(state.items[0])` fails

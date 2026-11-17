@@ -3,8 +3,8 @@
 //! None) is None` -- one value pulled from the *entire* nested
 //! `iter_errors` generator tree, `yield from` flattening every nested
 //! validator call into it. [`evaluate`]'s own per-keyword lazy check
-//! already stopped between a schema's own top-level keywords (PR #502's
-//! round-7 fix), but not *inside* one keyword's own loop over several
+//! already stopped between a schema's own top-level keywords (PR #502),
+//! but not *inside* one keyword's own loop over several
 //! properties/elements/subschemas -- a later sibling that loop would
 //! otherwise reach, once an earlier one already failed, used to still
 //! run, so its own exception (a dangling `$ref`, here) failed the whole

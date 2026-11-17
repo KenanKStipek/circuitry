@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "ToolPlugin trait, registry, and the json tool for electricity (electricity-tools, lane C stub)"
+description = "ToolPlugin trait, registry, and the tool plugins for electricity"
 
 [features]
 default = []
@@ -23,9 +23,8 @@ electricity-json = { path = "../electricity-json" }
 # marker text as `electricity-bytecode`'s own `format_refusal` without
 # a second, hand-copied literal to keep in sync.
 electricity-bytecode = { path = "../electricity-bytecode" }
-# Python-`re` pattern-syntax translation (#448 lane D2), shared with
-# `electricity-schema` -- moved out of this crate (PR #502's round-4
-# fix) so both can depend on it without `electricity-schema`
+# Python-`re` pattern-syntax translation (issue #448), shared with
+# `electricity-schema` -- moved out of this crate (PR #502) so both can depend on it without `electricity-schema`
 # needing every other tool plugin's own dependency tree.
 electricity-pyre = { path = "../electricity-pyre" }
 # `http_error_excerpt`'s own `redact()` call (`plugins/base.py::
@@ -57,15 +56,14 @@ async-trait = "0.1"
 # the workspace lockfile (a transitive dependency of `jsonschema`, via
 # `electricity-schema`) -- DESIGN.md §7.3.
 fancy-regex = "0.14"
-# Non-optional as of lane C (#459): `process.rs`'s own `run_tracked`
+# Non-optional since #459: `process.rs`'s own `run_tracked`
 # needs tokio's process/io-util/time/rt features unconditionally, not
 # only behind `test-tools`.
-# `http_client`'s own connect/read/cancellation-abort plumbing (lane E,
-# #485) needs `net` (raw `TcpStream`) on top of lane C's own set.
+# `http_client`'s own connect/read/cancellation-abort plumbing (#485)
+# needs `net` (raw `TcpStream`) on top of the process/io-util/time/rt set added for #459.
 tokio = { version = "1", features = ["process", "io-util", "time", "rt", "net"] }
 libc = "0.2"
-# The shared HTTP client (`http_client/`, #448 decision 1 plus the
-# settled stack question in #485): `hyper`'s own low-level client,
+# The shared HTTP client (`http_client/`, #448 decision 1 and #485): `hyper`'s own low-level client,
 # never `reqwest` -- `reqwest::Client` always inserts an `Accept: */*`
 # default header (confirmed empirically against a loopback server: the
 # mock harness records every header but `User-Agent`, so any header
@@ -75,10 +73,10 @@ libc = "0.2"
 # `hyper::ext::ReasonPhrase`, confirmed present on a plain `hyper`
 # response, is never exposed through `reqwest`'s own `StatusCode`,
 # which only ever returns the RFC canonical text) -- both are required
-# ("Settled questions" in #485: urllib's own, exact header set; the
+# (documented in #485: urllib's own, exact header set; the
 # server's own reason phrase, blank included). One connection per
 # request/redirect hop, no pooling (`client-legacy`'s own keep-alive
-# pool would still be `reqwest`-shaped complexity this lane's single-
+# pool would still be `reqwest`-shaped complexity this crate's single-
 # request-at-a-time model doesn't need): `hyper::client::conn::http1`
 # directly, driven by a spawned task this crate's own cancellation
 # guard can abort outright, closing the socket, the moment the caller

@@ -1,5 +1,5 @@
-//! Lane B2: `dynamic` chain/tree, `finally:`, `on_error`, cancellation --
-//! container-only tests (issue #431's Lane B section). See
+//! `dynamic` chain/tree, `finally:`, `on_error`, cancellation --
+//! container-only tests (issue #431's Scope section). See
 //! `tests/support/mod.rs` for why a `tool` leaf here always fails
 //! deterministically.
 
@@ -334,7 +334,7 @@ async fn tree_registers_every_branch_before_dispatch_and_clears_at_merge() {
 
 #[tokio::test]
 async fn a_tree_cancelled_before_any_branch_starts_still_clears_its_overlay() {
-    // PR #549's review: a cancelled tree never merges
+    // PR #549: a cancelled tree never merges
     // (cof's own no-state-write cancellation contract), but
     // `clear_tree_branches` must still fire -- left registered, a
     // still-coalescing `--live-state` mirror would keep overlaying
@@ -807,7 +807,7 @@ async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message()
 #[tokio::test]
 async fn stop_on_error_records_only_the_first_of_two_simultaneous_failures() {
     // Both branches fail with no real await point in between (the
-    // lane-C tool stub resolves on its very first poll), so both are
+    // mock tool resolves on its very first poll), so both are
     // already queued in the same `FuturesUnordered` before the drain
     // loop ever runs -- exactly the scenario where a naive "keep
     // appending until the queue is cleared" drain would record both
@@ -927,7 +927,7 @@ async fn dispatch_reports_branches_and_concurrency_in_the_observers_own_paramete
 #[tokio::test]
 async fn a_deeply_nested_dynamics_own_if_sees_an_earlier_siblings_write_through_the_qualified_prime_path()
  {
-    // The P0 "frozen ancestor" case from PR #440's review: `d` (nested
+    // The frozen-ancestor hazard PR #440 fixed: `d` (nested
     // two levels under the document root, with no `if`/loop overlay of
     // its own anywhere in between) runs an empty dynamic `first`, then a
     // named `if` whose condition reads that write back through the
@@ -992,7 +992,7 @@ async fn a_deeply_nested_dynamics_own_if_sees_an_earlier_siblings_write_through_
 
 #[tokio::test]
 async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
-    // Ruling (cross-lane cancellation seam): lane C's own
+    // The tool executor's own
     // `execute_tool` returns `VmError::Cancelled` -- the *same* variant
     // this crate's own containers use -- when the token cancels it
     // mid-attempt (blocked on a concurrency slot or a retry backoff),
@@ -1005,7 +1005,7 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
     // `launch` closure that notices it (`z` is queued, never started),
     // not `x`'s. `x`'s own `on_error: continue` must not matter either
     // way -- a `Cancelled` is never an ordinary failure `on_error`
-    // degrades, so the run must still stop (PR #440's review of issue
+    // degrades, so the run must still stop (PR #440 of issue
     // #431: an earlier version of this test cancelled on `x`'s
     // own start instead, so `x`'s own chain pre-check caught it before
     // `y` ever ran, and the comment describing `y`'s own tree noticing
@@ -1066,7 +1066,7 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
 
 #[tokio::test]
 async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_runs() {
-    // M1 lane I prerequisites (issue #448, item U3): `VmError::Refused`
+    // Issue #448, item U3: `VmError::Refused`
     // -- a freshly-compiled `use` child itself unsupported, found only
     // once the run actually reaches it -- bypasses `on_error` entirely
     // and is never wrapped with an effect-path prefix, exactly like

@@ -3,7 +3,7 @@
 //! `electricity_tools::agent_cli` (part A): translating that module's
 //! own [`electricity_tools::agent_cli::AgentCliRunError`]/
 //! [`electricity_tools::agent_cli::AgentCliParseError`] into an
-//! [`AdapterError`] (B4's own retry table), the shared preflight
+//! [`AdapterError`] (with its own retry table), the shared preflight
 //! `check()` (`adapters/_agent_cli.py::check_binary`), and the shared
 //! result-building step (`adapters/_agent_cli.py::generate_result`).
 
@@ -12,7 +12,7 @@ use electricity_vm::adapter::{AdapterError, CheckResult, GenerateOptions, Genera
 use electricity_vm::retry::RetryInfo;
 
 /// `adapters/_agent_cli.py::agent_cli_call_errors` -- a timeout is the
-/// only retryable failure (B4); every other [`AgentCliRunError`] is an
+/// only retryable failure; every other [`AgentCliRunError`] is an
 /// [`AdapterError`] carrying `PyExc::AdapterCallError`, except
 /// `Decode` (CPython's own `UnicodeDecodeError` escapes Python's
 /// `agent_cli_call_errors` context manager untouched, so
@@ -48,7 +48,7 @@ pub fn run_error_to_adapter(err: AgentCliRunError) -> AdapterError {
 }
 
 /// `parse_claude_output`/`parse_pi_output`'s own failure shape as an
-/// [`AdapterError`] -- never retried (B4: a missing answer, an
+/// [`AdapterError`] -- never retried (a missing answer, an
 /// `is_error`/pi error stop, or a non-zero exit all fail the attempt
 /// outright, and a `py_int`/`float()` numeric failure carries its own
 /// class, never `AdapterCallError`).
@@ -144,7 +144,7 @@ pub fn build_generate_result(
     }
 }
 
-/// `model or default_model` (B5): a non-empty call-time *model* always
+/// `model or default_model`: a non-empty call-time *model* always
 /// wins; otherwise *default_model* resolves through
 /// [`crate::config::resolve_truthy_str`] -- falsy (including a falsy
 /// non-string) becomes `""` (no `--model` flag), a truthy non-string
