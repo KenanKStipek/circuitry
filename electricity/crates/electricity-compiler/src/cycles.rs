@@ -12,7 +12,7 @@
 //! parent document's directory; an unreadable or unparseable child
 //! counts as an empty document (`{}`), never a hard error.
 //!
-//! Called from `pipeline.rs` (lane B), after a document compiles, in
+//! Called from `pipeline.rs`, after a document compiles, in
 //! both `check_for_run` and `check_report` -- mirroring
 //! `cli/runtime_shim.py`'s own two calls to `core/cycle_check.py`'s
 //! `detect_cycles`, right after the concurrency-group check

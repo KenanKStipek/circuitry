@@ -50,7 +50,7 @@ fn runtime_block(document: &Value) -> Option<&Value> {
 
 /// The document's `runtime:` block merged over *options*' config-file
 /// runtime block, through [`electricity_config::merge_runtime`] (issue
-/// #431's lane D1: `cli/effective_settings.py::_merge_runtime`'s real
+/// issue #431: `cli/effective_settings.py::_merge_runtime`'s real
 /// deep merge -- `plugins`/`adapters` one level deeper than the rest,
 /// the shell `allowed_commands` ceiling re-intersected afterward --
 /// replacing this function's own pre-#431 shallow, top-level-only
@@ -124,7 +124,7 @@ fn parse_concurrency_groups(value: Option<&Value>) -> (BTreeSet<String>, Vec<Str
 /// errors (`core/concurrency.py`'s `parse_max_concurrency`/
 /// `parse_concurrency_groups`), checked against the merged config
 /// before a document even compiles -- not an effect's `group:`
-/// reference into it (that's `groups::unknown_group_errors`, lane C).
+/// reference into it (that's `groups::unknown_group_errors`).
 pub(crate) fn concurrency_config_errors(runtime_block: Option<&Value>) -> Vec<String> {
     let dict = runtime_block.and_then(Value::as_dict);
     let max_concurrency = dict.and_then(|d| d.get(&Value::Str("max_concurrency".to_string())));
@@ -550,7 +550,7 @@ fn parse_python_float(raw: &str) -> Option<f64> {
 /// rather than becoming absent).
 fn cli_inline_entries(options: &CheckOptions, iface_inputs: &Dict) -> IndexMap<String, Value> {
     let mut inline: IndexMap<String, Value> = IndexMap::new();
-    // A loaded `--profile`'s own `inputs:` (issue #495, lane R) is the
+    // A loaded `--profile`'s own `inputs:` (issue #495) is the
     // base layer: inserted first, so its keys establish position --
     // an `-e` value for the same key below overwrites the value in
     // place, and an `-e`-only key appends after every profile key,
@@ -587,7 +587,7 @@ fn cli_inline_entries(options: &CheckOptions, iface_inputs: &Dict) -> IndexMap<S
 /// point does ([`cli_inline_entries`], then `core/state_ns.py::
 /// migrate_legacy_state`'s own `input`-namespace rule --
 /// [`crate::state_ns::migrate_legacy_input_namespace`]). Mutates and
-/// returns that namespace, Python's own way (lane D's gate needs the
+/// returns that namespace, Python's own way (run wiring needs the
 /// result, not just a pass/fail verdict -- #431's "Seams" section):
 /// a document with no `interface`/`interface.inputs` at all returns the
 /// namespace unchanged, Python's own `isinstance` early return. Per
@@ -689,14 +689,14 @@ pub fn seeded_input_namespace<'a>(
 /// mutations and simply stop where this would have raised, instead of
 /// losing every key it already touched.
 ///
-/// Public (M1 lane I, issue #469): a `use` effect's own `interface.
+/// Public (issue #469): a `use` effect's own `interface.
 /// inputs` check (`core/use.py::_check_interface`'s own
 /// `check_interface_inputs(interface, rendered_inputs, label=...)`
 /// call) is this exact same mutation -- default-fill/require/coerce
 /// against a *rendered* inputs namespace that is not the CLI `-e`
 /// text-only namespace [`build_input_namespace`]'s own preamble
-/// ([`seeded_input_namespace`]) builds, so lane I calls this function
-/// directly on a `use` child's already-rendered inputs rather than
+/// ([`seeded_input_namespace`]) builds, so the `use` effect calls this
+/// function directly on a `use` child's already-rendered inputs rather than
 /// duplicating its default/require/coerce logic a second time.
 pub fn apply_declared_inputs(
     namespace: &mut IndexMap<Value, Value>,
@@ -829,12 +829,12 @@ fn declared_type_outcome(
 /// return below, exactly as `validate()`'s own `lint_warnings` variable
 /// does -- `core.lint.lint_orchestration(orch)` runs before
 /// `unknown_key_warnings(orch)` there too); [`structural_errors`]; compilation
-/// ([`compile_document`], lane C); [`concurrency_config_errors`] against
+/// ([`compile_document`]); [`concurrency_config_errors`] against
 /// the merged runtime config (checked *after* compilation here --
 /// `validate()`'s own order, `cli/runtime_shim.py`'s own parse calls
 /// following `compile_orchestration`); [`groups::unknown_group_errors`]
-/// (lane C) against the same merged config's group names; then
-/// [`cycles::detect_cycles`] (lane C). Each error shape is `validate()`'s
+/// against the same merged config's group names; then
+/// [`cycles::detect_cycles`]. Each error shape is `validate()`'s
 /// own: a flat `errors` list, with no `"Orchestration validation
 /// failed:"` prefix anywhere.
 pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
@@ -966,7 +966,7 @@ pub struct Loaded {
 /// document` step, which a bad path/parse fails before anything else
 /// does -- step 5 of issue #431's run-wiring table).
 ///
-/// *options* is accepted, not yet read, for lane D: a later caller that
+/// *options* is accepted, not yet read, for run wiring: a later caller that
 /// wants `skip_preflight`/`trust_document` to change how a document
 /// loads (neither flag is consulted anywhere in this crate today) has
 /// somewhere to add that without breaking this function's signature.
@@ -989,7 +989,7 @@ pub fn prepare_document(path: &Path, options: &CheckOptions) -> Result<Loaded, R
 /// issue #431's run-wiring table) -- and, unlike the pre-#431
 /// `check_interface_inputs_error` this replaces as `check_for_run`'s own
 /// step, *returns* [`build_input_namespace`]'s coerced/defaulted
-/// namespace rather than only a pass/fail verdict, since lane D's run
+/// namespace rather than only a pass/fail verdict, since run
 /// wiring needs that namespace to seed `state["input"]` with (`cli/
 /// runtime_shim.py::run`, ~:640-648) -- not just know it would have
 /// succeeded.
@@ -998,8 +998,8 @@ pub fn prepare_document(path: &Path, options: &CheckOptions) -> Result<Loaded, R
 /// block the concurrency/group checks run against -- [`check_for_run`]
 /// passes [`merged_runtime_block`]'s own result, now
 /// [`electricity_config::merge_runtime`]'s real deep merge (issue
-/// #431's lane D1); a caller with a real [`electricity_config::
-/// EffectiveSettings`] (lane D2's run wiring) passes its own `runtime`
+/// issue #431); a caller with a real [`electricity_config::
+/// EffectiveSettings`] (run wiring) passes its own `runtime`
 /// field instead, which that same function also produces.
 ///
 /// Order, exactly `check_for_run`'s own: [`effective_settings_shape_error`];
@@ -1025,7 +1025,7 @@ pub fn pre_state_checks(
 /// #441): a failure here means `build_input_
 /// namespace`/[`build_input_namespace_best_effort`] never ran at all,
 /// so `state["input"]` must stay exactly whatever it already was
-/// (lane D2's run wiring), not get the partial, best-effort coercion
+/// (run wiring), not get the partial, best-effort coercion
 /// pass that's only ever correct for a step-10 failure. [`pre_state_
 /// checks`] itself is still the right call for any caller that only
 /// wants the combined verdict (`check_for_run`, this crate's own
@@ -1148,7 +1148,7 @@ pub fn post_state_checks(
 /// structural-check step itself). `check_for_run` stays exactly this
 /// composition so every existing golden, `--dump-ir`, and osi's own use
 /// of this crate keep seeing the same result -- the three phases above
-/// exist so lane D's run wiring can call each on its own, not to change
+/// exist so run wiring can call each on its own, not to change
 /// what this function itself does.
 pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
     let loaded = prepare_document(path, options)?;
@@ -1808,7 +1808,7 @@ mod tests {
         );
     }
 
-    /// Issue #495, lane R: a loaded `--profile`'s own `inputs:` is a
+    /// Issue #495: a loaded `--profile`'s own `inputs:` is a
     /// base layer under `-e` -- the profile key establishes its own
     /// position, an `-e` value for the same key wins but keeps that
     /// position, and an `-e`-only key follows every profile key.

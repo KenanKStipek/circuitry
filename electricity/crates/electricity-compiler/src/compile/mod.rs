@@ -78,12 +78,12 @@ fn dict_get<'a>(document: &'a Value, key: &str) -> Option<&'a Value> {
 /// ([`containers`]/[`leaves`]). Concurrency-group references
 /// ([`crate::groups::unknown_group_errors`]) and `use` cycles
 /// ([`crate::cycles::detect_cycles`]) are checked by the pipeline
-/// (`pipeline.rs`, lane B), after a document compiles, not here:
+/// (`pipeline.rs`), after a document compiles, not here:
 /// Circuitry's own `cli/runtime_shim.py` checks both against its
 /// surfaces' merged runtime config, never inside
 /// `compile_orchestration` itself. `declared_prompts`/
-/// `check_prompt_composition` are lane D's (`prompt_files.rs`/
-/// `compose.rs`); the rest is this lane's own.
+/// `check_prompt_composition` belong to `prompt_files.rs`/
+/// `compose.rs`; the rest belongs to this module.
 pub fn compile_document(
     document: &Value,
     origin: &DocumentOrigin,

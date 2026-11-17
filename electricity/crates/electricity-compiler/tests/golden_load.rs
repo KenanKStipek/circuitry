@@ -1,9 +1,9 @@
 //! Replays `electricity/scripts/generate_compiler_load_corpus.py`'s golden
-//! cases (issue #408's lane B section): `check_report` against Circuitry's
+//! cases (issue #408's Scope section): `check_report` against Circuitry's
 //! `validate(...)`, and `check_for_run`'s text against `run(...)`'s own
 //! `RunResult.error`. Every case here fails before `compile_orchestration`
 //! ever runs (a load, structural, or concurrency-configuration error), so
-//! every one is fully checkable against this lane alone.
+//! every one is fully checkable against this crate alone.
 
 mod support;
 

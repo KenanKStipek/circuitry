@@ -1,4 +1,4 @@
-//! Lane J1 (issue #488): reads and schema-checks a profile file --
+//! Issue #488: reads and schema-checks a profile file --
 //! `cli/profiles.py::parse_profile_document`/`load_profile`'s own file
 //! I/O, YAML, and schema half. The pure checks ([`ProfileSettings`], the
 //! effect-path walk, the routing-pin check) live in
@@ -7,9 +7,9 @@
 //! only this crate reaches `schema_instance`'s `Value` ->
 //! schema-instance conversion the schema check needs.
 //!
-//! `--profile <path>` has no CLI surface yet (lane R); nothing in
-//! electricity's run wiring calls [`load_profile`] today, so this lane
-//! changes no run behaviour.
+//! `--profile <path>` has no CLI surface yet; nothing in
+//! electricity's run wiring calls [`load_profile`] today, so this
+//! module changes no run behaviour.
 //!
 //! # Loading order (`parse_profile_document`, then `load_profile`)
 //!

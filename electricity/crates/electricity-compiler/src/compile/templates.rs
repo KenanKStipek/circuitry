@@ -15,7 +15,7 @@ use electricity_value::Value;
 /// syntax gate (set only by a caller checking one of the composable
 /// fields runtime-semantics §3.4 lists) -- whether the name itself
 /// resolves is `compose::check_prompt_composition`'s separate, later
-/// check (lane D).
+/// check.
 pub(crate) fn check_templates(
     value: &Value,
     effect_path: &str,

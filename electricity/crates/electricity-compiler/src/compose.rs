@@ -1,12 +1,13 @@
-//! Lane D: ports `core/prompt_compose.py`'s composition checks — each
+//! Ports `core/prompt_compose.py`'s composition checks — each
 //! fragment's syntax, set-delimiter tags refused, unknown names
 //! resolved scope-aware, collisions between declared prompts and
 //! effects, references to non-text effects, cycles among declared
-//! prompts. The `type: yield` effect's own compile step is lane C's;
+//! prompts. The `type: yield` effect's own compile step belongs to
+//! `compile::compile_document`;
 //! this module only handles its role in composition (a `yield` is
 //! text-producing, so it is a valid bare/dotted `{{> name}}` target).
 //!
-//! Called from `compile::compile_document` (lane C) right after
+//! Called from `compile::compile_document` right after
 //! [`crate::prompt_files::compile_declared_prompts`], matching
 //! `core/compiler.py::compile_orchestration`'s order: the composition
 //! checks run before any effect compiles.
@@ -195,8 +196,8 @@ pub(crate) fn finally_list(document: &Value) -> &[Value] {
 
 /// Every effect name anywhere in *document*, flattened regardless of
 /// nesting -- `core/prompt_compose.py`'s `all_effect_names`. Used for
-/// the declared-prompt/effect-name collision check and -- once lane C
-/// wires it in -- `Program.effect_names`.
+/// the declared-prompt/effect-name collision check and -- once
+/// `compile::compile_document` wires it in -- `Program.effect_names`.
 ///
 /// Walks with an explicit stack rather than recursion, so a document as
 /// deep as [`electricity_value::MAX_DEPTH`] allows can't overflow the

@@ -22,8 +22,8 @@
 //! [`first_refused_child`] and [`allowlist_denials`] are the two
 //! composed checks `electricity` (lib)'s own run wiring calls; wiring
 //! either into a real run's own per-`use`-child runtime check (as
-//! opposed to this up-front, literal-children-only prediction) stays
-//! lane I's own job (`electricity/docs/spec/vm-lanes.md`'s own
+//! opposed to this up-front, literal-children-only prediction) is a
+//! separate job (`electricity/docs/spec/vm-lanes.md`'s own
 //! `exec/use_.rs` row).
 //!
 //! A non-blank `ref:` on the same effect takes priority over `path:`/
@@ -34,8 +34,8 @@
 //! runs over *raw*, uncompiled documents, so resolving one here would
 //! mean porting the library registry lookup `core/cycle_check.py::
 //! resolve_reference` falls back to for `ref:` -- out of scope for a
-//! static prediction this lane's own real per-child runtime check
-//! (lane I) still has the final word over.
+//! static prediction the real per-child runtime check still has the
+//! final word over.
 //!
 //! **A fresh, self-contained walk, not a reuse of [`crate::cycles`]'s
 //! own private helpers.** `crate::cycles::detect_cycles` already loads
@@ -328,8 +328,8 @@ fn visit_with_inline(
     }
 }
 
-/// The up-front refusal walk's own composed check (M1 lane I
-/// prerequisites, issue #448, item U4(a)): the first literal path
+/// The up-front refusal walk's own composed check (issue #448,
+/// item U4(a)): the first literal path
 /// child, in walk order, whose own freshly-compiled `Program` is
 /// itself unsupported against *supported* -- `None` if every child
 /// compiles and passes, or if *document* has no literal path children
@@ -337,7 +337,7 @@ fn visit_with_inline(
 /// label for [`crate::DocumentOrigin::File`] (the same shape
 /// [`crate::compile::compile_document`] needs); a child that fails to
 /// *compile* at all (a structural error, never a capability refusal)
-/// is skipped here, not surfaced as a refusal -- lane I's own
+/// is skipped here, not surfaced as a refusal -- the real
 /// per-child runtime check, which actually loads and runs the child,
 /// is still the one that reports a real compile failure when a run
 /// reaches it for real.
@@ -368,8 +368,8 @@ pub fn first_refused_child(
     None
 }
 
-/// The allowlist check's own composed walk (M1 lane I prerequisites,
-/// issue #448, item U4(b)): *document*'s own top-level denials
+/// The allowlist check's own composed walk (issue #448,
+/// item U4(b)): *document*'s own top-level denials
 /// ([`electricity_config::orchestration_denials`], `(false, true)`,
 /// unchanged M0 behaviour), followed by every reachable `use` child's
 /// own denials (`skip_templated: true, include_document_adapter:

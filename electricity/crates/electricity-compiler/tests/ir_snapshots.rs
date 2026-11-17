@@ -88,7 +88,7 @@ fn prompt_inputs_and_params_are_raw_literals() {
     // merge into the run-time context/adapter call as the raw dict,
     // `{{...}}`-looking text included. Pin that the compiler emits
     // `ParamNode::Literal` for both fields here, not `ParamNode::
-    // Template`, so a later lane can't silently turn them into
+    // Template`, so a later change can't silently turn them into
     // template fields without this snapshot's own diff catching it.
     assert_snapshot(
         "prompt_inputs_and_params_are_raw_literals",

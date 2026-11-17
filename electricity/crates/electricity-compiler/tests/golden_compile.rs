@@ -1,13 +1,13 @@
 //! Replays `electricity/scripts/generate_compiler_compile_corpus.py`'s
-//! golden cases against this lane's own `compile_document` (issue
+//! golden cases against this crate's own `compile_document` (issue
 //! #408's Test strategy section).
 //!
 //! Each case's entry file is parsed directly here
 //! (`electricity-yaml`/`electricity-json`, by suffix) rather than
-//! through `load_document`/`check_report`/`check_for_run` (lane B) --
+//! through `load_document`/`check_report`/`check_for_run` --
 //! this corpus is only about `compile_document`'s own behaviour, and
 //! every case's document is already structurally valid, so routing
-//! through the full pipeline would just re-run lane B's own checks for
+//! through the full pipeline would just re-run those checks for
 //! no benefit. A `DocumentOrigin::File` is built from the canonicalized case root
 //! (every corpus case is a single, flat project with no nested
 //! `config.json` of its own, so `document_dir` and `confinement_root`
@@ -63,7 +63,7 @@ fn parse_document(entry: &Path) -> electricity_value::Value {
 /// `runtime:` block is the *entire* merged runtime config `cli/
 /// runtime_shim.py`'s `concurrency_limiter.group_names` would be built
 /// from -- the same value [`groups::unknown_group_errors`]'s real
-/// caller (`pipeline.rs`, lane B) passes, computed from the merged
+/// caller (`pipeline.rs`) passes, computed from the merged
 /// runtime config the same way.
 fn known_groups_from_runtime(program: &electricity_bytecode::Program) -> BTreeSet<String> {
     let Some(Value::Dict(runtime)) = &program.runtime_block else {
@@ -82,7 +82,7 @@ fn known_groups_from_runtime(program: &electricity_bytecode::Program) -> BTreeSe
         .collect()
 }
 
-/// The `run_error` lane C's own two post-compile checks
+/// The `run_error` the two post-compile checks
 /// ([`groups::unknown_group_errors`], then [`cycles::detect_cycles`] --
 /// `pipeline.rs`'s own documented order) would produce for a
 /// successfully compiled *program*/*document*, formatted exactly as
@@ -104,11 +104,11 @@ fn our_post_compile_run_error(
     None
 }
 
-/// Whether *run_error* is something lane C's own group/cycle checks are
+/// Whether *run_error* is something the group/cycle checks are
 /// responsible for (and so comparable against
 /// [`our_post_compile_run_error`]) -- a case whose `run_error` comes
 /// from a pipeline stage this corpus's direct `compile_document` call
-/// bypasses entirely (the JSON-schema structural check, lane B) is
+/// bypasses entirely (the JSON-schema structural check) is
 /// left uncompared, same as the generic loop already leaves every
 /// other pipeline-only error uncompared.
 fn is_group_or_cycle_error(run_error: &str) -> bool {

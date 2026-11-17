@@ -1,11 +1,11 @@
 //! Proves `electricity_bytecode::first_unsupported`'s own tool-provider
-//! refusal (issue #431's gate lane, ruling on PR #432's
-//! review: "`first_unsupported` MUST also refuse any `tool` effect
+//! refusal (issue #431, PR #432:
+//! "`first_unsupported` MUST also refuse any `tool` effect
 //! whose provider ... is not `json`") works end to end against a real
 //! `check_for_run` compile -- not just the unit-level `Program`
-//! fixtures `electricity-bytecode`'s own tests build by hand. Lane A
-//! ships the walker and this proof; wiring it into the CLI's own
-//! output is lane D's (`electricity/docs/spec/vm-lanes.md`).
+//! fixtures `electricity-bytecode`'s own tests build by hand. This
+//! crate ships the walker and this proof; wiring it into the CLI's own
+//! output is a separate concern (`electricity/docs/spec/vm-lanes.md`).
 
 use electricity_bytecode::RefusalReason;
 use electricity_compiler::{CheckOptions, check_for_run};

@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn a_date_at_an_object_typed_position_is_exactly_one_error() {
-        // F2 (second-round review): `retries` is `{"type": "object",
+        // `retries` is `{"type": "object",
         // "additionalProperties": false}` -- a marker object there used to
         // also trip "additionalProperties" (leaking the internal marker
         // key name) on top of the "type" error. Python's own `jsonschema`
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn an_integer_beyond_f64_range_is_a_maximum_error_not_a_panic() {
-        // F1/F4 (second-round review): `threshold` is `number`, `minimum:
+        // `threshold` is `number`, `minimum:
         // 0`, `maximum: 1` -- a bare YAML integer this large used to panic
         // inside the `jsonschema` crate (`arbitrary_precision`'s `as_f64`
         // returns `None` for a value that overflows to infinity, and
@@ -890,7 +890,7 @@ mod tests {
         let warnings = unknown_key_warnings(&Value::Dict(dict));
         assert_eq!(warnings.len(), 1);
         // Python's `type(key).__name__` for a `datetime.date` is `"date"`,
-        // not the module-qualified `"datetime.date"` -- F5.
+        // not the module-qualified `"datetime.date"`.
         assert!(
             warnings[0].contains("(YAML read the unquoted key as a date)"),
             "{warnings:?}"
@@ -915,8 +915,7 @@ mod tests {
         let errors = interface_unknown_type_errors(&Value::Dict(dict));
         assert_eq!(errors.len(), 1);
         // `f"interface.inputs.{key}..."` renders an int key as `str(key)`
-        // ("1"), not the blank text `key.as_str().unwrap_or_default()`
-        // -- F5.
+        // ("1"), not the blank text `key.as_str().unwrap_or_default()`.
         assert!(
             errors[0].starts_with("interface.inputs.1.type:"),
             "{errors:?}"
@@ -960,7 +959,7 @@ mod tests {
     /// Replays `electricity/scripts/generate_compiler_difflib_corpus.py`'s
     /// golden cases -- `core.document_check._near_miss` (the `_MISTAKEN_FOR`
     /// table plus `difflib.get_close_matches`, cutoff 0.8) against
-    /// Circuitry's own real known-key sets, not a hand-typed value (F9).
+    /// Circuitry's own real known-key sets, not a hand-typed value.
     #[derive(serde::Deserialize)]
     struct DifflibCase {
         word: String,

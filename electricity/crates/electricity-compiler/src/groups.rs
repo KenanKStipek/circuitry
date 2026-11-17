@@ -1,16 +1,16 @@
-//! Lane C: ports `core/compiler.py`'s `unknown_concurrency_group_errors`
+//! Ports `core/compiler.py`'s `unknown_concurrency_group_errors`
 //! -- an effect's `group:` reference checked against the resolved
 //! `runtime.concurrency_groups` names (`core/concurrency.py`'s
 //! `UnknownConcurrencyGroupError`).
 //!
 //! The `max_concurrency`/`concurrency_groups` *configuration* errors
 //! (`core/concurrency.py`'s `parse_max_concurrency`/
-//! `parse_concurrency_groups`) are lane B's, in `pipeline.rs`: they
+//! `parse_concurrency_groups`) are `pipeline.rs`'s own: they
 //! validate the merged runtime config itself, before a document even
 //! compiles, not an effect's reference into it -- see that module's
 //! `concurrency_config_errors`.
 //!
-//! Called from `pipeline.rs` (lane B), after a document compiles, in
+//! Called from `pipeline.rs`, after a document compiles, in
 //! both `check_for_run` and `check_report` -- mirroring
 //! `cli/runtime_shim.py`'s own two calls to `unknown_concurrency_group_errors`
 //! against the merged config's `runtime.concurrency_groups` names:
