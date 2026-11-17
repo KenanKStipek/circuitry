@@ -1,5 +1,5 @@
 {
-  "spec_case": "core/prompt_compose.py::_resolve_effect_text, issue #406/#487 review finding 3",
+  "spec_case": "core/prompt_compose.py::_resolve_effect_text, issue #406/#487",
   "description": "`{{> broken}}` names an effect that ran but failed under on_error: continue -- it resolved, so it's present, but its value is null, so it renders empty, never an error.",
   "engines": ["python", "electricity"],
   "expect": "success",

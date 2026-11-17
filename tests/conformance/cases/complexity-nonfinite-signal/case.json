@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #516 §3 finding 9: a non-finite signal",
+  "spec_case": "issue #516 §3: a non-finite signal",
   "description": "params.num_predict: .inf gives signals.output_size.raw = Infinity, normalized/contribution = NaN and score = 0.0 (Python's max(MIN_SCORE, nan) returns 0.0); Infinity/NaN tokens in --out; the only (catch-all) band still wins.",
   "engines": ["python", "electricity"],
   "config": "config.json",

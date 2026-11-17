@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #516 §3 finding 6: a scoring failure is a warning, not a run failure",
+  "spec_case": "issue #516 §3: a scoring failure is a warning, not a run failure",
   "description": "params.num_predict is a 400-digit integer, too large to convert to float: the exact WARNING line, no meta.complexity, the effect still succeeds.",
   "engines": ["python", "electricity"],
   "config": "config.json",
