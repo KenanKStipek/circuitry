@@ -378,26 +378,36 @@ fn unique_run_dir() -> PathBuf {
 /// instead gets a warning on stderr — loud enough that a caller who
 /// reuses one on purpose notices, without osi quietly changing it out
 /// from under them.
-fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<()> {
+// Returns the group-/world-accessible warning as a string, rather
+// than printing it itself (issue #825): `do_run` calls this after
+// the terminal may already be on the alternate screen, where a bare
+// `eprintln!` here would land as stray text over the TUI's own first
+// frame instead of on the primary screen's scrollback -- the same
+// reason `engine_capability_notice`/`label_capability_notice` are
+// printed by their own caller, not from inside the function that
+// computes them.
+fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<Option<String>> {
     use std::os::unix::fs::DirBuilderExt;
     if is_default {
-        return std::fs::DirBuilder::new().mode(0o700).create(path);
+        std::fs::DirBuilder::new().mode(0o700).create(path)?;
+        return Ok(None);
     }
     let already_existed = path.exists();
     std::fs::create_dir_all(path)?;
     if already_existed {
         let mode = std::fs::metadata(path)?.permissions().mode();
         if mode & 0o077 != 0 {
-            eprintln!(
+            return Ok(Some(format!(
                 "osi: run directory {} is group- or world-accessible (mode {:o}); \
                  it can hold prompt and tool output",
                 path.display(),
                 mode & 0o777
-            );
+            )));
         }
-        Ok(())
+        Ok(None)
     } else {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        Ok(None)
     }
 }
 
@@ -1150,6 +1160,41 @@ fn do_run(args: RunArgs) -> ExitCode {
         false,
     );
 
+    // Entered here, before `build_engine`'s own `cof run --help`/
+    // `electricity --help` probe, rather than inside `run_tui` once
+    // the engine is already detected and spawned: that probe runs a
+    // real subprocess to completion (`PROBE_TIMEOUT`, 10s) and, on a
+    // loaded machine, is the one step in this function slow enough to
+    // push a human's or a test's first sight of the alternate screen
+    // well past a few seconds (measured against a real `cof` under
+    // heavy concurrent load, issue #825). The alternate screen itself
+    // needs none of the engine's own detection to switch on, so
+    // switching it on first decouples how soon osi shows *something*
+    // from how long that probe happens to take. `want_tui` mirrors
+    // exactly the condition `do_run` used to check much later
+    // (`--glance` wins over the TUI the same way it already wins
+    // over `--log`, DESIGN.md §6.2/§6.3; `!effective_log_mode` is
+    // `run_tui`'s own, unchanged, condition).
+    let want_tui = !args.glance && !effective_log_mode(args.log);
+    let early_terminal = if want_tui {
+        match TerminalGuard::enter()
+            .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)))
+        {
+            Ok(pair) => Some(pair),
+            Err(err) => {
+                // DESIGN.md's own TTY check (`effective_log_mode`) said
+                // this should be a real terminal; if it still isn't one
+                // underneath (an exotic CI pty, a stdout swapped out
+                // from under osi), `do_run`'s own plain path below runs
+                // instead, exactly as if `--log` had been given.
+                eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let engine = build_engine(args.engine, &mut signals);
     // A Ctrl-C landing during the probe
     // `build_engine` just ran is cancelled promptly (`run_probe`'s own
@@ -1160,20 +1205,44 @@ fn do_run(args: RunArgs) -> ExitCode {
     // run directory doesn't exist yet at this point (created below),
     // so there's nothing to clean up either way.
     if let Some(code) = pending_signal_exit_code(&mut signals) {
+        // Leaves the alternate screen (dropping `early_terminal`)
+        // before `exit_early` ever prints: anything written while
+        // still in it lands in the alternate buffer, which this
+        // process's own exit discards unseen, rather than the
+        // primary screen's scrollback a real terminal keeps.
+        drop(early_terminal);
         return exit_early(code);
     }
+    // Collected rather than printed straight to stderr when the TUI
+    // is already on the alternate screen (`early_terminal.is_some()`):
+    // printed there, either notice would be lost the same way, never
+    // reaching the primary screen's own scrollback at all. `run_tui`
+    // surfaces them as ordinary log lines instead, the same place
+    // the theme downgrade note already lands. `--log`/non-TTY mode
+    // is unaffected -- its own notices still go straight to stderr,
+    // exactly as `e2e_cof.rs` already checks.
+    let mut startup_notices: Vec<String> = Vec::new();
     if let Some(notice) = engine_capability_notice(&engine.caps(), engine.name()) {
-        eprintln!("{notice}");
+        if early_terminal.is_some() {
+            startup_notices.push(notice);
+        } else {
+            eprintln!("{notice}");
+        }
     }
     if let Some(notice) =
         label_capability_notice(&engine.caps(), engine.name(), spec.label.is_some())
     {
-        eprintln!("{notice}");
+        if early_terminal.is_some() {
+            startup_notices.push(notice);
+        } else {
+            eprintln!("{notice}");
+        }
     }
 
     let cmd = match engine.command(&spec) {
         Ok(cmd) => cmd,
         Err(EngineError::MissingConfig(message)) => {
+            drop(early_terminal);
             eprintln!("osi: {message}");
             return exit_early(2);
         }
@@ -1190,6 +1259,15 @@ fn do_run(args: RunArgs) -> ExitCode {
     // either engine. A malformed `-e` is never osi's own error (the
     // engine reports that itself once it actually runs) — just the
     // same no-plan fallback as a compile failure.
+    // Neither branch below is fatal (both fall back to
+    // `PlanTree::empty()` and keep going into the same run `do_run`
+    // would otherwise have made) -- the notice joins `startup_notices`
+    // rather than going straight to stderr for the same reason the
+    // engine/label capability notices above do: once `early_terminal`
+    // is `Some`, the terminal is already on the alternate screen, and
+    // a bare `eprintln!` here would be stray text over the TUI's own
+    // first frame instead of something the primary screen's
+    // scrollback keeps.
     let plan = match oscilloscope_core::plan::parse_inputs(&args.set) {
         Ok(inputs) => match compile_plan!(&orchestration, spec.config.as_deref(), &inputs) {
             Ok((program, discovered_config)) => {
@@ -1197,12 +1275,24 @@ fn do_run(args: RunArgs) -> ExitCode {
                 PlanTree::from_program_with_options(&program, effective_config, &inputs)
             }
             Err(err) => {
-                eprintln!("osi: couldn't compile a plan ({err}); running from observations only");
+                let notice =
+                    format!("osi: couldn't compile a plan ({err}); running from observations only");
+                if early_terminal.is_some() {
+                    startup_notices.push(notice);
+                } else {
+                    eprintln!("{notice}");
+                }
                 PlanTree::empty()
             }
         },
         Err(err) => {
-            eprintln!("osi: couldn't compile a plan ({err}); running from observations only");
+            let notice =
+                format!("osi: couldn't compile a plan ({err}); running from observations only");
+            if early_terminal.is_some() {
+                startup_notices.push(notice);
+            } else {
+                eprintln!("{notice}");
+            }
             PlanTree::empty()
         }
     };
@@ -1212,12 +1302,23 @@ fn do_run(args: RunArgs) -> ExitCode {
     // the plan compile) can fail without ever needing it on disk at
     // all, and a failure there used to leave a freshly made, empty
     // directory behind with no "exit" line printed either.
-    if let Err(err) = create_run_dir(&run_dir, is_default_dir) {
-        eprintln!(
-            "osi: couldn't create run directory {}: {err}",
-            run_dir.display()
-        );
-        return exit_early(1);
+    match create_run_dir(&run_dir, is_default_dir) {
+        Ok(Some(notice)) => {
+            if early_terminal.is_some() {
+                startup_notices.push(notice);
+            } else {
+                eprintln!("{notice}");
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            drop(early_terminal);
+            eprintln!(
+                "osi: couldn't create run directory {}: {err}",
+                run_dir.display()
+            );
+            return exit_early(1);
+        }
     }
 
     // A reused `--out-dir` can hold `state.live.json`/`state.json`/
@@ -1241,6 +1342,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // still leave a brief, real window where the engine ran
     // unsupervised before the first poll loop iteration ever checked.
     if let Some(code) = pending_signal_exit_code(&mut signals) {
+        drop(early_terminal);
         if is_default_dir {
             let _ = std::fs::remove_dir_all(&run_dir);
         }
@@ -1251,6 +1353,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         match SupervisedChild::spawn(cmd, &spec.stdout_path(), &spec.stderr_path()) {
             Ok(pair) => pair,
             Err(err) => {
+                drop(early_terminal);
                 eprintln!("osi: couldn't launch {}: {err}", engine.name());
                 // The directory was just created for this spawn alone:
                 // the engine never started, so a default one
@@ -1282,11 +1385,15 @@ fn do_run(args: RunArgs) -> ExitCode {
         );
     }
 
-    // DESIGN.md §6.2/§6.3: a TTY gets the interactive TUI; `--log` or
-    // any non-TTY stdout keeps this function's own plain-text stream
-    // below, byte for byte.
-    if !effective_log_mode(args.log) {
+    // DESIGN.md §6.2/§6.3: a TTY gets the interactive TUI, already
+    // entered above (`early_terminal`), before `build_engine`'s own
+    // probe ever ran; `--log`, any non-TTY stdout, or the TUI having
+    // failed to start for real up there keeps this function's own
+    // plain-text stream below, byte for byte.
+    if let Some((guard, terminal)) = early_terminal {
         return run_tui(
+            guard,
+            terminal,
             child,
             stderr_rx,
             spec,
@@ -1300,6 +1407,7 @@ fn do_run(args: RunArgs) -> ExitCode {
             theme_name,
             &history,
             &mut registry,
+            startup_notices,
         );
     }
 
@@ -2186,6 +2294,8 @@ const RENDER_REBUILD_INTERVAL: Duration = Duration::from_secs(1);
 /// and truly done, exactly as it already does for `--log`.
 #[allow(clippy::too_many_arguments)]
 fn run_tui(
+    _guard: TerminalGuard,
+    mut terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
     mut child: SupervisedChild,
     stderr_rx: std::sync::mpsc::Receiver<String>,
     spec: RunSpec,
@@ -2199,6 +2309,7 @@ fn run_tui(
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
     registry: &mut registry_io::RegistryHandle,
+    startup_notices: Vec<String>,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
@@ -2246,6 +2357,18 @@ fn run_tui(
             format_log_line(&mut clock, None, &note),
         );
     }
+    // `do_run`'s own engine/label capability notices (issue #825):
+    // collected there rather than sent straight to stderr, since the
+    // terminal was already on the alternate screen by the time
+    // `build_engine`'s probe produced them -- printed there, they
+    // would never reach the primary screen's own scrollback at all.
+    for notice in startup_notices {
+        push_log_line(
+            &mut log_lines,
+            &mut next_log_seq,
+            format_log_line(&mut clock, None, &notice),
+        );
+    }
     let mut highlights = highlight::Tracker::new();
     let mut prev_render_state: Option<oscilloscope_core::render::RenderState> = None;
     // Both start out already caught up with whatever
@@ -2260,55 +2383,15 @@ fn run_tui(
     )> = None;
     let mut theme_banner_until: Option<Instant> = None;
 
-    let guard_and_terminal = TerminalGuard::enter()
-        .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
-    let (_guard, mut terminal) = match guard_and_terminal {
-        Ok(pair) => pair,
-        Err(err) => {
-            // DESIGN.md's own TTY check (`effective_log_mode`) said
-            // this should be a real terminal; if it still isn't one
-            // underneath (an exotic CI pty, a stdout swapped out from
-            // under osi), fall back to the plain supervise loop
-            // rather than a broken half-raw-mode session
-            // — a bare `child.wait()` here left SIGINT/TERM/HUP to osi
-            // doing nothing at all until the engine ended on its own.
-            eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
-            let stdout = std::io::stdout();
-            let mut out = stdout.lock();
-            let exit_status = supervise_plain(
-                &mut out,
-                &mut clock,
-                &mut child,
-                &stderr_rx,
-                &mut live_poller,
-                &mut events_tailer,
-                &mut differ,
-                &mut model,
-                &plan,
-                &mut signals,
-                registry,
-                &document,
-            );
-            let code = finish_run(
-                &mut out,
-                &mut clock,
-                &mut child,
-                &stderr_rx,
-                &mut live_poller,
-                &mut events_tailer,
-                &mut differ,
-                &mut model,
-                &plan,
-                &spec,
-                &run_dir,
-                exit_status,
-                print_run_dir,
-                history,
-                &engine_name,
-            );
-            return ExitCode::from(code);
-        }
-    };
+    // The terminal is already in the alternate screen by the time
+    // this function is called (`do_run`'s own `early_terminal`,
+    // entered before `build_engine`'s probe and the engine spawn
+    // both ran) -- no fallback to the plain supervise loop is needed
+    // here any more; the one case that fallback existed for (the TTY
+    // check having said yes but the real terminal underneath saying
+    // no) is now handled by `do_run` itself, before either `child` or
+    // `plan` even exist, by using that same plain path directly
+    // rather than ever calling this function at all.
 
     // Design: crossterm's own blocking
     // `event::read()` runs on its own thread from here on, never
