@@ -1257,8 +1257,8 @@ step that failed inside it. `created_at`/`retries_used` follow the same rule
 as a prompt's (§5.1, #421): `created_at` is the start of this pass's first
 attempt, never reset by a later attempt; `retries_used` is set on both a
 successful and a failed outcome, absent (not `0`) when the first attempt is
-also the last. Ported in `electricity-vm::exec::use_` (M1 lane I, #469,
-merged in #472), the rule included.
+also the last. Ported in `electricity-vm::exec::use_` (#469, merged in #472),
+the rule included.
 
 **`meta.attempts`** (issue #659): present exactly when `meta.retries_used`
 is, with `retries_used + 1` entries, oldest first. Each entry: `created_at`,
