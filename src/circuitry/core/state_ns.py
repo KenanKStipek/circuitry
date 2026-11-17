@@ -337,17 +337,32 @@ _CHILD_LISTS = ("effects", "steps", "body", "then", "else", "finally")
 
 
 def _effect_names(effects: Any) -> frozenset[str]:
-    """The declared ``name:`` of every effect dict in *effects* — the same
-    set a bare reference's own runtime fallback would shadow a declared
-    input with (``core.templates.push_bare_effect_scope``).
+    """The names a bare reference's own runtime fallback would shadow a
+    declared input with (``core.templates.push_bare_effect_scope``): every
+    named effect dict in *effects*, plus — because it writes straight into
+    the enclosing namespace instead of its own — the names inside an
+    unnamed ``if``'s own ``then``/``else`` or an unnamed loop's own
+    ``body``, at any depth through further unnamed ``if``/loop nesting
+    (``core.dynamic._region_effect_names``). A named ``if``/loop owns its
+    own node, so its children stay out of this set.
     """
     if not isinstance(effects, list):
         return frozenset()
-    return frozenset(
-        effect["name"]
-        for effect in effects
-        if isinstance(effect, dict) and isinstance(effect.get("name"), str)
-    )
+    names: set[str] = set()
+    for effect in effects:
+        if not isinstance(effect, dict):
+            continue
+        name = effect.get("name")
+        if isinstance(name, str):
+            names.add(name)
+            continue
+        effect_type = effect.get("type")
+        if effect_type in ("conditional", "if"):
+            names |= _effect_names(effect.get("then"))
+            names |= _effect_names(effect.get("else"))
+        elif effect_type == "loop":
+            names |= _effect_names(effect.get("body"))
+    return frozenset(names)
 
 
 def _walk_bare_refs(

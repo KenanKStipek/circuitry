@@ -150,6 +150,31 @@ def _render_ancestors(ancestors: list[AncestorContext], spinner_chars: str) -> l
     return lines
 
 
+def _region_effect_names(effects: Sequence[Any]) -> frozenset[str]:
+    """The effect names that write straight into the enclosing container's
+    own namespace -- every named effect in *effects*, plus (because it has
+    no namespace of its own to write into instead) the names an unnamed
+    ``if``'s own branches or an unnamed loop's own body write there too, at
+    any depth through further unnamed ``if``/loop nesting (#778). A named
+    ``if``/loop, like a nested ``dynamic``/``use``/``reflector``, owns its
+    own node and its children's names stay out of this set.
+    """
+    from .conditional import ConditionalDefinition
+    from .loop import LoopDefinition
+
+    names: set[str] = set()
+    for e in effects:
+        name = getattr(e, "name", None)
+        if isinstance(name, str):
+            names.add(name)
+        elif isinstance(e, ConditionalDefinition):
+            names |= _region_effect_names(e.then_effects)
+            names |= _region_effect_names(e.else_effects)
+        elif isinstance(e, LoopDefinition):
+            names |= _region_effect_names(e.body)
+    return frozenset(names)
+
+
 @dataclass(frozen=True)
 class DynamicDefinition:
     name: str
@@ -354,10 +379,8 @@ class DynamicRuntime:
         # root, and a `use`/reflector/decomposition child's own root (each
         # always called with `ctx_override=None`, like the root itself)
         # share nothing with their caller's own effect names.
-        own_names = frozenset(
-            name
-            for e in (*self.defn.effects, *self.defn.finally_effects)
-            if isinstance(name := getattr(e, "name", None), str)
+        own_names = _region_effect_names(self.defn.effects) | _region_effect_names(
+            self.defn.finally_effects
         )
         bare_scope_token = push_bare_effect_scope(
             own_name=self.defn.name,
