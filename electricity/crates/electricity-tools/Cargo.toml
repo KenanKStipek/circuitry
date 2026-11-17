@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "ToolPlugin trait, registry, and the json tool for electricity (electricity-tools, lane C stub)"
+description = "ToolPlugin trait, registry, and the tool plugins for electricity"
 
 [features]
 default = []

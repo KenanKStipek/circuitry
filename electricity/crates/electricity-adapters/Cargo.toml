@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Concrete model adapters: the Rust scripted adapter, host_claude's registration stub, and the real providers (electricity-adapters, lane F1/F2 stub)"
+description = "Model adapters for electricity: the scripted adapter, host_claude's registration stub, and the real providers"
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }

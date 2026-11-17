@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "A pure-library port of core/complexity.py and core/router.py (electricity M1 lane K1, issue #505): no wiring, no model calls, no config reads of its own -- the caller passes the inputs."
+description = "A pure-library port of core/complexity.py and core/router.py (issue #505): no wiring, no model calls, no config reads of its own -- the caller passes the inputs."
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }

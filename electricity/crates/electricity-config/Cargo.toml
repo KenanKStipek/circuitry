@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "config.json -> effective settings for electricity orchestrations (electricity-config, lane D stub)"
+description = "config.json -> effective settings for electricity orchestrations"
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
