@@ -65,7 +65,7 @@ pub fn restore() {
 /// ordinarily) rather than replacing it outright, so the panic
 /// message itself is never swallowed — only delayed until the
 /// terminal it would otherwise have printed into is gone. Split out
-/// from `enter()` (review finding 8) so a test can prove the
+/// from `enter()` so a test can prove the
 /// restore-on-panic behaviour itself without a real terminal:
 /// `enter()`'s own `enable_raw_mode`/`EnterAlternateScreen` need one,
 /// which `cargo test` never has, but installing and exercising the
@@ -83,7 +83,7 @@ pub struct TerminalGuard;
 impl TerminalGuard {
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
-        // Finding 14: raw mode is already on at this point — if
+        // Raw mode is already on at this point — if
         // entering the alternate screen fails, it must come back off
         // again before returning `Err`, or the caller's own fallback
         // (a plain wait, or the plain supervise loop) runs with the
@@ -114,7 +114,7 @@ mod tests {
     /// Every test here reads or writes the shared `ENTERED` static
     /// (and, for the panic-hook one, the process-wide panic hook
     /// too) — serialised so `cargo test`'s own parallel threads can't
-    /// race each other on either (review finding 8).
+    /// race each other on either.
     static LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn a_panic_after_entering_is_still_restored_by_the_installed_hook() {
-        // Review finding 8: #434 asks for a test proving restore on
+        // #434 asks for a test proving restore on
         // panic; the installed hook (not a direct `restore()` call)
         // is what has to run here, the same way it would for a real
         // panic during `run_tui`/`run_tui_watch`'s own loop.

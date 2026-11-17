@@ -558,9 +558,9 @@ pub fn tile_now_pane_rows(
 }
 
 /// Six roles (`run.1`..`run.6`, issue #698) -- past six runs the
-/// set repeats (epic #677's §9 point 5 settles
-/// that for the Combined Signal; a tile itself only ever needs one
-/// role per run, never a full palette of its own).
+/// set repeats (issue #677, §9.5, for the Combined Signal; a tile
+/// itself only ever needs one role per run, never a full palette of
+/// its own).
 pub fn run_role_index(run_position: usize) -> usize {
     run_position % 6
 }

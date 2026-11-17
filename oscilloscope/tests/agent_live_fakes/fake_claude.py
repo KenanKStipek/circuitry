@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A fake Claude Code in stream-json mode: one API call split over two lines sharing message.id, a subagent line,
-and slow tool calls, so the live summary can be sampled mid-session. Expected live values are printed by the probe."""
+and slow tool calls, so the live summary can be sampled mid-session. Expected live values are called out inline, next to each `time.sleep` below."""
 import json, sys, time
 if "--version" in sys.argv:
     print("2.1.300 (Claude Code fake)"); sys.exit(0)

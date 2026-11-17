@@ -1,11 +1,11 @@
 //! End-to-end tests against a real `electricity`, built with
-//! `--features test-tools` (issue #431's lane E2 acceptance
+//! `--features test-tools` (issue #431's acceptance
 //! criterion: "osi's ElectricityEngine ... end-to-end tests run
 //! against electricity behind a feature flag"). Mirrors
 //! `e2e_cof.rs`'s own shape: success, failure, an
 //! invalid document, a preview-marker refusal, all three signals,
 //! `osi watch` on a finished run directory, and `--log` output.
-//! Issue #538's B1 adds four more documents: a scripted prompt, a
+//! Issue #538 adds four more documents: a scripted prompt, a
 //! tree loop, a `use` path child, and a decomposition run.
 //!
 //! Gated on `OSI_E2E_ELECTRICITY=1`, with `electricity` on `PATH`
@@ -259,11 +259,11 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
     // all under the run directory -- electricity never even reaches
     // the `fail!` macro that saves state for the invalid-document
     // case, since the refusal check runs earlier still. `litellm` (a
-    // Python-SDK-only adapter, out of scope for lane F2, issue #503)
-    // stays the unbuildable example here -- the config's own default
-    // adapter, `ollama`, became a real, buildable adapter in that same
-    // lane, so a bare `prompt` with no `provider:` no longer hits this
-    // refusal at all.
+    // Python-SDK-only adapter issue #503 left unbuilt) stays the
+    // unbuildable example here -- the config's own default adapter,
+    // `ollama`, became a real, buildable adapter as part of that same
+    // issue, so a bare `prompt` with no `provider:` no longer hits
+    // this refusal at all.
     let doc = write_doc(
         work.path(),
         "do.yml",
@@ -562,7 +562,7 @@ fn watch_mirrors_a_run_osi_did_not_start() {
     assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
-/// Issue #538's B1, item 1 ("a scripted prompt"): `adapter: scripted`,
+/// Issue #538, item 1 ("a scripted prompt"): `adapter: scripted`,
 /// one prompt, one reply with tokens. Asserts the `prime.<name>` line
 /// carries the `↑<sent> ↓<received>` suffix `oscilloscope-core::diff`'s
 /// own `result_summary` prints for a prompt whose meta has
@@ -715,7 +715,7 @@ fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
     assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
-/// Issue #538's B1, item 2 ("a tree loop"): a named `flow: tree` `each`
+/// Issue #538, item 2 ("a tree loop"): a named `flow: tree` `each`
 /// loop, `max_concurrency: 2`, three items, a `json` body. Asserts
 /// only the finished run's own lines -- a mid-run assertion belongs to
 /// `a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges`
@@ -759,7 +759,7 @@ fn a_tree_loop_merges_every_pass() {
     assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
-/// Issue #538's B1, item 3 ("a `use`"): a `use: {path: child.yml}`
+/// Issue #538, item 3 ("a `use`"): a `use: {path: child.yml}`
 /// child, which osi grafts into its own compiled plan
 /// (`oscilloscope_core::plan::try_graft_use`). `prime.step.inner`
 /// printing at all doesn't by itself prove the graft happened: an
@@ -813,7 +813,7 @@ fn a_use_path_child_grafts_into_the_plan() {
     assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
-/// Issue #538's B1, item 4 ("decomposition"): the `decompose-success`
+/// Issue #538, item 4 ("decomposition"): the `decompose-success`
 /// conformance case's document, config and scripted replies
 /// (`tests/conformance/cases/decompose-success/`), inlined. The
 /// decomposition machinery's own planner-check steps (`prime.big.plan`,

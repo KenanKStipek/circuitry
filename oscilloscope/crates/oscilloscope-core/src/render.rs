@@ -194,8 +194,8 @@ pub struct Row {
     pub kind: RowKind,
     pub status: RowStatus,
     /// Elapsed since `created_at`, up to `completed_at` once it has
-    /// one -- or, for a row still running (review finding 5 on
-    /// #458's comment 3), up to `build`'s own `now` instead, so a
+    /// one -- or, for a row still running, up to `build`'s own `now`
+    /// instead, so a
     /// running row's duration keeps ticking rather than showing
     /// nothing at all until it finishes.
     pub duration_s: Option<f64>,
@@ -244,7 +244,7 @@ pub struct Header {
     pub effects_done: u64,
     pub effects_planned: Option<u64>,
     /// Set when a loop somewhere under an `effects_planned` leaf has
-    /// no known `progress.total` yet (review finding 6): `planned`
+    /// no known `progress.total` yet: `planned`
     /// then only counts that leaf once rather than once per eventual
     /// pass, so it's a lower bound, not the true total — a front end
     /// shows it with a trailing `+` (`3/3+`) rather than as if it
@@ -466,7 +466,8 @@ pub struct TokenBar {
     pub prompts_running: u64,
     /// Running `agent` tool steps (issue #613's "agents in flight"):
     /// counted alongside running prompts, but with no token estimate
-    /// of their own -- live agent token usage (#612) is a later lane.
+    /// of their own -- live agent token usage (#612) is not yet
+    /// implemented.
     pub agents_running: u64,
 }
 
@@ -566,8 +567,8 @@ pub fn build(
     let state_ref = state.unwrap_or(&empty);
     let flat = flatten_state(state_ref);
     let statuses = model.observe(state_ref, plan, process.clone());
-    // Every path either side of a run has ever heard of (hoisted here,
-    // issue/finding on `use` accounting): the header's own
+    // Every path either side of a run has ever heard of (hoisted here
+    // for `use` accounting): the header's own
     // planned/done counts need the identical view `build_rows`/
     // `child_segments` already use to discover a `use` child's
     // children once they land in state -- building it twice, once per
@@ -946,7 +947,7 @@ fn flatten_state_tree(
 }
 
 /// The token bar's "what's in flight" line (DESIGN.md §6.3, issue
-/// #527, and a follow-up finding): the running
+/// #527): the running
 /// count comes from `rows`, not `flat` alone, since a tree-loop pass's
 /// prompt (both engines) and, on cof, a `use` child's, are confirmed
 /// `Running` by events while never once appearing in live state at all
@@ -1164,13 +1165,13 @@ pub fn details_for(
     if let Some(command) = meta.pointer("/params_rendered/command") {
         meta_summary.push(("command".to_string(), display_value(command)));
     }
-    // Review finding 4 on #458's comment 3: the details pane showed
+    // The details pane used to show
     // `command` but never its own `args`, right next to it.
     if let Some(args) = meta.pointer("/params_rendered/args") {
         meta_summary.push(("args".to_string(), display_value(args)));
     }
     if let Some(stderr) = meta.get("stderr").and_then(Value::as_str) {
-        // Finding 12: `.rev()` picks the *last* 5 lines, but without
+        // `.rev()` picks the *last* 5 lines, but without
         // reversing back they'd join in reverse reading order too —
         // the most recent line first, not last.
         let mut last_lines: Vec<&str> = stderr.lines().rev().take(5).collect();
@@ -1184,8 +1185,8 @@ pub fn details_for(
     let (sent, received) = if has_prompt_sent {
         let sent_block = build_sent_block(meta, node);
         // "A prompt that failed before any reply shows its error as
-        // today, and no received snippet" (issue #535) -- finding 18:
-        // that's narrower than "any error". A reply that arrived and
+        // today, and no received snippet" (issue #535) -- that's
+        // narrower than "any error". A reply that arrived and
         // then failed later (an `expect`/parsing mismatch, say) still
         // left `meta.answer` or the node's own value behind, so only
         // an error with neither counts as "before any reply".
@@ -1845,7 +1846,7 @@ fn build_header(
     }
 }
 
-/// Review finding 6: a loop-body leaf's own display path (DESIGN.md
+/// A loop-body leaf's own display path (DESIGN.md
 /// §5's `iter_*` placeholder) counts as one pass in `plan.leaf_paths
 /// ()` no matter how many times the loop actually runs it — "planned"
 /// needs its own named loop's `meta.progress.total` instead, when
@@ -1860,8 +1861,8 @@ fn build_header(
 /// when any crossed loop's own total isn't known yet, in which case
 /// the first is a lower bound (a single pass), not the true count.
 /// `leaf_path`'s own pass multiplier, and whether it's a lower bound
-/// rather than the true count (review finding 6 on #458's comment 3:
-/// "a leaf under an unnamed loop still counts as a lower bound"). A
+/// rather than the true count: a leaf under an unnamed loop still
+/// counts as a lower bound. A
 /// *named* loop's own `iter_*` placeholder segment multiplies by its
 /// `progress_total` once known (or sets the bound, before it is); an
 /// *unnamed* loop never gets an `iter_*` segment of its own at all
@@ -2056,8 +2057,8 @@ fn row_kind_for_with_has_children(
 /// (`inline:`/`ref:`; a `path:` child is handled by the caller
 /// instead, via its own already-separate `leaf_paths` entries).
 /// Counts whatever of its children have actually been *discovered* in
-/// state so far, one each, falling back to the `use` node itself (as
-/// before this fix) when nothing under it has ever been discovered at
+/// state so far, one each, falling back to the `use` node itself
+/// when nothing under it has ever been discovered at
 /// all -- a declared-outputs child's own children are dropped from
 /// the final state even once it succeeds (DESIGN.md §1.2), so without
 /// this fallback such a `use` would count toward neither planned nor
@@ -3034,7 +3035,7 @@ mod tests {
         assert_eq!(step1.status.kind, crate::model::StatusKind::Running);
         assert_eq!(step1.dim.as_deref(), Some("shell"));
         assert_eq!(rendered.header.elapsed_s, 1.5);
-        // Review finding 5 on #458's comment 3: a running row (no
+        // A running row (no
         // `completed_at` yet) still gets a live duration, computed
         // against `build`'s own `now` rather than showing nothing
         // until it finishes.
@@ -3660,9 +3661,8 @@ mod tests {
         }
     }
 
-    /// An unnamed loop's own leaf (review finding 6 on #458's comment
-    /// 3): its body reuses the document root's own path (DESIGN.md
-    /// §1.3, `is_transparent`), so unlike
+    /// An unnamed loop's own leaf: its body reuses the document
+    /// root's own path (DESIGN.md §1.3, `is_transparent`), so unlike
     /// `named_loop_with_one_leaf_program`'s `fan.iter_*.nap`, this has
     /// no `iter_*` placeholder segment of its own at all -- just
     /// `prime.u_nap`.
@@ -3953,7 +3953,7 @@ mod tests {
 
     #[test]
     fn effects_planned_multiplies_a_loop_bodys_leaf_by_its_known_total() {
-        // Review finding 6: `fan`'s own single leaf template
+        // `fan`'s own single leaf template
         // (`fan.iter_*.nap`) must count as 4 once the loop's own
         // `progress.total` says so, not once — two passes already
         // done count as 2 of those 4, not as 1 of 1.
@@ -4034,7 +4034,7 @@ mod tests {
 
     #[test]
     fn effects_planned_is_a_lower_bound_under_an_unnamed_loop_even_once_a_pass_is_done() {
-        // Review finding 6 on #458's comment 3: an unnamed loop never
+        // An unnamed loop never
         // gets a known `progress.total` of its own path the way a
         // *named* one's `iter_*` placeholder does -- `u_nap` must stay
         // a lower bound (`1+`) no matter how many passes have already
@@ -4302,8 +4302,8 @@ mod tests {
     }
 
     /// `named_loop_with_one_leaf_program`'s own single-step pass
-    /// (`fan.iter_0.nap`) must look exactly as it did before this fix --
-    /// single-step passes still look as before -- it goes through the identical
+    /// (`fan.iter_0.nap`) must derive its status the same way a
+    /// multi-step pass's does -- it goes through the identical
     /// derivation path (the pass container still has no node of its
     /// own), just with one leaf instead of two, and must still read
     /// done once that one leaf is.
@@ -4459,7 +4459,7 @@ mod tests {
     /// A `use` whose children never appear even once it finishes (a
     /// declared-outputs child, DESIGN.md §1.2: "children are dropped
     /// from the final state") must still count as 1 effect on both
-    /// sides, exactly as before this fix -- the discovery-based count
+    /// sides -- the discovery-based count
     /// falls back to the `use` node itself when nothing was ever
     /// discovered under it.
     #[test]
@@ -4620,7 +4620,7 @@ mod tests {
 
     #[test]
     fn details_for_keeps_the_stderr_tails_own_reading_order() {
-        // Finding 12: the last 5 lines, in the order they were
+        // The last 5 lines, in the order they were
         // written — not newest first.
         let plan = PlanTree::empty();
         let stderr = (1..=8)
@@ -4900,7 +4900,7 @@ mod tests {
         assert_eq!(details.error.as_deref(), Some("adapter unreachable"));
     }
 
-    /// Finding 18: a reply that arrived and *then* failed (an
+    /// A reply that arrived and *then* failed (an
     /// `expect`/parsing mismatch, here) still gets a `received`
     /// block -- only a failure with no reply at all drops it.
     #[test]
@@ -5059,7 +5059,7 @@ mod tests {
         assert_eq!(paths, vec!["c", "b", "a"]);
     }
 
-    /// Finding 15: latest-first ordering at a *nested* level, not
+    /// Latest-first ordering at a *nested* level, not
     /// just the top -- `older` and `newer` are both bare containers
     /// (no `{value, meta}` node of their own) two levels under
     /// `fan`, sorted by the latest update anywhere in their own

@@ -134,8 +134,8 @@ impl EventsTailer {
         // Not `meta.len()`: the read above reads to whatever EOF is
         // *now*, which can be past the length `meta` reported if the
         // file grew between the two calls. Advancing by the metadata's
-        // (possibly stale) length instead left the next poll re-reading
-        // -- and re-emitting -- the overlap (F7).
+        // (possibly stale) length instead would leave the next poll
+        // re-reading -- and re-emitting -- the overlap.
         self.offset += bytes.len() as u64;
         // Lossy, not `String::from_utf8` (issue #433): cof writes
         // ASCII JSON, so this never actually loses anything in
@@ -258,8 +258,7 @@ pub enum Event {
         /// The engine's own pid (DESIGN.md §3's format table): lets
         /// `osi watch` tell a genuine abort (the process died with no
         /// `run_end`) from a run that is simply still going, when it
-        /// has no child handle of its own to `wait` on (#424 review
-        /// F4).
+        /// has no child handle of its own to `wait` on (#424).
         pid: Option<i32>,
         /// `cof`/`electricity`'s own label (`"cof"`/`"electricity"`),
         /// when the line carries one -- both engines always write it,
@@ -476,11 +475,10 @@ pub fn add_seconds(start: &str, seconds: f64) -> Option<String> {
 /// as every `created_at`/`completed_at` an engine writes -- the one
 /// place `render::build`'s caller (osi-cli, which has no direct
 /// `chrono` dependency of its own) reads the real clock, so a running
-/// row's own live duration (review finding 5 on #458's comment 3) can
-/// still be computed with the same `duration_seconds` a *finished*
-/// row's already is, rather than a second, `Instant`-based notion of
-/// elapsed time that would need its own epoch reconciled with the
-/// engine's.
+/// row's own live duration can still be computed with the same
+/// `duration_seconds` a *finished* row's already is, rather than a
+/// second, `Instant`-based notion of elapsed time that would need its
+/// own epoch reconciled with the engine's.
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -492,7 +490,7 @@ mod tests {
 
     #[test]
     fn tailer_does_not_duplicate_lines_when_the_file_grows_concurrently() {
-        // F7: `poll` used to advance its offset by `meta.len()` (the
+        // `poll` used to advance its offset by `meta.len()` (the
         // size read *before* `read_to_string`), not by how much it
         // actually read. If the file grew between those two calls,
         // `read_to_string` picks up the newer bytes too (it reads to

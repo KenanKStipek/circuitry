@@ -14,7 +14,7 @@ description = "osi (oscilloscope) core library: plan, observe, model, diff, engi
 # bytecode IR also breaks osi, in the same pass.
 electricity-compiler = { path = "../../../electricity/crates/electricity-compiler" }
 electricity-bytecode = { path = "../../../electricity/crates/electricity-bytecode" }
-# check_options/parse_inputs (K4): the exact CheckOptions a real
+# check_options/parse_inputs: the exact CheckOptions a real
 # `electricity <config> <doc> -e k=v...` run would use, so osi's own
 # plan compile never drifts from what electricity itself checks a
 # document against.
