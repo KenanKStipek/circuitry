@@ -1320,6 +1320,22 @@ host `env` (`runtime.plugins.<name>.env`, see
   document's own `runtime.secrets`, which wins over the host's) or
   `not defined` (`Secrets: billing (host), github (document)`; `--json` adds
   `secret_sources`, by name).
+- **`cof check` on a root also lists what its `use: path:` children name**
+  (#611), recursively, as far as the compiler resolves them: a `path:`
+  child inherits its parent's trust, so its own `{secret: ...}` resolves
+  from the root's `runtime.secrets` exactly as an actual run would, and
+  `cof check` shows it that way, naming the child
+  (`Secrets: billing (host), github (document), named by child.yml`;
+  `--json` adds `secret_children`, the resolved path of every child naming
+  each secret, by name). A secret both the root and a child name is listed
+  once, with `root` and the child both in `secret_children`. A `use: ref:`
+  or `inline:` child is always limited whatever its parent's trust, so it
+  never resolves the root's own secrets and is never walked this way — one
+  that names a secret anyway is still refused when it actually runs, the
+  same as any other limited document. Checking a document on its own (not
+  through a root's walk) keeps this view unchanged — its own definitions
+  only — but adds a one-line hint on a `not defined` secret: a parent that
+  runs it as a `use: path:` child may define it after all.
 - **electricity** resolves `runtime.secrets` and `{secret: ...}` the same
   way: the Keychain, a command or an environment variable, at dispatch, with
   the same error texts, caching and trust rule. A limited document (a
