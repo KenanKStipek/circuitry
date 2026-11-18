@@ -926,20 +926,17 @@ def _do_validate(
             # child.yml" can't be misread as another secret; a child inside
             # the root's own folder prints relative to it (the full path
             # stays in --json's secret_children).
+            from .runtime_shim import _relative_to_root
+
             root_dir = orchestration.resolve().parent
             parts = []
             for name in result["secrets"]:
                 namers = children.get(name)
                 if namers:
-                    displayed = []
-                    for namer in namers:
-                        if namer == "root":
-                            displayed.append(namer)
-                            continue
-                        try:
-                            displayed.append(str(Path(namer).relative_to(root_dir)))
-                        except ValueError:
-                            displayed.append(namer)
+                    displayed = [
+                        namer if namer == "root" else _relative_to_root(namer, root_dir)
+                        for namer in namers
+                    ]
                     suffix = f"; named by {', '.join(displayed)}"
                 else:
                     suffix = ""

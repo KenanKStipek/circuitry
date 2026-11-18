@@ -9080,8 +9080,10 @@
       "inputs": {}
     },
     "validate": {
-      "ok": true,
-      "errors": [],
+      "ok": false,
+      "errors": [
+        "a.yml: <root>/a.yml: duplicate key 'path' at line 5, column 5 (first defined at line 4, column 5); YAML would silently keep only the last one"
+      ],
       "warnings": []
     },
     "run_error": null,
@@ -9126,7 +9128,9 @@
     "definition_error": null,
     "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
     "comparison": {
-      "validate_errors": [],
+      "validate_errors": [
+        "exact"
+      ],
       "run_error": null
     }
   },

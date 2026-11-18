@@ -1576,6 +1576,58 @@ def _record_library_pins(
     state.setdefault("runtime", {})[STATE_KEY] = pins
 
 
+def _relative_to_root(path: str, root_dir: Path) -> str:
+    """*path* relative to *root_dir* when it names a file inside it, else
+    unchanged -- the same display rule the Secrets line already applies
+    (#611, `cli.app._do_validate`): a child outside the root's own folder
+    keeps its full path rather than a `../`-climbing relative one.
+    """
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return path
+    try:
+        return str(candidate.relative_to(root_dir))
+    except ValueError:
+        return path
+
+
+def _use_path_child_check_errors(
+    orch: dict[str, Any],
+    *,
+    orchestration_path: Path,
+    trusted: bool,
+    runtime: dict[str, Any] | None,
+    known_groups: frozenset[str] = frozenset(),
+) -> tuple[list[str], list[str]]:
+    """Every `use: path:`/legacy `orchestration:` child of *orch* that fails
+    to resolve, parse, validate or compile, recursively (#832), as one
+    display string per failure: the child's own reference, relative to
+    *orchestration_path*'s directory when it resolved to a file inside it,
+    followed by the same message a run of the root would raise reaching it
+    (`core.cycle_check.check_use_path_children`). Returned as
+    ``(errors, warnings)`` -- a failure whose own `use` effect tolerates it
+    (`on_error: skip`/`continue`) lands in *warnings* instead, the same way
+    a soft adapter dependency already does (`classify_preflight_results`).
+    """
+    from ..core.cycle_check import check_use_path_children
+
+    root_dir = orchestration_path.resolve().parent
+    failures, soft = check_use_path_children(
+        orch,
+        root_path=orchestration_path,
+        trusted=trusted,
+        runtime=runtime,
+        known_groups=known_groups,
+    )
+
+    def render(pairs: list[tuple[str, str]]) -> list[str]:
+        return [
+            f"{_relative_to_root(label, root_dir)}: {message}" for label, message in pairs
+        ]
+
+    return render(failures), render(soft)
+
+
 def _use_path_child_secrets(
     orch: dict[str, Any],
     *,
@@ -1860,6 +1912,32 @@ def validate(
                 "errors": [f"Cycle: {' → '.join(cycle)}"],
                 "warnings": lint_warnings,
             }
+
+        # A `use: path:`/legacy `orchestration:` child that fails to
+        # resolve, parse, validate or compile fails the root's own check
+        # (#832) -- the real run would fail reaching it too. Checked after
+        # the cycle above: a document can hide a cycle behind a child with
+        # a duplicate YAML key (`core.cycle_check.load_orch`'s own
+        # docstring), and that cycle is the more fundamental problem,
+        # reported first even though the same child also fails this check.
+        # `merged_runtime`, not the config's own alone, so a legacy
+        # `orchestration:` child this document's own `runtime.library.sources`
+        # falls back for resolves here exactly as the run's own registry
+        # resolves it.
+        child_check_errors, child_check_warnings = _use_path_child_check_errors(
+            orch,
+            orchestration_path=orchestration_path,
+            trusted=trusted,
+            runtime=merged_runtime,
+            known_groups=frozenset(groups),
+        )
+        if child_check_errors:
+            return {
+                "ok": False,
+                "errors": child_check_errors,
+                "warnings": lint_warnings,
+            }
+        lint_warnings = [*lint_warnings, *child_check_warnings]
 
         # Preflight gate (Story 1). Same gating policy as allowlist — only
         # runs when the caller supplied a config so programmatic callers

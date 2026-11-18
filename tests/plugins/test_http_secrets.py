@@ -1254,14 +1254,16 @@ effects:
     )
 
 
-def test_a_legacy_orchestration_childs_secret_is_not_surfaced_when_resolved_through_the_library(
+def test_a_legacy_orchestration_childs_secret_refusal_fails_the_check(
     tmp_path: Path,
 ) -> None:
-    """The deprecated `orchestration:` field tries the filesystem first, then
-    falls back to the library, same as `ref:` -- and a child resolved that
-    way is pinned, so the run treats it as untrusted and refuses a secret it
-    names. The root's check must walk this child the same way: not at all,
-    the same as a `ref:` child, rather than as a trusted one."""
+    """The deprecated `orchestration:` field tries the filesystem first,
+    then falls back to the library, same as `ref:` -- and a child resolved
+    that way is pinned, so the run treats it as untrusted and refuses a
+    secret it names. The root's check compiles this child the same way
+    (#832), limited rather than trusted since it fell back to the library,
+    and fails on the same refusal the run would raise reaching it -- rather
+    than passing the root silently because the child never got walked."""
     library = tmp_path / "lib"
     library.mkdir()
     _write(
@@ -1296,9 +1298,12 @@ effects:
     )
 
     report = validate(root, trust_document=True)
-    assert report["ok"], report["errors"]
-    assert report["secrets"] == []
-    assert report["secret_children"] == {}
+    assert report["ok"] is False
+    assert len(report["errors"]) == 1
+    assert (
+        "names secret 'api': only a document run by path may name a secret"
+        in report["errors"][0]
+    )
 
     result = run(
         RunRequest(
