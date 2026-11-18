@@ -248,8 +248,7 @@ def build_redaction_cases() -> list[dict]:
 
     # --- the URL rule applies only to a string under a URL key (url,
     # base_url, api_base, endpoint, expo_url, proxy, *_url, *_proxy),
-    # at any depth -- never to an ordinary string, which redacts
-    # exactly as it always has on `main`. ---
+    # at any depth -- never to an ordinary string. ---
     cases.append(
         redact_case({"base_url": "alice:hunter2hunter2@host:1234"})
     )  # no :// at all
@@ -293,7 +292,7 @@ def build_redaction_cases() -> list[dict]:
     )  # the : search for a later @ starts at the original authority's own start, userinfo included
     cases.append(
         redact_case({"webhook_url": "xoxb-" + "a" * 25})
-    )  # token-shaped under a URL key still redacts whole, as `main` did
+    )  # token-shaped under a URL key still redacts whole
     cases.append(
         redact_case({"endpoint": "sk-" + "a" * 25})
     )  # same, with no @ and no ? at all for redact_url to act on

@@ -96,8 +96,8 @@ fn looks_like_credential_key(key: &str) -> bool {
     credential_query_key_re().is_match(key)
 }
 
-/// `cli/redaction.py::_redact_url` -- `main`'s own, unmodified
-/// redaction of an ordinary string: strips `user[:pass]@` userinfo
+/// `cli/redaction.py::_redact_url` -- the redaction of an ordinary
+/// string: strips `user[:pass]@` userinfo
 /// from a URL's netloc, keeping the scheme, host:port, path, query and
 /// fragment untouched. Only ever reached from [`redact_string`]'s own
 /// `"://" in value && "@" in value` gate, so it only has to recognize
@@ -194,17 +194,17 @@ fn redact_embedded_url(value: &str) -> String {
 }
 
 /// `cli/redaction.py::_redact_string`'s own JWT/key-shape check --
-/// `main`'s own ordinary-string rule applied first, even to a string
+/// the ordinary-string rule, applied first, even to a string
 /// under a URL key ([`is_url_key`]): a token-shaped value is redacted
-/// wholesale regardless of the key it's under, same as it always was
-/// on `main` -- a URL key's own value is never *only* sent through
+/// wholesale regardless of the key it's under -- a URL key's own value
+/// is never *only* sent through
 /// [`redact_url`].
 fn is_token_shaped(value: &str) -> bool {
     jwt_re().is_match(value) || keyish_re().is_match(value)
 }
 
-/// `cli/redaction.py::_redact_string` -- `main`'s own, unmodified
-/// redaction of an ordinary string: a JWT or API-key-shaped string
+/// `cli/redaction.py::_redact_string` -- the redaction of an ordinary
+/// string: a JWT or API-key-shaped string
 /// redacts wholesale; a URL carrying both `://` and `@` goes through
 /// [`redact_embedded_url`]; anything else passes through unchanged.
 /// The URL rule in [`redact_url`] never applies here -- only to a
@@ -280,7 +280,7 @@ fn percent_decode_key(key: &str) -> String {
 /// URL redaction on this engine. Every other caller that names a
 /// request URL or a proxy value in a refusal, warning, event, state
 /// or hint calls this with `marker=""` (drop the credential, with its
-/// `@`, exactly as `main` always has). The effective-settings snapshot
+/// `@`). The effective-settings snapshot
 /// redactor ([`redact`] itself) calls it with `marker=REDACTED` for a
 /// value under a URL key, to show a credential was there rather than
 /// silently removing all trace of it.
@@ -319,8 +319,7 @@ fn percent_decode_key(key: &str) -> String {
 ///   the `:` inside `alice:p@ss` still counts, even though it comes
 ///   before that `@`, not just after it). No `:` at all leaves the
 ///   `@` untouched. This can over-redact: `http://u:p@host/@alice` is
-///   cut all the way to the later `@`, matching `main`'s own
-///   request-URL behaviour.
+///   cut all the way to the later `@`.
 /// - **No `://` at all.** A schemeless value with an `@` is cut before
 ///   its last `@` unconditionally -- no `:` required, and whitespace
 ///   is no exception: every caller here has already committed to
@@ -334,8 +333,8 @@ fn percent_decode_key(key: &str) -> String {
 ///   nothing decoded or re-encoded) whose KEY, percent-decoded
 ///   ([`percent_decode_key`]), looks like a credential
 ///   ([`looks_like_credential_key`]) has its VALUE's raw text replaced
-///   -- with *marker* when non-empty, or the fixed `%2A%2A%2A` (`main`'s
-///   own percent-encoded `***`) when empty, so a value without a
+///   -- with *marker* when non-empty, or the fixed `%2A%2A%2A` (a
+///   percent-encoded `***`) when empty, so a value without a
 ///   marker still fails `has_redacted_secrets` for the right reason. A
 ///   `?` that comes after a `#` is fragment text, never a query
 ///   delimiter.
@@ -473,8 +472,8 @@ fn redact_adapter_env(mut adapters: Value) -> Value {
 /// [`is_sensitive_key`]; every value of an `env` mapping under an
 /// `adapters` key is redacted ([`redact_adapter_env`]); a string value
 /// under a URL key ([`is_url_key`]) redacts wholesale when it's
-/// token-shaped ([`is_token_shaped`], `main`'s own ordinary-string
-/// rule applied first), else gets the URL rule ([`redact_url`]); any
+/// token-shaped ([`is_token_shaped`], the ordinary-string rule,
+/// applied first), else gets the URL rule ([`redact_url`]); any
 /// other string is redacted (wholesale, or just its URL userinfo) when
 /// it looks like a JWT, an API key, or a URL carrying both `://` and
 /// `@`; lists and nested dicts are walked; every other scalar passes
@@ -527,8 +526,8 @@ pub fn redact(mut value: Value) -> Value {
 /// the key is kept as given (so a replay can show what was supplied), the
 /// value is replaced with [`REDACTED`] when the key matches
 /// [`is_sensitive_key`]; under a URL key ([`is_url_key`]), a
-/// token-shaped value redacts wholesale ([`is_token_shaped`], `main`'s
-/// own ordinary-string rule applied first), else it gets the URL rule
+/// token-shaped value redacts wholesale ([`is_token_shaped`], the
+/// ordinary-string rule, applied first), else it gets the URL rule
 /// ([`redact_url`]); any other value is redacted at the string level
 /// ([`redact_string`]) the same way any other string value is -- so a
 /// credential-shaped value under an innocuous key (`my_var=sk-...`) is
@@ -1145,8 +1144,7 @@ mod tests {
 
     #[test]
     fn redact_url_cuts_to_the_later_at_sign_when_the_authority_already_has_its_own_userinfo() {
-        // This over-redaction is accepted -- it matches `main`'s own
-        // request-URL behaviour.
+        // An accepted over-redaction: a `:` before a later `@` always cuts.
         assert_eq!(
             redact_url("http://u:p@host/@alice", "", true),
             "http://alice"
@@ -1155,7 +1153,7 @@ mod tests {
 
     #[test]
     fn a_token_shaped_value_under_a_url_key_redacts_whole() {
-        // `main`'s own ordinary-string rule (the JWT/key-shape
+        // The ordinary-string rule (the JWT/key-shape
         // patterns) applies before the URL rule, so a token-shaped
         // value with no @ and no ? under a URL key still redacts
         // wholesale, not byte for byte.

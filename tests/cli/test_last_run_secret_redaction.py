@@ -244,7 +244,7 @@ def test_redact_env_pairs_masks_a_credential_query_value_under_a_url_key() -> No
 
 
 def test_redact_env_pairs_applies_the_token_shape_check_before_the_url_rule() -> None:
-    """`main`'s own ordinary-string rule (the JWT/key-shape patterns)
+    """The ordinary-string rule (the JWT/key-shape patterns)
     applies before the URL rule, so a token-shaped value under a URL
     key still redacts wholesale, not byte for byte.
     """

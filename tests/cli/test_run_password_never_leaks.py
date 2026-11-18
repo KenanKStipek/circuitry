@@ -65,7 +65,7 @@ def test_password_in_url_never_reaches_any_output_surface(
     # special-cases a port-shaped `:` suffix, so the credential has to
     # sit on its own colon further down the path, never on the real
     # authority's own (valid, numeric) one -- a plain `user:pass@host`
-    # shape is already covered by `main`'s own, unmodified redaction.
+    # shape is already covered by the ordinary-string redaction.
     url = f"http://127.0.0.1:{mock_server}/path:{PASSWORD}@decoyhost/secret"
 
     # The URL is a static literal in the document, not a `-e` input:

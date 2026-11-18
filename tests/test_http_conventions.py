@@ -385,8 +385,8 @@ def test_redact_url_cuts_the_whole_authority_when_its_own_userinfo_colon_precede
 def test_redact_url_cuts_to_the_later_at_sign_when_the_authority_already_has_its_own_userinfo() -> (
     None
 ):
-    """This over-redaction is accepted -- it matches `main`'s own
-    request-URL behaviour.
+    """An accepted over-redaction: a ``:`` before a later ``@``
+    always cuts.
     """
     assert redact_url("http://u:p@host/@alice", "") == "http://alice"
 

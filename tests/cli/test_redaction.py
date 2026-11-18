@@ -102,7 +102,7 @@ def test_redacts_authority_userinfo_even_with_a_later_at_sign() -> None:
 
 
 def test_redacts_a_token_shaped_value_under_a_url_key_whole() -> None:
-    """`main`'s own ordinary-string rule (the JWT/key-shape patterns)
+    """The ordinary-string rule (the JWT/key-shape patterns)
     applies before the URL rule, so a token-shaped value with no @ and
     no ? under a URL key still redacts wholesale."""
     key = "sk-" + "a" * 25

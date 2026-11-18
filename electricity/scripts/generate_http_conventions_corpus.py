@@ -206,8 +206,7 @@ def _redaction_cases() -> list[dict[str, Any]]:
         "http://alice:p@ss?word@proxy:3128",
         "http://alice:p@ss#word@proxy:3128",
         # The over-redaction this causes when the authority already
-        # has its own userinfo is accepted -- it matches `main`'s own
-        # request-URL behaviour.
+        # has its own userinfo is accepted.
         "http://u:p@host/@alice",
         # A credential-free URL keeps a literal `+` untouched: neither
         # engine decodes it (`+` for a space is a form-encoding

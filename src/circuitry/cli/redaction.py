@@ -58,8 +58,8 @@ _KEYISH_RE = re.compile(
 
 
 def _redact_url(value: str) -> str:
-    """If a URL contains userinfo (user[:pass]@host), strip it -- exactly
-    `main`'s own, unmodified redaction of an ordinary string: both
+    """If a URL contains userinfo (user[:pass]@host), strip it -- the
+    redaction of an ordinary string: both
     ``scheme`` and ``netloc`` (so bare prose with a stray ``://`` or
     ``@`` never matches) and the ``@`` inside ``netloc`` itself (so a
     plain email address, or a URL with no userinfo, never matches).
@@ -78,18 +78,18 @@ def _redact_url(value: str) -> str:
 
 
 def _is_token_shaped(value: str) -> bool:
-    """Whether *value* is a JWT or API-key-shaped string -- `main`'s
-    own ordinary-string rule, applied first even to a string under a
+    """Whether *value* is a JWT or API-key-shaped string -- the
+    ordinary-string rule, applied first even to a string under a
     URL key (:func:`_is_url_key`): a token-shaped value redacts
-    wholesale regardless of the key it's under, same as it always was
-    on `main` -- a URL key's own value is never sent *only* through
+    wholesale regardless of the key it's under -- a URL key's own value
+    is never sent *only* through
     :func:`http_conventions.redact_url`.
     """
     return bool(_JWT_RE.match(value) or _KEYISH_RE.match(value))
 
 
 def _redact_string(value: str) -> str:
-    """An ordinary string, redacted exactly as `main` redacts it: a JWT
+    """An ordinary string's redaction: a JWT
     or API-key-shaped string wholesale, a URL that carries both
     ``://`` and ``@`` through :func:`_redact_url`, anything else
     unchanged. The URL rule in :func:`http_conventions.redact_url`
@@ -149,7 +149,7 @@ def redact(value: Any) -> Any:
       ``_proxy``, at any depth) gets the URL rule
       (:func:`http_conventions.redact_url`), regardless of its shape.
     - Any other string value is redacted when it looks like a JWT, an API
-      key, or a URL carrying both ``://`` and ``@`` -- exactly `main`'s own
+      key, or a URL carrying both ``://`` and ``@`` -- the
       redaction of an ordinary string.
     - Lists and nested dicts are walked.
     - Other scalar types pass through unchanged.

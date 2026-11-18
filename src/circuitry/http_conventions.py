@@ -148,7 +148,7 @@ def redact_url(url: str, marker: str, *, require_colon: bool = True) -> str:
     redaction on this engine. Every other caller that names a request
     URL or a proxy value in a refusal, warning, event, state or hint
     calls this with ``marker=""`` (drop the credential, with its
-    ``@``, exactly as `main` always has): :func:`redact_request_url`,
+    ``@``): :func:`redact_request_url`,
     :func:`redact_proxy_value`. The effective-settings snapshot
     redactor (``cli/redaction.py``) calls it with ``marker=REDACTED``
     for a value under a URL key, to show a credential was there
@@ -190,8 +190,7 @@ def redact_url(url: str, marker: str, *, require_colon: bool = True) -> str:
       ``@``, not just after it). No ``:`` at all
       (``https://medium.com/@alice/post``, ``?q=a@b``) leaves the
       ``@`` untouched. This can over-redact: ``http://u:p@host/@alice``
-      is cut all the way to the later ``@``, matching `main`'s own
-      request-URL behaviour.
+      is cut all the way to the later ``@``.
     - **No ``://`` at all.** A schemeless value with an ``@`` is cut
       before its last ``@`` unconditionally -- no ``:`` required, and
       whitespace is no exception: every caller here has already
@@ -204,7 +203,7 @@ def redact_url(url: str, marker: str, *, require_colon: bool = True) -> str:
     - **Query.** Every ``&``-separated ``key=value`` pair (raw text,
       nothing decoded or re-encoded) whose KEY, percent-decoded, looks
       like a credential has its VALUE's raw text replaced -- with
-      *marker* when non-empty, or the fixed ``%2A%2A%2A`` (`main`'s own
+      *marker* when non-empty, or the fixed ``%2A%2A%2A`` (a
       percent-encoded ``***``) when empty, so a value without a marker
       still fails ``has_redacted_secrets`` for the right reason. A ``?``
       that comes after a ``#`` is fragment text, never a query
