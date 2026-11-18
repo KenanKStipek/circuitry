@@ -1703,6 +1703,34 @@ fn run_subcommand_last_refuses_a_stash_with_redacted_secrets() {
     );
 }
 
+/// Same refusal, but for the marker embedded in a URL-shaped value's
+/// own query string (a stashed `-e url=...?token=...`), not a bare
+/// `=***REDACTED***` suffix (issue #819 follow-up).
+#[test]
+fn run_subcommand_last_refuses_a_stash_with_a_redacted_url_query_value() {
+    let (mut cmd, home) = command("run-sub-last-redacted-url-query");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let stash_dir = home.path.join(".config").join("circuitry");
+    fs::create_dir_all(&stash_dir).unwrap();
+    fs::write(
+        stash_dir.join("last-run.json"),
+        serde_json::json!({
+            "orchestration": doc.to_str().unwrap(),
+            "env_vars": ["url=https://h/?token=***REDACTED***"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = cmd.args(["run", "--last"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("Error: previous run included redacted secrets in -e values.\n"),
+        "{stdout}"
+    );
+}
+
 /// The legacy form's own first positional already is the config path
 /// -- `--config`/`-c` there is rejected as redundant rather than
 /// silently ignored (issue #728).

@@ -519,6 +519,24 @@ mod tests {
         assert!(stash.has_redacted_secrets());
     }
 
+    #[test]
+    fn has_redacted_secrets_detects_the_marker_in_a_url_query_value() {
+        // A stashed `-e url=...?token=...` keeps its scheme/host, with
+        // only the credential-like query value masked (issue #819
+        // follow-up).
+        let mut args = Dict::new();
+        args.insert(
+            Value::Str("env_vars".to_string()),
+            Value::List(vec![Value::Str(format!("url=https://h/?token={REDACTED}"))]),
+        );
+        let stash = LastRun {
+            path: PathBuf::from("x"),
+            args,
+            error: String::new(),
+        };
+        assert!(stash.has_redacted_secrets());
+    }
+
     fn tempfile_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("electricity-last-run-test-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
