@@ -10,8 +10,8 @@
 
 use super::dynamic::now_iso;
 use super::{
-    BoxExecFuture, CtxChain, CtxSource, execute_op, interrupted_text, key, normalize_labels,
-    store_err, wrap_effect_error,
+    BoxExecFuture, CtxChain, CtxSource, cel_decision_inputs, decision_payload, execute_op,
+    interrupted_text, key, normalize_labels, store_err, wrap_effect_error,
 };
 use crate::{
     CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError,
@@ -249,6 +249,7 @@ async fn decide_and_run<'a>(
     // issue #513 Scope §1), unlike the model arm's own failure paths,
     // which write those fields themselves, before `on_error` runs.
     let mut model_reply_after: Option<Option<crate::adapter::GenerateResult>> = None;
+    let effect_path = frame.effect_path(&op.path);
     let result = match cond {
         Condition::Cel { expr, strict } => {
             // Issue #463: `state` is only the subtrees *expr* actually
@@ -259,7 +260,27 @@ async fn decide_and_run<'a>(
             // everything else in `ctx_chain` first.
             let state = super::live_scope::build_cel_state(ctx_chain, store, expr);
             match electricity_cel::evaluate_condition(expr, &state, *strict) {
-                Ok(b) => b,
+                Ok(b) => {
+                    // Written right after the evaluation above and
+                    // before the chosen branch starts (#628) -- the
+                    // `Err` arm below writes its own, at each of its
+                    // own exit points, since none of them falls
+                    // through to here.
+                    observer.decision(
+                        &effect_path,
+                        &decision_payload(
+                            "if",
+                            "cel",
+                            vec![(
+                                "branch",
+                                Value::Str(if b { "then" } else { "else" }.to_string()),
+                            )],
+                            cel_decision_inputs(expr, &state),
+                            None,
+                        ),
+                    );
+                    b
+                }
                 Err(e) => {
                     let text = e.to_string();
                     if let Some((_, meta)) = named {
@@ -271,6 +292,16 @@ async fn decide_and_run<'a>(
                         // bare (never wrapped in anything else), so this
                         // keeps that class, not a bare `VmError::Message`.
                         OnError::Fail => {
+                            observer.decision(
+                                &effect_path,
+                                &decision_payload(
+                                    "if",
+                                    "cel",
+                                    vec![("branch", Value::None)],
+                                    cel_decision_inputs(expr, &state),
+                                    Some(&text),
+                                ),
+                            );
                             return Err(VmError::Raised {
                                 py_class: electricity_tools::PyExc::CelEvaluationError,
                                 message: text,
@@ -279,6 +310,16 @@ async fn decide_and_run<'a>(
                             });
                         }
                         OnError::Skip => {
+                            observer.decision(
+                                &effect_path,
+                                &decision_payload(
+                                    "if",
+                                    "cel",
+                                    vec![("branch", Value::None)],
+                                    cel_decision_inputs(expr, &state),
+                                    Some(&text),
+                                ),
+                            );
                             if let Some((node, _)) = named {
                                 let mut v = IndexMap::new();
                                 v.insert(key("result"), Value::None);
@@ -300,6 +341,16 @@ async fn decide_and_run<'a>(
                                 )
                                 .py_repr()
                             );
+                            observer.decision(
+                                &effect_path,
+                                &decision_payload(
+                                    "if",
+                                    "cel",
+                                    vec![("branch", Value::Str("else".to_string()))],
+                                    cel_decision_inputs(expr, &state),
+                                    Some(&text),
+                                ),
+                            );
                             false
                         }
                         OnError::Break => {
@@ -320,7 +371,6 @@ async fn decide_and_run<'a>(
             // *template* must still resolve through this frame's own
             // enclosing-container fallback chain.
             let live_root = super::live_scope::LiveRoot::new(ctx_chain, store, frame);
-            let effect_path = frame.effect_path(&op.path);
             let outcome = super::condition_model::evaluate_model_condition(
                 super::condition_model::ConditionKind::If,
                 template,
@@ -332,11 +382,39 @@ async fn decide_and_run<'a>(
             .await?;
             match outcome.verdict {
                 Ok(passed) => {
+                    let answer = outcome
+                        .generated
+                        .as_ref()
+                        .map(|g| Value::Str(g.text.clone()))
+                        .unwrap_or(Value::None);
                     model_reply_after = Some(outcome.generated);
+                    // Written right after the evaluation above and
+                    // before the chosen branch starts (#628) -- the
+                    // `Err` arm below writes its own, at each of its
+                    // own exit points, since none of them falls
+                    // through to here.
+                    observer.decision(
+                        &effect_path,
+                        &decision_payload(
+                            "if",
+                            "model",
+                            vec![(
+                                "branch",
+                                Value::Str(if passed { "then" } else { "else" }.to_string()),
+                            )],
+                            vec![("answer", answer)],
+                            None,
+                        ),
+                    );
                     passed
                 }
                 Err(failure) => {
                     let text = failure.message;
+                    let answer = outcome
+                        .generated
+                        .as_ref()
+                        .map(|g| Value::Str(g.text.clone()))
+                        .unwrap_or(Value::None);
                     if let Some((_, meta)) = named {
                         store.set_leaf(meta, key("error"), Value::Str(text.clone()));
                         store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
@@ -354,6 +432,16 @@ async fn decide_and_run<'a>(
                         // unparseable reply) survives here, never a bare
                         // `VmError::Message`.
                         OnError::Fail => {
+                            observer.decision(
+                                &effect_path,
+                                &decision_payload(
+                                    "if",
+                                    "model",
+                                    vec![("branch", Value::None)],
+                                    vec![("answer", answer)],
+                                    Some(&text),
+                                ),
+                            );
                             return Err(VmError::Raised {
                                 py_class: failure.py_class,
                                 message: text,
@@ -362,6 +450,16 @@ async fn decide_and_run<'a>(
                             });
                         }
                         OnError::Skip => {
+                            observer.decision(
+                                &effect_path,
+                                &decision_payload(
+                                    "if",
+                                    "model",
+                                    vec![("branch", Value::None)],
+                                    vec![("answer", answer)],
+                                    Some(&text),
+                                ),
+                            );
                             if let Some((node, _)) = named {
                                 let mut v = IndexMap::new();
                                 v.insert(key("result"), Value::None);
@@ -378,6 +476,16 @@ async fn decide_and_run<'a>(
                                     op.name.clone().unwrap_or_else(|| "<unnamed>".to_string())
                                 )
                                 .py_repr()
+                            );
+                            observer.decision(
+                                &effect_path,
+                                &decision_payload(
+                                    "if",
+                                    "model",
+                                    vec![("branch", Value::Str("else".to_string()))],
+                                    vec![("answer", answer)],
+                                    Some(&text),
+                                ),
                             );
                             false
                         }

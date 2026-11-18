@@ -1217,6 +1217,63 @@ pub struct ConditionPaths {
     pub reads_whole_state: bool,
 }
 
+/// The `values`/`unset` a CEL `if`/`while` condition's own `decision`
+/// line (#628) records: every path [`condition_paths`] returns, in
+/// order, split into what *state* (the same narrowed-or-whole value
+/// [`evaluate_condition`] itself evaluates against) has a value for
+/// and what it doesn't -- `Value::None` counts as unset, the same
+/// absent-reads-empty rule this crate's own evaluation already
+/// applies. A duplicate path (the same `state.` read occurring twice
+/// in *expr*) is reported once, at its first occurrence. An
+/// expression that reads `state` as a whole
+/// ([`ConditionPaths::reads_whole_state`]) records `{"state": state}`
+/// instead, with nothing unset -- no projection could narrow it.
+///
+/// Ports `core/cel_eval.py::decision_inputs`.
+///
+/// # Errors
+///
+/// Same as [`condition_paths`].
+pub fn decision_inputs(expr: &str, state: &Value) -> Result<(Value, Vec<String>), CelError> {
+    let collected = condition_paths(expr)?;
+    if collected.reads_whole_state {
+        let mut whole = electricity_value::Dict::new();
+        whole.insert(Value::Str("state".to_string()), state.clone());
+        return Ok((Value::Dict(whole), Vec::new()));
+    }
+    let mut values = electricity_value::Dict::new();
+    let mut unset = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for path in &collected.paths {
+        if !seen.insert(path.as_str()) {
+            continue;
+        }
+        match decision_input_value(path, state) {
+            Some(value) => {
+                values.insert(Value::Str(path.clone()), value);
+            }
+            None => unset.push(path.clone()),
+        }
+    }
+    Ok((Value::Dict(values), unset))
+}
+
+/// *path* (a dotted `state.`-rooted chain) resolved against *state*,
+/// `None` when some segment is missing, an intermediate isn't a
+/// `Value::Dict`, or the final value is `Value::None` -- the same
+/// "nothing there" rule `paths::resolves` applies internally, but
+/// returning the value itself rather than a bool.
+fn decision_input_value(path: &str, state: &Value) -> Option<Value> {
+    let mut current = state;
+    for part in path.split('.').skip(1) {
+        let Value::Dict(dict) = current else {
+            return None;
+        };
+        current = dict.get(&Value::Str(part.to_string()))?;
+    }
+    if current.is_none() { None } else { Some(current.clone()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2136,6 +2193,52 @@ mod tests {
     #[test]
     fn condition_paths_errors_on_a_malformed_expression() {
         assert!(condition_paths("state.a ==").is_err());
+    }
+
+    #[test]
+    fn decision_inputs_values_keyed_by_state_prefixed_path() {
+        let state = dict(vec![("a", dict(vec![("b", Value::from(1_i64))]))]);
+        let (values, unset) = decision_inputs("state.a.b == 1", &state).unwrap();
+        assert_eq!(values, dict(vec![("state.a.b", Value::from(1_i64))]));
+        assert!(unset.is_empty());
+    }
+
+    #[test]
+    fn decision_inputs_unset_path_in_read_order() {
+        let state = dict(vec![("a", Value::from(1_i64))]);
+        let (values, unset) =
+            decision_inputs("state.a == 1 && state.missing == 2", &state).unwrap();
+        assert_eq!(values, dict(vec![("state.a", Value::from(1_i64))]));
+        assert_eq!(unset, vec!["state.missing".to_string()]);
+    }
+
+    #[test]
+    fn decision_inputs_none_value_counts_as_unset() {
+        let state = dict(vec![("a", Value::None)]);
+        let (values, unset) = decision_inputs("state.a == null", &state).unwrap();
+        assert_eq!(values, Value::Dict(Dict::new()));
+        assert_eq!(unset, vec!["state.a".to_string()]);
+    }
+
+    #[test]
+    fn decision_inputs_duplicate_path_reported_once() {
+        let state = dict(vec![("a", Value::from(5_i64))]);
+        let (values, unset) = decision_inputs("state.a > 0 && state.a < 10", &state).unwrap();
+        assert_eq!(values, dict(vec![("state.a", Value::from(5_i64))]));
+        assert!(unset.is_empty());
+    }
+
+    #[test]
+    fn decision_inputs_reads_whole_state_records_the_whole_state() {
+        let state = dict(vec![("a", dict(vec![("b", Value::from(1_i64))]))]);
+        let (values, unset) = decision_inputs("size(state) > 0", &state).unwrap();
+        assert_eq!(values, dict(vec![("state", state.clone())]));
+        assert!(unset.is_empty());
+    }
+
+    #[test]
+    fn decision_inputs_errors_on_a_malformed_expression() {
+        assert!(decision_inputs("state.a ==", &Value::Dict(Dict::new())).is_err());
     }
 
     #[test]

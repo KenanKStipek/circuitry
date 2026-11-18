@@ -396,6 +396,77 @@ impl EventLog {
         self.write_line("report", Value::Dict(payload));
     }
 
+    /// One `decision` line (#628): `v`, `seq`, `ts`, `ev`, `path`, then
+    /// *payload*'s own entries in order -- `kind`, `mode`, the outcome
+    /// (`branch` for an `if`; `continue`/`iteration` for a `while`),
+    /// the inputs (`values`[/`unset`] for a CEL condition; `answer`
+    /// for a model one) and `error` when the condition raised, exactly
+    /// as `electricity_vm::exec::conditional`/`loop_` built it. Ports
+    /// `cli/events.py::EventLog.on_decision`.
+    ///
+    /// A CEL condition's own `values` follows the same 16 KiB rule as
+    /// a `report`'s own `data` ([`REPORT_DATA_MAX_BYTES`]): replaced
+    /// by `values_truncated` (the compact JSON's byte count) past
+    /// that, with `unset` kept either way.
+    pub fn on_decision(&self, path: &str, payload: &Value) {
+        if self.disabled.get() {
+            return;
+        }
+        let Value::Dict(payload) = payload else {
+            return;
+        };
+        let mut line = Dict::new();
+        line.insert(Value::Str("v".to_string()), Value::from(1i64));
+        line.insert(
+            Value::Str("seq".to_string()),
+            Value::from(self.take_seq() as i64),
+        );
+        line.insert(Value::Str("ts".to_string()), Value::Str(now_iso_ms()));
+        line.insert(
+            Value::Str("ev".to_string()),
+            Value::Str("decision".to_string()),
+        );
+        line.insert(Value::Str("path".to_string()), Value::Str(path.to_string()));
+        for (key, value) in payload {
+            let key_str = match key {
+                Value::Str(s) => s.as_str(),
+                _ => continue,
+            };
+            if key_str == "values" {
+                match electricity_json::dumps_default_str(value, electricity_json::WriteMode::EVENTS)
+                {
+                    Ok(text) => {
+                        let byte_len = text.len();
+                        if byte_len > REPORT_DATA_MAX_BYTES {
+                            line.insert(
+                                Value::Str("values_truncated".to_string()),
+                                Value::from(byte_len as i64),
+                            );
+                        } else {
+                            line.insert(key.clone(), value.clone());
+                        }
+                    }
+                    Err(err) => {
+                        self.disable_with("decision", &err);
+                        return;
+                    }
+                }
+            } else if key_str == "error" {
+                match value {
+                    Value::Str(error_text) => {
+                        line.insert(key.clone(), Value::Str(truncate_error(error_text)));
+                    }
+                    _ => {
+                        line.insert(key.clone(), value.clone());
+                    }
+                }
+            } else {
+                line.insert(key.clone(), value.clone());
+            }
+        }
+        self.write_line("decision", Value::Dict(line));
+    }
+
     /// One `progress` line (#674/#676): the same running figures
     /// `meta.live` carries (`tokens_received_estimate`,
     /// `chars_received`, `tokens_sent`, `tokens_sent_estimate`), plus

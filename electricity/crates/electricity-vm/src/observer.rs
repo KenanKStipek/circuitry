@@ -220,6 +220,19 @@ pub trait RunObserver {
         _data: &ProgressData,
     ) {
     }
+
+    /// An `if`/`while` condition just evaluated (#628) -- `--events`'s
+    /// own `decision` line. *path* is the same fallback [`RunObserver::
+    /// report`] uses: the condition's own state path when named,
+    /// otherwise the path of the container it runs in. *payload* is
+    /// `kind`/`mode` plus the outcome (`branch` for an `if`;
+    /// `continue`/`iteration` for a `while`), the inputs (`values`[/
+    /// `unset`] for a CEL condition; `answer` for a model one) and
+    /// `error` when the condition raised -- in exactly the order a
+    /// `--events` line writes them. Default no-op, like every other
+    /// hook here; only `electricity` (lib)'s own `Observer` implements
+    /// it for real.
+    fn decision(&self, _path: &EffectPath, _payload: &Value) {}
 }
 
 /// The fields a streamed prompt's own throttled live-progress publish
@@ -264,5 +277,6 @@ mod tests {
         observer.register_tree_branches(&path, &[]);
         observer.clear_tree_branches(&path, &[]);
         observer.report(&path, ReportLevel::Info, "hi", None);
+        observer.decision(&path, &Value::None);
     }
 }

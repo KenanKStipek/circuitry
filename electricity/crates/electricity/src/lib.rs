@@ -1049,6 +1049,12 @@ impl RunObserver for Observer<'_> {
             log.on_progress(&path.to_string(), instance, attempt, data);
         }
     }
+
+    fn decision(&self, path: &EffectPath, payload: &Value) {
+        if let Some(log) = self.events {
+            log.on_decision(&path.to_string(), payload);
+        }
+    }
 }
 
 /// Whether the report console line may use ANSI color, mirroring Rich's

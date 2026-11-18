@@ -104,6 +104,56 @@ pub(crate) fn key(s: &str) -> Value {
     Value::Str(s.to_string())
 }
 
+/// One `decision` line's own payload (#628): `kind`, `mode`, then
+/// *outcome* (`branch` for an `if`; `continue`/`iteration` for a
+/// `while`), then *inputs* (`values`[/`unset`] for a CEL condition;
+/// `answer` for a model one), then `error` when present -- in exactly
+/// the order [`crate::RunObserver::decision`] writes them, mirroring
+/// `core/store/store.py::Store.fire_decision`'s own dict-literal
+/// build.
+pub(crate) fn decision_payload(
+    kind: &str,
+    mode: &str,
+    outcome: Vec<(&str, Value)>,
+    inputs: Vec<(&str, Value)>,
+    error: Option<&str>,
+) -> Value {
+    let mut payload = IndexMap::new();
+    payload.insert(key("kind"), key(kind));
+    payload.insert(key("mode"), key(mode));
+    for (field, value) in outcome {
+        payload.insert(key(field), value);
+    }
+    for (field, value) in inputs {
+        payload.insert(key(field), value);
+    }
+    if let Some(error) = error {
+        payload.insert(key("error"), Value::Str(error.to_string()));
+    }
+    Value::Dict(payload)
+}
+
+/// A CEL condition's own `decision` line inputs (#628): `values`[/
+/// `unset`], computed by [`electricity_cel::decision_inputs`] from
+/// *state* -- the same narrowed-or-whole value
+/// [`live_scope::build_cel_state`] already built for the evaluation
+/// itself. Never panics -- an expression that cannot even parse
+/// already surfaced that as this evaluation's own failure; this
+/// bookkeeping falls back to an empty `values` rather than masking it
+/// with one of its own.
+pub(crate) fn cel_decision_inputs(expr: &str, state: &Value) -> Vec<(&'static str, Value)> {
+    match electricity_cel::decision_inputs(expr, state) {
+        Ok((values, unset)) => {
+            let mut inputs = vec![("values", values)];
+            if !unset.is_empty() {
+                inputs.push(("unset", Value::List(unset.into_iter().map(Value::Str).collect())));
+            }
+            inputs
+        }
+        Err(_) => vec![("values", Value::Dict(IndexMap::new()))],
+    }
+}
+
 /// [`crate::StoreError`] as a [`VmError`] -- every `Store` call in this
 /// crate's own containers is one this crate's own code already proved
 /// well-formed (a tracked parent, a target key that exists), so this
