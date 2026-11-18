@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import socket
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -567,6 +568,15 @@ def test_refresh_offline_never_names_a_password_in_a_custom_api_base(
     assert "git.example.test" in str(excinfo.value)
 
 
+def _closed_port() -> int:
+    """A port known to be closed on 127.0.0.1 -- never the scheme's own
+    default (``:80``/``:443``), which another process on the machine
+    running this test could really be listening on."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def test_refresh_against_a_real_closed_port_never_leaks_the_password_via_invalidurl(
     tmp_path: Path,
 ) -> None:
@@ -582,7 +592,24 @@ def test_refresh_against_a_real_closed_port_never_leaks_the_password_via_invalid
     password = "pw_value_pw_value"
     with pytest.raises(LibraryFetchError) as excinfo:
         _source(
-            tmp_path, api_base=f"https://alice:{password}@127.0.0.1"
+            tmp_path, api_base=f"https://alice:{password}@127.0.0.1:{_closed_port()}"
+        ).refresh()
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
+def test_refresh_against_a_closed_port_with_a_hidden_slash_credential(
+    tmp_path: Path,
+) -> None:
+    """#818/#819: `check_url` runs before the `Request` is ever built, so
+    a password hidden behind a `/` is refused with Circuitry's own
+    redacted text, never urllib's own credential-bearing exception.
+    """
+    password = "longsecret"
+    with pytest.raises(LibraryFetchError) as excinfo:
+        _source(
+            tmp_path,
+            api_base=f"http://alice:{password}/x@127.0.0.1:{_closed_port()}",
         ).refresh()
     assert password not in str(excinfo.value)
     assert "alice" not in str(excinfo.value)

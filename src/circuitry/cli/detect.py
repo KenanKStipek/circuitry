@@ -51,11 +51,14 @@ def _curl_json_get(url: str, timeout: int = 5) -> dict[str, Any]:
     import urllib.error
     import urllib.request
 
-    # Userinfo stripped before urllib ever sees it (issue #819):
-    # `Request.host` keeps it verbatim otherwise, so a userinfo with no
-    # port (`http://user:pass@host/`) reaches `http.client` unstripped
-    # and raises its own credential-bearing `InvalidURL("nonnumeric
-    # port: ...")`, which the callers below would otherwise echo.
+    # Checked, then its userinfo stripped, before urllib ever sees it
+    # (issue #819): `check_url` refuses a malformed port with
+    # Circuitry's own redacted text, so `http.client` never gets a
+    # chance to raise its own credential-bearing `InvalidURL("nonnumeric
+    # port: 'longsecret'")` for a userinfo with a colon but no port
+    # (`http://alice:longsecret/x@127.0.0.1`), which `scrub_embedded_urls`
+    # can't find (that exception text has no `scheme://` of its own).
+    http_conventions.check_url(url)
     req = urllib.request.Request(http_conventions.strip_request_url_userinfo(url), method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())

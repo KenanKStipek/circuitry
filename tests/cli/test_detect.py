@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from typing import Any
 from unittest.mock import patch
 
@@ -96,6 +97,15 @@ def test_detect_ollama_scrubs_a_url_from_urllibs_own_exception_text() -> None:
     assert "alice" not in status.detail
 
 
+def _closed_port() -> int:
+    """A port known to be closed on 127.0.0.1 -- never the scheme's own
+    default (``:80``/``:443``), which another process on the machine
+    running this test could really be listening on."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def test_detect_ollama_scrubs_the_real_invalidurl_text_with_no_mocking() -> None:
     """#819: a userinfo with no port reaches `http.client`'s own
     host/port split unstripped and raises its own credential-bearing
@@ -105,7 +115,7 @@ def test_detect_ollama_scrubs_the_real_invalidurl_text_with_no_mocking() -> None
     it would catch a regression the mock can't.
     """
     password = "pw_value_pw_value"
-    base_url = f"http://alice:{password}@127.0.0.1"
+    base_url = f"http://alice:{password}@127.0.0.1:{_closed_port()}"
 
     status = detect_ollama(base_url)
 
@@ -115,6 +125,22 @@ def test_detect_ollama_scrubs_the_real_invalidurl_text_with_no_mocking() -> None
 
 
 # --- OpenAI ---
+
+
+def test_detect_ollama_against_a_real_closed_port_with_a_hidden_slash_credential() -> None:
+    """#818/#819: `check_url` runs before the `Request` is ever built, so
+    `http://alice:longsecret/x@127.0.0.1:<port>` -- a password hidden
+    behind a `/` -- is refused with Circuitry's own redacted text, never
+    urllib's own credential-bearing exception.
+    """
+    password = "longsecret"
+    base_url = f"http://alice:{password}/x@127.0.0.1:{_closed_port()}"
+
+    status = detect_ollama(base_url)
+
+    assert status.available is False
+    assert password not in status.detail
+    assert "alice" not in status.detail
 
 
 def test_detect_openai_with_key() -> None:

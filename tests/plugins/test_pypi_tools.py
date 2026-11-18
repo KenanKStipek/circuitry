@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json as _json
+import socket
 import sys
 import types
 import urllib.error
@@ -586,9 +587,41 @@ def test_rss_fetch_against_a_real_closed_port_never_leaks_the_password_via_inval
     monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
     password = "pw_value_pw_value"
 
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed_port = int(sock.getsockname()[1])
+
     with pytest.raises(RuntimeError) as excinfo:
         RssPlugin().execute(
-            params={"url": f"http://alice:{password}@127.0.0.1"}, timeout_seconds=2
+            params={"url": f"http://alice:{password}@127.0.0.1:{closed_port}"},
+            timeout_seconds=2,
+        )
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
+def test_rss_fetch_against_a_closed_port_with_a_hidden_slash_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#818/#819: `check_url` runs before the `Request` is ever built, so
+    a password hidden behind a `/` is refused with Circuitry's own
+    redacted text, never urllib's own credential-bearing exception.
+    """
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+    password = "longsecret"
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed_port = int(sock.getsockname()[1])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        RssPlugin().execute(
+            params={"url": f"http://alice:{password}/x@127.0.0.1:{closed_port}"},
+            timeout_seconds=2,
         )
     assert password not in str(excinfo.value)
     assert "alice" not in str(excinfo.value)
