@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #628",
+  "description": "A CEL if whose condition reads a state value whose own compact JSON exceeds 16 KiB: the decision line replaces values with values_truncated (that byte count), the same rule and encoder report's own data already uses.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

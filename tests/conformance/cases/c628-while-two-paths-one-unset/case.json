@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #628",
+  "description": "A while loop's CEL condition reads two state paths -- one set (state.prime.counter.value.n), one unset (a has()-guarded state.prime.missing.value): the decision line's values carries the one that resolved, unset carries the one that didn't.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
