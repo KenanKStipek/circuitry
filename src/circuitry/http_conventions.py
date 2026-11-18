@@ -142,6 +142,30 @@ def strip_request_url_userinfo(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
 
 
+def _has_non_port_colon(rest: str, start: int, end: int) -> bool:
+    """Whether ``rest[start:end]`` contains a ``:`` that can't be a
+    port: the text after it, up to the next ``/``, ``?``, ``#`` or
+    ``@``, has a character that isn't an ASCII digit (issue #819
+    follow-up). Scans every ``:`` in the span, not just the first --
+    ``rest``'s own next separator after a candidate ``:`` can fall
+    anywhere past *end* too (the span never contains an ``@`` of its
+    own, since *end* is always the position of the next one).
+    """
+    pos = start
+    while True:
+        colon = rest.find(":", pos, end)
+        if colon == -1:
+            return False
+        sep_end = len(rest)
+        for sep in ("/", "?", "#", "@"):
+            idx = rest.find(sep, colon + 1)
+            if idx != -1:
+                sep_end = min(sep_end, idx)
+        if not _PORT_RE.fullmatch(rest[colon + 1 : sep_end]):
+            return True
+        pos = colon + 1
+
+
 def redact_url(url: str, marker: str) -> str:
     """*url* with any userinfo and any credential-like query-string
     value replaced by *marker* -- the one function behind every URL
@@ -166,31 +190,38 @@ def redact_url(url: str, marker: str) -> str:
     - **Userinfo in the authority.** The authority is the text right
       after ``scheme://``, up to the first ``/``, ``?`` or ``#`` (or,
       with no ``scheme://`` at all, *url* itself). When it contains an
-      ``@``, everything before its last ``@`` is replaced.
-    - **A ``:`` before a later ``@``.** When an ``@`` comes after the
-      authority (in the path, query or fragment) and a ``:`` appears
-      anywhere between the start of the authority and that later
-      ``@``, the whole span up to that ``@`` is replaced instead --
-      this catches a password hidden behind a ``/``
-      (``http://alice:secret/x@host``). A credential-free ``@`` with
-      no such ``:`` (``https://medium.com/@alice/post``, ``?q=a@b``)
-      is left untouched.
-    - **No ``://`` at all.** A schemeless value with an ``@`` and no
-      whitespace anywhere (the same shape a schemeless proxy value
-      carries) is cut before its last ``@`` unconditionally -- no ``:``
-      required: a bare ``token@host`` is itself a credential when
-      *url* is already known to be a URL (a value under a URL key) or
-      a request/proxy value, never prose.
+      ``@``, everything before its last ``@`` is replaced -- whether
+      or not another ``@`` also appears later in *url*
+      (``https://tok@host/@acme/widget``).
+    - **A ``:`` before a later ``@``, when it can't be a port.** When
+      an ``@`` comes after the authority (in the path, query or
+      fragment) and, between the start of the host (right after any
+      authority userinfo just cut) and that later ``@``, a ``:``
+      appears whose following text (up to the next ``/``, ``?``, ``#``
+      or ``@``) isn't all ASCII digits (:func:`_has_non_port_colon`),
+      the whole span up to that ``@`` is replaced instead -- this
+      catches a password hidden behind a ``/``
+      (``http://alice:secret/x@host``). A ``:`` whose text could be a
+      real port (``http://localhost:8080/@alice``), or no ``:`` at all
+      (``https://medium.com/@alice/post``, ``?q=a@b``), leaves the
+      ``@`` untouched.
+    - **No ``://`` at all.** A schemeless value with an ``@`` is cut
+      before its last ``@`` unconditionally -- no ``:`` required, and
+      whitespace is no exception: every caller here has already
+      committed to treating *url* as a URL (a value under a URL key,
+      or a request/proxy value), never prose, so a bare ``token@host``
+      is itself a credential.
     - Either cut replaces the matched span with ``f"{marker}@"`` when
       *marker* is non-empty, or with nothing at all (dropping the
       ``@`` too) when it is empty.
     - **Query.** Every ``&``-separated ``key=value`` pair (raw text,
-      nothing decoded or re-encoded) whose key looks like a credential
-      has its value replaced -- with *marker* when non-empty, or the
-      fixed ``%2A%2A%2A`` (`main`'s own percent-encoded ``***``) when
-      empty, so a value without a marker still fails
-      ``has_redacted_secrets`` for the right reason. A ``?`` that comes
-      after a ``#`` is fragment text, never a query delimiter.
+      nothing decoded or re-encoded) whose KEY, percent-decoded, looks
+      like a credential has its VALUE's raw text replaced -- with
+      *marker* when non-empty, or the fixed ``%2A%2A%2A`` (`main`'s own
+      percent-encoded ``***``) when empty, so a value without a marker
+      still fails ``has_redacted_secrets`` for the right reason. A ``?``
+      that comes after a ``#`` is fragment text, never a query
+      delimiter.
     """
     # A scheme boundary is the FIRST ":" in the value, immediately
     # followed by "//" -- not just the first occurrence of the literal
@@ -204,27 +235,37 @@ def redact_url(url: str, marker: str) -> str:
     if scheme_end != -1:
         prefix, rest = url[: scheme_end + 3], url[scheme_end + 3 :]
     else:
-        if any(c.isspace() for c in url):
-            return url
         prefix, rest = "", url
 
     userinfo_prefix = f"{marker}@" if marker else ""
-    authority_end = len(rest)
-    for sep in ("/", "?", "#"):
-        idx = rest.find(sep)
-        if idx != -1:
-            authority_end = min(authority_end, idx)
 
-    last_at = rest.rfind("@")
-    if last_at != -1:
-        if scheme_end == -1:
-            # Schemeless: every caller here has already committed to
-            # treating *url* as a URL (a URL-key value, or a request/
-            # proxy value), so a bare ``token@host`` -- no ":" at all --
-            # is itself a credential, not just the user:pass@host shape.
+    if scheme_end == -1:
+        # Schemeless: every caller here has already committed to
+        # treating *url* as a URL (a URL-key value, or a request/
+        # proxy value), so a bare ``token@host`` -- no ":" at all, and
+        # whitespace no exception -- is itself a credential, not just
+        # the user:pass@host shape.
+        last_at = rest.rfind("@")
+        if last_at != -1:
             rest = userinfo_prefix + rest[last_at + 1 :]
-        elif last_at < authority_end or ":" in rest[:last_at]:
-            rest = userinfo_prefix + rest[last_at + 1 :]
+    else:
+        authority_end = len(rest)
+        for sep in ("/", "?", "#"):
+            idx = rest.find(sep)
+            if idx != -1:
+                authority_end = min(authority_end, idx)
+
+        host_start = 0
+        authority = rest[:authority_end]
+        if "@" in authority:
+            authority_at = authority.rfind("@")
+            rest = userinfo_prefix + rest[authority_at + 1 :]
+            authority_end -= authority_at + 1 - len(userinfo_prefix)
+            host_start = len(userinfo_prefix)
+
+        last_at = rest.rfind("@")
+        if last_at >= authority_end and _has_non_port_colon(rest, host_start, last_at):
+            rest = rest[:host_start] + userinfo_prefix + rest[last_at + 1 :]
 
     hash_idx = rest.find("#")
     body = rest if hash_idx == -1 else rest[:hash_idx]
@@ -235,7 +276,8 @@ def redact_url(url: str, marker: str) -> str:
         masked_segments = []
         for segment in body[query_idx + 1 :].split("&"):
             key, has_value, _ = segment.partition("=")
-            if has_value and _CREDENTIAL_QUERY_KEY_RE.search(key):
+            decoded_key = urllib.parse.unquote(key)
+            if has_value and _CREDENTIAL_QUERY_KEY_RE.search(decoded_key):
                 masked_segments.append(f"{key}={query_mask}")
             else:
                 masked_segments.append(segment)
@@ -281,10 +323,23 @@ def redact_request_url(url: str) -> str:
     return redact_url(url, "")
 
 
+#: The one whitespace set :func:`scrub_embedded_urls`'s own boundary
+#: uses, on both engines: ASCII 9-13 (tab, LF, VT, FF, CR), 32 (space),
+#: and U+001C-U+001F (file/group/record/unit separator) -- every one of
+#: these Python's own ``\s``/``str.isspace`` already matches, spelled
+#: out explicitly rather than through either, so Rust's own boundary
+#: can match it exactly: ``char::is_whitespace`` is false for
+#: U+001C-U+001F, which would otherwise let the two engines end an
+#: embedded URL at different points (issue #819 follow-up).
+_EMBEDDED_URL_BOUNDARY = r"\x09-\x0d\x20\x1c-\x1f"
+
 #: A ``scheme://...`` URL embedded anywhere inside a larger piece of text
-#: -- bounded at whitespace or a quote/bracket character, never at a
-#: comma or period a sentence might put right after it (issue #819).
-_EMBEDDED_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s\"'()<>]+")
+#: -- bounded at :data:`_EMBEDDED_URL_BOUNDARY` or a quote/bracket
+#: character, never at a comma or period a sentence might put right
+#: after it (issue #819).
+_EMBEDDED_URL_RE = re.compile(
+    r"[A-Za-z][A-Za-z0-9+.\-]*://[^" + _EMBEDDED_URL_BOUNDARY + r"\"'()<>]+"
+)
 
 
 def scrub_embedded_urls(text: str) -> str:

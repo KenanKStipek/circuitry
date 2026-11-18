@@ -77,6 +77,17 @@ def _redact_url(value: str) -> str:
     return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
 
 
+def _is_token_shaped(value: str) -> bool:
+    """Whether *value* is a JWT or API-key-shaped string -- `main`'s
+    own ordinary-string rule, applied first even to a string under a
+    URL key (:func:`_is_url_key`): a token-shaped value redacts
+    wholesale regardless of the key it's under, same as it always was
+    on `main` (issue #819 follow-up -- a URL key's own value is never
+    sent *only* through :func:`http_conventions.redact_url`).
+    """
+    return bool(_JWT_RE.match(value) or _KEYISH_RE.match(value))
+
+
 def _redact_string(value: str) -> str:
     """An ordinary string, redacted exactly as `main` redacts it: a JWT
     or API-key-shaped string wholesale, a URL that carries both
@@ -85,9 +96,7 @@ def _redact_string(value: str) -> str:
     never applies here -- only to a string under a URL key
     (:func:`_is_url_key`), handled by :func:`redact` itself.
     """
-    if _JWT_RE.match(value):
-        return REDACTED
-    if _KEYISH_RE.match(value):
+    if _is_token_shaped(value):
         return REDACTED
     if "://" in value and "@" in value:
         return _redact_url(value)
@@ -155,7 +164,7 @@ def redact(value: Any) -> Any:
             elif k == "adapters":
                 out[k] = _redact_adapter_env(v)
             elif isinstance(k, str) and _is_url_key(k) and isinstance(v, str):
-                out[k] = http_conventions.redact_url(v, REDACTED)
+                out[k] = REDACTED if _is_token_shaped(v) else http_conventions.redact_url(v, REDACTED)
             else:
                 out[k] = redact(v)
         return out
@@ -186,7 +195,8 @@ def redact_env_pairs(pairs: list[str] | None) -> list[str] | None:
         if _is_sensitive_key(key):
             out.append(f"{key}={REDACTED}")
         elif _is_url_key(key):
-            out.append(f"{key}={http_conventions.redact_url(value, REDACTED)}")
+            masked = REDACTED if _is_token_shaped(value) else http_conventions.redact_url(value, REDACTED)
+            out.append(f"{key}={masked}")
         else:
             # Even non-sensitive keys can carry credential-shaped values
             # (e.g. `-e my_var=sk-abc...`). Apply string-level checks too.
