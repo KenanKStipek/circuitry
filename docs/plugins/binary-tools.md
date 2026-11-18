@@ -131,11 +131,15 @@ effect:
 - The raw stdout is still recorded, on `meta.stdout`.
 - Empty (or whitespace-only) stdout, and stdout that is not valid JSON,
   fail the effect. The message names the exit code and quotes the first
-  200 characters of stdout.
+  200 characters of stdout; `meta.stdout`, `meta.stderr` and
+  `meta.exit_code` still record the real values, the same fields a
+  non-zero exit already records, also under `on_error: continue`.
 - With `allow_nonzero: true`, a non-zero exit's stdout is parsed the same
   way and `meta.exit_code` keeps the code; if that stdout is not JSON the
   effect fails as above.
-- A `parse` value other than `json` fails before the process runs.
+- `parse: ""` is the same as omitting it (off), so a template that
+  renders empty doesn't fail. Any other value fails before the process
+  runs.
 
 ## Not covered
 
