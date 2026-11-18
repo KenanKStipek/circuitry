@@ -142,18 +142,23 @@ def strip_request_url_userinfo(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
 
 
-def redact_url(url: str, marker: str) -> str:
+def redact_url(url: str, marker: str, *, require_colon: bool = True) -> str:
     """*url* with any userinfo and any credential-like query-string
     value replaced by *marker* -- the one function behind every URL
-    redaction on this engine (issue #819 follow-up). Every other
-    caller that names a request URL or a proxy value in a refusal,
-    warning, event, state or hint calls this with ``marker=""`` (drop
-    the credential, with its ``@``, exactly as `main` always has):
-    :func:`redact_request_url`, :func:`redact_proxy_value`. The
-    effective-settings snapshot redactor (``cli/redaction.py``) calls
-    it with ``marker=REDACTED`` for a value under a URL key, to show a
-    credential was there rather than silently removing all trace of
-    it.
+    redaction on this engine. Every other caller that names a request
+    URL or a proxy value in a refusal, warning, event, state or hint
+    calls this with ``marker=""`` (drop the credential, with its
+    ``@``, exactly as `main` always has): :func:`redact_request_url`,
+    :func:`redact_proxy_value`. The effective-settings snapshot
+    redactor (``cli/redaction.py``) calls it with ``marker=REDACTED``
+    for a value under a URL key, to show a credential was there
+    rather than silently removing all trace of it.
+
+    *require_colon* gates whether a later ``@`` (past the authority)
+    needs a ``:`` before it to be cut -- true for every caller except
+    :func:`redact_proxy_value`, whose value has no path of its own:
+    the whole authority is the credential, so a later ``@`` is cut
+    whether or not a ``:`` precedes it.
 
     Nothing else about *url* changes: no percent-decoding, no
     re-encoding, no case change, no separator normalization -- a
@@ -247,7 +252,7 @@ def redact_url(url: str, marker: str) -> str:
         # tail ("ss/word", past the authority's own cut) would survive
         # uncut.
         last_at = rest.rfind("@")
-        if last_at >= authority_end and ":" in rest[:last_at]:
+        if last_at >= authority_end and (not require_colon or ":" in rest[:last_at]):
             rest = userinfo_prefix + rest[last_at + 1 :]
         elif authority_at != -1:
             rest = userinfo_prefix + rest[authority_at + 1 :]
@@ -275,9 +280,13 @@ def redact_proxy_value(value: str) -> str:
     """*value* (a proxy URL or value, normalized or not) redacted
     through :func:`redact_url`, dropping any credential outright (the
     classic, marker-less form every refusal message that names a proxy
-    value uses).
+    value uses). A proxy value has no path of its own worth keeping, so
+    the whole authority is the credential: unlike
+    :func:`redact_request_url`, a later ``@`` is cut even with no
+    ``:`` before it (``http://abc/def@proxy:3128`` is cut to
+    ``http://proxy:3128``).
     """
-    return redact_url(value, "")
+    return redact_url(value, "", require_colon=False)
 
 
 def _at_follows_netloc(url: str, netloc: str) -> bool:
@@ -315,7 +324,7 @@ def redact_request_url(url: str) -> str:
 #: out explicitly rather than through either, so Rust's own boundary
 #: can match it exactly: ``char::is_whitespace`` is false for
 #: U+001C-U+001F, which would otherwise let the two engines end an
-#: embedded URL at different points (issue #819 follow-up).
+#: embedded URL at different points.
 _EMBEDDED_URL_BOUNDARY = r"\x09-\x0d\x20\x1c-\x1f"
 
 #: A ``scheme://...`` URL embedded anywhere inside a larger piece of text

@@ -82,8 +82,8 @@ def _is_token_shaped(value: str) -> bool:
     own ordinary-string rule, applied first even to a string under a
     URL key (:func:`_is_url_key`): a token-shaped value redacts
     wholesale regardless of the key it's under, same as it always was
-    on `main` (issue #819 follow-up -- a URL key's own value is never
-    sent *only* through :func:`http_conventions.redact_url`).
+    on `main` -- a URL key's own value is never sent *only* through
+    :func:`http_conventions.redact_url`.
     """
     return bool(_JWT_RE.match(value) or _KEYISH_RE.match(value))
 
