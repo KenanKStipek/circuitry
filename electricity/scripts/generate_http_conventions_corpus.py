@@ -152,16 +152,16 @@ def _redaction_cases() -> list[dict[str, Any]]:
         "http://alice:pa\rss@host:1234/x",
         "http://alice:pa:ss@host:1234/x",
         # A credential-like query key behind an `@` that follows the
-        # authority (issue #778): the cut to the last `@` must run
-        # *before* the query is masked, or the mask's own re-encoding
-        # of a literal `@` as `%40` would hide it from the cut.
+        # authority (issue #778): the cut to the last `@` runs on the
+        # value's original text, before the query is masked, so it
+        # still finds the query string's own `@` at its original
+        # position.
         "https://alice:longsecret/x@api.example.com/v1?api_key=sk",
-        # The same shape, but the text before the `@` IS a valid port
-        # (issue #819 follow-up): a port exception was tried and
-        # withdrawn -- `http://user:12/34@host` (a password containing
-        # a `/` whose first part happens to be all digits) must still
-        # be cut in full, so a port-shaped `:` suffix is never
-        # special-cased, and `http://localhost:8080/@alice` is cut too.
+        # The same shape, but the text before the `@` IS a valid port:
+        # `http://user:12/34@host` (a password containing a `/` whose
+        # first part happens to be all digits) must still be cut in
+        # full, so a port-shaped `:` suffix is never special-cased,
+        # and `http://localhost:8080/@alice` is cut too.
         "https://alice:443/x@api.example.com/v1?api_key=sk",
         "http://localhost:8080/@alice",
         "http://user:12/34@host",
@@ -183,44 +183,47 @@ def _redaction_cases() -> list[dict[str, Any]]:
         # `user:pass@host` shape.
         "mytoken@host.example.test/api",
         # The authority's own userinfo is cut first, whether or not
-        # another `@` also appears later in the value (issue #819
-        # follow-up): a scoped-package-style path here.
+        # another `@` also appears later in the value: a
+        # scoped-package-style path here.
         "https://npmTOKEN123@registry.example.test/@acme/widget",
         # The query key is matched percent-decoded ("token"); only the
-        # raw value text is replaced (issue #819 follow-up).
+        # raw value text is replaced.
         "https://host/x?tok%65n=secretvalue123",
         # The query key is matched percent-decoded even when the
-        # decode is lossy, like `urllib.parse.unquote`'s own default
-        # (issue #827 follow-up): an invalid trailing byte decodes to
-        # U+FFFD, and the result still contains "token".
+        # decode is lossy, like `urllib.parse.unquote`'s own default:
+        # an invalid trailing byte decodes to U+FFFD, and the result
+        # still contains "token".
         "https://h/?tok%65n%ff=secretvalue456",
         # Python's `re.IGNORECASE` folds the Kelvin sign (U+212A) to
-        # "k", matching "key" against a decoded key of "Key"
-        # (issue #827 follow-up).
+        # "k", matching "key" against a decoded key of "Key".
         "https://h/?%E2%84%AAey=secretvaluekelvin",
         # The ":" search for a later "@" runs from the start of the
-        # ORIGINAL authority, userinfo included, not just the host
-        # (issue #827 follow-up): a password containing an "@" of its
-        # own ("alice:p@ss") must still be found, or its own tail
-        # (past the authority's own cut) survives uncut.
+        # ORIGINAL authority, userinfo included, not just the host: a
+        # password containing an "@" of its own ("alice:p@ss") must
+        # still be found, or its own tail (past the authority's own
+        # cut) survives uncut.
         "http://alice:p@ss/word@proxy:3128",
         "http://alice:p@ss?word@proxy:3128",
         "http://alice:p@ss#word@proxy:3128",
         # The over-redaction this causes when the authority already
         # has its own userinfo is accepted -- it matches `main`'s own
-        # request-URL behaviour (issue #827 follow-up correction).
+        # request-URL behaviour.
         "http://u:p@host/@alice",
+        # A credential-free URL keeps a literal `+` untouched: neither
+        # engine decodes it (`+` for a space is a form-encoding
+        # convention, not a URL one), so the byte-for-byte promise
+        # holds for it too.
+        "https://host/a+b?q=c+d",
     ]
     return [{"url": url, "redacted": http_conventions.redact_request_url(url)} for url in urls]
 
 
 def _scrub_cases() -> list[dict[str, Any]]:
-    """`scrub_embedded_urls` (issue #819/#827 follow-up): every
-    `scheme://...` URL found anywhere inside a larger piece of text,
-    redacted in place.
+    """`scrub_embedded_urls`: every `scheme://...` URL found anywhere
+    inside a larger piece of text, redacted in place.
     """
     texts = [
-        # U+001F ends an embedded URL (Python's own `\s`, what
+        # U+001F ends an embedded URL (`_EMBEDDED_URL_BOUNDARY`, what
         # `_EMBEDDED_URL_RE` uses, matches it; Rust's own
         # `char::is_whitespace` does not) -- before the authority cut
         # ever runs, never because of it, so the `:c@d` past it is
@@ -237,10 +240,10 @@ def _proxy_redaction_cases() -> list[dict[str, Any]]:
     values = [
         "http://alice:pass@proxy:3128",
         "proxy.corp:3128",
-        # Hostile passwords (issue #778): a proxy value has no
-        # meaningful path, so none of these end its authority early --
-        # the whole value, after its scheme (or from the start, with
-        # none), is searched for the LAST `@`.
+        # Hostile passwords: a proxy value has no meaningful path, so
+        # none of these end its authority early -- the whole value,
+        # after its scheme (or from the start, with none), is
+        # searched for the LAST `@`, whether or not a `:` precedes it.
         "http://alice:pa/ss@proxy:3128",
         "http://alice:pa?ss@proxy:3128",
         "http://alice:pa#ss@proxy:3128",
@@ -249,6 +252,13 @@ def _proxy_redaction_cases() -> list[dict[str, Any]]:
         "http://alice:pa@ss@proxy:3128",
         "http://alice:pa:ss@proxy:3128",
         "alice:s3cret@proxy:3128 ",
+        # A credential with no `:` at all, hidden behind a `/`, `?` or
+        # `#`: still the whole authority, not just a password.
+        "http://abc/def@proxy:3128",
+        "http://abc/def@proxy:3128?q=1",
+        "http://abc/def@proxy:3128#frag",
+        "socks5://abc/def@proxy:1080",
+        "abc/def@proxy:3128",
     ]
     return [
         {"value": value, "redacted": http_conventions.redact_proxy_value(value)}
@@ -367,8 +377,6 @@ def _proxy_cases() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------
 # 5. `Retry-After`, RFC 9110 section 10.2.3, a fixed `now`.
 # ---------------------------------------------------------------------
-
-
 
 def _retry_after_cases() -> list[dict[str, Any]]:
     now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)

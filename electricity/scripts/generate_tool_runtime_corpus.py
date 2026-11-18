@@ -246,16 +246,16 @@ def build_redaction_cases() -> list[dict]:
     cases.append(redact_case("https://u:p@h/p?#f"))  # empty query, present fragment
     cases.append(redact_case("https://u:p@h[invalid"))  # unbalanced bracket: unchanged
 
-    # --- issue #819 follow-up: the URL rule applies only to a string
-    # under a URL key (url, base_url, api_base, endpoint, expo_url,
-    # proxy, *_url, *_proxy), at any depth -- never to an ordinary
-    # string, which redacts exactly as it always has on `main`. ---
+    # --- the URL rule applies only to a string under a URL key (url,
+    # base_url, api_base, endpoint, expo_url, proxy, *_url, *_proxy),
+    # at any depth -- never to an ordinary string, which redacts
+    # exactly as it always has on `main`. ---
     cases.append(
         redact_case({"base_url": "alice:hunter2hunter2@host:1234"})
     )  # no :// at all
     cases.append(
         redact_case({"base_url": "https://alice:longsecret/x@api.example.test/v1"})
-    )  # @ behind the path, a port exception for this was tried and withdrawn
+    )  # @ behind the path is still cut in full, port-shaped or not
     cases.append(
         redact_case({"base_url": "https://api.example.test/search?api_key=hunter2hunter2"})
     )  # credential-like query key, no userinfo at all
@@ -278,10 +278,10 @@ def build_redaction_cases() -> list[dict]:
     )  # the query key is matched decoded; only the raw value text is replaced
     cases.append(
         redact_case({"url": "https://h/?tok%65n%ff=secretvalue456"})
-    )  # the key is still matched decoded even when the decode is lossy (issue #827 follow-up)
+    )  # the key is still matched decoded even when the decode is lossy
     cases.append(
         redact_case({"url": "https://h/?%E2%84%AAey=secretvaluekelvin"})
-    )  # re.IGNORECASE folds the Kelvin sign (U+212A) to "k" (issue #827 follow-up)
+    )  # re.IGNORECASE folds the Kelvin sign (U+212A) to "k"
     cases.append(
         redact_case({"base_url": "https://npmTOKEN123@registry.example.test/@acme/widget"})
     )  # the authority's own userinfo is cut first, whether or not a later @ follows
@@ -298,8 +298,8 @@ def build_redaction_cases() -> list[dict]:
         redact_case({"endpoint": "sk-" + "a" * 25})
     )  # same, with no @ and no ? at all for redact_url to act on
 
-    # --- issue #819 follow-up: a credential-free URL under a URL key
-    # comes back byte for byte -- no re-encoding, no case change ---
+    # --- a credential-free URL under a URL key comes back byte for
+    # byte -- no re-encoding, no case change ---
     cases.append(redact_case({"url": "https://medium.com/@alice/post"}))
     cases.append(redact_case({"url": "https://x.test/?q=a@b"}))
     cases.append(redact_case({"url": "https://host/p?q=a/b"}))
@@ -312,9 +312,9 @@ def build_redaction_cases() -> list[dict]:
     cases.append(redact_case({"url": "https://host/p?&"}))
     cases.append(redact_case({"url": "https://host/path#frag?a=1"}))
 
-    # --- issue #819 follow-up: the redaction gate must not treat plain
-    # prose, compact JSON, a mailto: link, an image digest, an email
-    # address or an @-bearing identifier as a URL ---
+    # --- the redaction gate must not treat plain prose, compact
+    # JSON, a mailto: link, an image digest, an email address or an
+    # @-bearing identifier as a URL ---
     cases.append(redact_case({"to": ["alice@example.test"]}))  # no : before the @
     cases.append(
         redact_case('<a href="https://x.test/?a=1">x</a> more')

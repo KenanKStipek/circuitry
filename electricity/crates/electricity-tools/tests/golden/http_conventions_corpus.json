@@ -271,6 +271,10 @@
     {
       "url": "http://u:p@host/@alice",
       "redacted": "http://alice"
+    },
+    {
+      "url": "https://host/a+b?q=c+d",
+      "redacted": "https://host/a+b?q=c+d"
     }
   ],
   "scrub_cases": [
@@ -327,6 +331,26 @@
     {
       "value": "alice:s3cret@proxy:3128 ",
       "redacted": "proxy:3128 "
+    },
+    {
+      "value": "http://abc/def@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://abc/def@proxy:3128?q=1",
+      "redacted": "http://proxy:3128?q=1"
+    },
+    {
+      "value": "http://abc/def@proxy:3128#frag",
+      "redacted": "http://proxy:3128#frag"
+    },
+    {
+      "value": "socks5://abc/def@proxy:1080",
+      "redacted": "socks5://proxy:1080"
+    },
+    {
+      "value": "abc/def@proxy:3128",
+      "redacted": "proxy:3128"
     }
   ],
   "proxy_cases": [
