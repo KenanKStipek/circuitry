@@ -1386,28 +1386,36 @@ request, naming the URL with any userinfo removed.
 
 The `http` tool, every curl-based adapter's error and preflight `host:`
 text, and cyberdiner's, systemone's and surrealdb's own errors each
-apply one more rule first when they name a request URL: when the URL's
-path, query or fragment itself contains an `@` (``http://host/path@evil``,
-say — a password hidden behind the parsed authority's own boundary, or
-just an ordinary path like Mastodon's `/@user`), the text names only the
-part *after* the last `@` in the whole URL, never the parsed host —
-even though that part was never actually contacted. A bare userinfo
-`@` (`http://user:pass@host/`) is unaffected: only the credential is
-removed, and the real host is still named. Either way, a credential-
-like query parameter (a key containing `key`, `token`, `secret`,
-`auth`, `password` or `pwd`) is masked to `***` in what's left.
+apply one more rule first when they name a request URL. The authority is
+the text right after `scheme://`, up to the first `/`, `?` or `#`: when
+it contains an `@`, everything before its last `@` is removed. When an
+`@` comes later instead — in the path, query or fragment — and a `:`
+appears anywhere between the start of the authority and that later `@`,
+the whole span up to it is removed too, the same way
+(`http://alice:secret/x@host`, a password hidden behind a `/`). An `@`
+with no such `:` before it is left alone — an ordinary path like
+Mastodon's `/@user` is never mistaken for a hidden credential, and the
+real host is still named. Either way, a credential-like query parameter
+(a key containing `key`, `token`, `secret`, `auth`, `password` or `pwd`)
+has its value replaced with `%2A%2A%2A`; nothing else about the URL
+changes — no percent-decoding, no re-encoding, no case change.
 
 Every other surface that names a configured or requested URL applies
-the same rule: the `runtime.effective_settings` snapshot (`--out`,
-`--json`, `--live-state`, `last-run.json`) cuts a `base_url` at the same
-point, keeping a `***REDACTED***@` marker instead of removing the
-credential outright; `cof`'s verbose progress labels, `cof doctor`/
-`cof setup`'s detection table, a library source's fetch errors, the
-`rss` tool's fetch error, and `comfyui`'s own scheme refusal all redact
-rather than echo a configured URL raw; and a library/SDK exception's
-own text (`webhook`, `web_fetch`, `mcp`, `surrealdb`, and a curl-backed
-adapter's response-body excerpt) has any URL found inside it scrubbed
-the same way before it reaches a failure message.
+the same rule, through the one shared function each engine has for it.
+The `runtime.effective_settings` snapshot (`--out`, `--json`,
+`--live-state`, `last-run.json`) applies it to a string under a URL key
+(`url`, `base_url`, `api_base`, `endpoint`, `expo_url`, `proxy`, any key
+ending in `_url` or `_proxy`, at any depth), keeping a `***REDACTED***@`
+marker (and that same marker for a masked query value) instead of
+removing the credential outright, so a reader can see one was there. An
+ordinary string not under a URL key is never touched by this rule at
+all. `cof`'s verbose progress labels, `cof doctor`/`cof setup`'s
+detection table, a library source's fetch errors, the `rss` tool's
+fetch error, and `comfyui`'s own scheme refusal all redact rather than
+echo a configured URL raw; and a library/SDK exception's own text
+(`webhook`, `web_fetch`, `mcp`, `surrealdb`, and a curl-backed adapter's
+response-body excerpt) has any URL found inside it scrubbed the same
+way before it reaches a failure message.
 
 The `http` tool refuses any scheme other than `http`/`https` — before any
 I/O and before touching any local file (so a `file://` URL is never read

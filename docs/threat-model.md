@@ -250,19 +250,22 @@ snapshot embedded in run state (and surfaced via `--out`, `--json`,
 goes through a centralized redaction helper before being written. The
 helper deny-lists keys matching `api_key`, `token`, `password`, `secret`,
 `bearer`, and `authorization` (case-insensitive, with snake/kebab/dot
-suffixes). A string value shaped like one whole URL (no whitespace, and
-either a `scheme://` or a schemeless `user:pass@host`) has its
-credential cut the same way a request-URL refusal does: at the last `@`
-in the whole value when there is no parseable authority or a password
-hides behind the path, at the authority's own userinfo otherwise, with
-any credential-like query parameter (`api_key`, `token`, ...) masked
-too — the cut marked with `***REDACTED***@` rather than removed
-outright, so a reader can see a credential was there. Prose, an email
-address, or a value that merely contains an `@` or a link somewhere
-inside it is left untouched. JWTs and common vendor key shapes (`sk-…`,
-`ghp_…`, `xox?-…`) in any string position are also redacted.
+suffixes). A string value under a URL key (`url`, `base_url`, `api_base`,
+`endpoint`, `expo_url`, `proxy`, any key ending in `_url` or `_proxy`, at
+any depth) gets the shared URL rule regardless of its shape: userinfo in
+the authority, or behind a `/` when a `:` precedes the later `@`, is cut
+and marked with `***REDACTED***@` rather than removed outright (so a
+reader can see a credential was there), and a credential-like query
+parameter (`api_key`, `token`, ...) is masked the same way — with nothing
+else about the URL touched (no re-encoding, no case change). Any other
+string value is redacted only when it looks like a JWT, a common vendor
+key shape (`sk-…`, `ghp_…`, `xox?-…`), or a URL carrying both a scheme
+and an `@` in its authority; an email address, a pinned model id, compact
+JSON, a `mailto:` link or a multi-line body with a link inside it is left
+untouched, the same as every other ordinary value.
 Implementation:
-[`src/circuitry/cli/redaction.py`](../src/circuitry/cli/redaction.py).
+[`src/circuitry/cli/redaction.py`](../src/circuitry/cli/redaction.py) and
+[`src/circuitry/http_conventions.py`](../src/circuitry/http_conventions.py).
 
 **Mitigation — `--last` env-var stash.** The `cof run -e KEY=VALUE` list is
 also redacted before being written to `last-run.json`. If a previous run
