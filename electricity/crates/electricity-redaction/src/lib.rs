@@ -78,12 +78,23 @@ fn is_sensitive_key(key: &str) -> bool {
 
 /// `http_conventions.py::_CREDENTIAL_QUERY_KEY_RE` -- a case-insensitive
 /// *search* (not a full match) for any of these words anywhere in a
-/// query key.
+/// query key. A `(?i)` regex, not `to_ascii_lowercase` plus `contains`:
+/// Python's own `re.IGNORECASE` folds a non-ASCII letter too (the
+/// Kelvin sign, U+212A, matches `k`), which an ASCII-only lowercase
+/// never would, letting the two engines disagree on a key like
+/// `%E2%84%AAey` (issue #827 follow-up). The `regex` crate's own
+/// Unicode case folding (default, no `(?i-u)`) agrees with Python's
+/// here.
+fn credential_query_key_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)(key|token|secret|auth|password|pwd)")
+            .expect("a fixed, hand-checked pattern")
+    })
+}
+
 fn looks_like_credential_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    ["key", "token", "secret", "auth", "password", "pwd"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    credential_query_key_re().is_match(key)
 }
 
 /// `cli/redaction.py::_redact_url` -- `main`'s own, unmodified
@@ -255,7 +266,14 @@ fn percent_decode_key(key: &str) -> String {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8(out).unwrap_or_else(|_| key.to_string())
+    // `urllib.parse.unquote`'s own default (`errors="replace"`):
+    // an invalid byte sequence decodes as U+FFFD, not a fallback to
+    // the raw (still percent-encoded) key -- `String::from_utf8`'s
+    // `Err` branch used to do the latter, which let a key like
+    // `tok%65n%ff` match cof (`token�`, still containing
+    // `token`) but not electricity (the untouched `tok%65n%ff`),
+    // leaking the value on this engine alone (issue #827 follow-up).
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `http_conventions.py::redact_url` -- the one function behind every
@@ -283,15 +301,20 @@ fn percent_decode_key(key: &str) -> String {
 ///   (`https://tok@host/@acme/widget`).
 /// - **A `:` before a later `@`.** When an `@` comes after the
 ///   authority (in the path, query or fragment) and a `:` appears
-///   anywhere between the start of the host (right after any
-///   authority userinfo just cut) and that later `@`, the whole span
-///   up to that `@` is replaced instead -- a port included
+///   anywhere between the start of the ORIGINAL authority -- userinfo
+///   included, not just the host -- and that later `@`, the whole
+///   span up to that `@` is replaced instead -- a port included
 ///   (`http://localhost:8080/@alice` is cut: a password containing a
 ///   `/` whose first part happens to be all digits,
 ///   `http://user:12/34@host`, must still be cut in full, so this
 ///   never special-cases a port-shaped `:` suffix). This catches a
-///   password hidden behind a `/`. No `:` at all leaves the `@`
-///   untouched.
+///   password hidden behind a `/`, including one whose own userinfo
+///   contains an `@` of its own (`http://alice:p@ss/word@proxy:3128`:
+///   the `:` inside `alice:p@ss` still counts, even though it comes
+///   before that `@`, not just after it). No `:` at all leaves the
+///   `@` untouched. This can over-redact: `http://u:p@host/@alice` is
+///   cut all the way to the later `@`, matching `main`'s own
+///   request-URL behaviour.
 /// - **No `://` at all.** A schemeless value with an `@` is cut before
 ///   its last `@` unconditionally -- no `:` required, and whitespace
 ///   is no exception: every caller here has already committed to
@@ -350,35 +373,31 @@ pub fn redact_url(url: &str, marker: &str) -> String {
             }
         }
         Some(_) => {
-            let mut authority_end = ['/', '?', '#']
+            let authority_end = ['/', '?', '#']
                 .iter()
                 .filter_map(|sep| rest.find(*sep))
                 .min()
                 .unwrap_or(rest.len());
+            let authority_at = rest[..authority_end].rfind('@');
 
-            let mut host_start = 0usize;
-            let mut cut_rest: String = rest.to_string();
-            if let Some(authority_at) = rest[..authority_end].rfind('@') {
-                cut_rest = format!("{userinfo_prefix}{}", &rest[authority_at + 1..]);
-                authority_end = authority_end + userinfo_prefix.len() - (authority_at + 1);
-                host_start = userinfo_prefix.len();
-            }
-
-            match cut_rest.rfind('@') {
-                Some(last_at)
-                    if last_at >= authority_end && cut_rest[host_start..last_at].contains(':') =>
-                {
-                    owned_rest = format!(
-                        "{}{userinfo_prefix}{}",
-                        &cut_rest[..host_start],
-                        &cut_rest[last_at + 1..]
-                    );
+            // The ':' search runs from the start of the ORIGINAL
+            // authority (userinfo included), never from the host
+            // alone: a password that itself contains an '@'
+            // ("alice:p@ss") must still be found by this search when
+            // a later '@' follows it, or its own tail ("ss/word",
+            // past the authority's own cut) would survive uncut.
+            match rest.rfind('@') {
+                Some(last_at) if last_at >= authority_end && rest[..last_at].contains(':') => {
+                    owned_rest = format!("{userinfo_prefix}{}", &rest[last_at + 1..]);
                     &owned_rest
                 }
-                _ => {
-                    owned_rest = cut_rest;
-                    &owned_rest
-                }
+                _ => match authority_at {
+                    Some(at) => {
+                        owned_rest = format!("{userinfo_prefix}{}", &rest[at + 1..]);
+                        &owned_rest
+                    }
+                    None => rest,
+                },
             }
         }
     };
@@ -791,8 +810,9 @@ mod tests {
     #[test]
     fn a_credential_hidden_behind_the_path_still_redacts() {
         // #819: an @ past the parsed authority's own boundary still
-        // hides a password when the text before it couldn't be a
-        // port -- the whole value is cut at the LAST @.
+        // hides a password -- a port exception for this was tried
+        // and withdrawn (#819 follow-up) -- the whole value is cut
+        // at the LAST @.
         let url = "https://alice:longpw/x@api.example.test/v1";
         let input = dict(vec![("base_url", Value::from(url))]);
         let expected = dict(vec![(
@@ -1066,6 +1086,59 @@ mod tests {
             redact_url(url, REDACTED),
             format!("https://host/x?tok%65n={REDACTED}")
         );
+    }
+
+    #[test]
+    fn redact_url_masks_a_credential_query_key_decoded_lossily_on_invalid_utf8() {
+        // #827 follow-up: `tok%65n%ff` decodes (lossily, like
+        // Python's own `unquote`) to "token\u{fffd}", which still
+        // contains "token" -- the old fallback-to-raw-key behaviour
+        // left this key as the still-percent-encoded "tok%65n%ff",
+        // which cof's own decoded match ("token") never agrees with.
+        let url = "https://host/x?tok%65n%ff=abcd1234";
+        assert_eq!(
+            redact_url(url, REDACTED),
+            format!("https://host/x?tok%65n%ff={REDACTED}")
+        );
+    }
+
+    #[test]
+    fn redact_url_masks_a_credential_query_key_folded_as_unicode_case() {
+        // #827 follow-up: Python's own `re.IGNORECASE` folds the
+        // Kelvin sign (U+212A) to "k", matching "key" against a
+        // decoded key of "\u{212a}ey" -- an ASCII-only lowercase
+        // never would.
+        let url = "https://h/?%E2%84%AAey=abcd1234";
+        assert_eq!(
+            redact_url(url, REDACTED),
+            format!("https://h/?%E2%84%AAey={REDACTED}")
+        );
+    }
+
+    #[test]
+    fn redact_url_cuts_the_whole_authority_when_its_own_userinfo_colon_precedes_a_later_at_sign() {
+        // #827 follow-up: the ":" search for a later "@" runs from
+        // the start of the ORIGINAL authority (userinfo included),
+        // not just the host -- a password containing an "@" of its
+        // own ("alice:p@ss") must still be found by this search, or
+        // its own tail (past the authority's own cut) survives
+        // uncut.
+        for sep in ["/", "?", "#"] {
+            let url = format!("http://alice:p@ss{sep}word@proxy:3128");
+            assert_eq!(redact_url(&url, ""), "http://proxy:3128", "sep: {sep}");
+            assert_eq!(
+                redact_url(&url, REDACTED),
+                format!("http://{REDACTED}@proxy:3128"),
+                "sep: {sep}"
+            );
+        }
+    }
+
+    #[test]
+    fn redact_url_cuts_to_the_later_at_sign_when_the_authority_already_has_its_own_userinfo() {
+        // #827 follow-up correction: this over-redaction is accepted
+        // -- it matches `main`'s own request-URL behaviour.
+        assert_eq!(redact_url("http://u:p@host/@alice", ""), "http://alice");
     }
 
     #[test]

@@ -348,15 +348,17 @@ mod tests {
 
     #[test]
     fn scrub_embedded_urls_ends_a_url_at_a_unit_separator() {
-        // issue #819 follow-up: U+001F is whitespace to Python's own
-        // `\s` (what cof's `_EMBEDDED_URL_RE` uses) but not to Rust's
-        // `char::is_whitespace` -- the explicit ASCII set both engines
-        // now share must end the URL there too.
-        let password = "pw_value_pw_value";
-        let text = format!("bad url http://alice:{password}@host\u{1f}next");
-        let scrubbed = scrub_embedded_urls(&text);
-        assert!(!scrubbed.contains(password));
-        assert_eq!(scrubbed, "bad url http://host\u{1f}next");
+        // issue #819/#827 follow-up: U+001F is whitespace to Python's
+        // own `\s` (what cof's `_EMBEDDED_URL_RE` uses) but not to
+        // Rust's `char::is_whitespace` -- the explicit ASCII set both
+        // engines now share must end the URL there too. Unlike the
+        // password-before-the-separator shape (which the authority
+        // cut alone would also happen to fix), this text is
+        // credential-free, so cutting at the LAST `@` instead of
+        // stopping at U+001F first would still change it -- a leak
+        // this test must fail without the explicit whitespace set.
+        let text = "bad url http://h/a\u{1f}b:c@d";
+        assert_eq!(scrub_embedded_urls(text), text);
     }
 
     #[test]

@@ -24,7 +24,7 @@
 use electricity_tools::http::http_url::urlsplit;
 use electricity_tools::http_client::resolve_proxy_checked_with_port;
 use electricity_tools::http_conventions::{
-    check_scheme, redact_proxy_value, redact_request_url, strict_port,
+    check_scheme, redact_proxy_value, redact_request_url, scrub_embedded_urls, strict_port,
 };
 
 fn load_corpus() -> serde_json::Value {
@@ -71,6 +71,16 @@ fn redaction_cases_match_cof() {
         let url = case["url"].as_str().unwrap();
         let expected = case["redacted"].as_str().unwrap();
         assert_eq!(redact_request_url(url), expected, "case: {case:?}");
+    }
+}
+
+#[test]
+fn scrub_cases_match_cof() {
+    let corpus = load_corpus();
+    for case in corpus["scrub_cases"].as_array().unwrap() {
+        let text = case["text"].as_str().unwrap();
+        let expected = case["scrubbed"].as_str().unwrap();
+        assert_eq!(scrub_embedded_urls(text), expected, "case: {case:?}");
     }
 }
 
