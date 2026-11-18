@@ -273,29 +273,85 @@ def iter_use_path_children(
     return out
 
 
-def _use_path_effects(orch: dict[str, Any]) -> list[dict[str, Any]]:
+#: Effect type -> the `on_error` values under which it absorbs a failure
+#: anywhere in its own subtree, rather than letting it propagate to
+#: whatever encloses it -- matching each one's own run code: a `use`
+#: (`core.use.UseRuntime.execute`'s own `except`, wrapping everything from
+#: resolving the child through running it) and a `dynamic`
+#: (`core.dynamic.DynamicRuntime`) under `skip`/`continue`; a `loop`
+#: (`core.loop.LoopRuntime`) under `break`/`continue`. An `if`/`conditional`
+#: is deliberately absent: its own `on_error` only ever covers a failed
+#: *condition* (`core.conditional.ConditionalRuntime._decide_and_run`'s own
+#: `try`/`except` wraps the condition eval alone) -- a failure inside the
+#: branch it takes propagates regardless. A `reflector` has no `on_error`
+#: field at all, so it can never absorb either.
+_ABSORBING_ON_ERROR = {
+    "use": frozenset({"skip", "continue"}),
+    "dynamic": frozenset({"skip", "continue"}),
+    "loop": frozenset({"break", "continue"}),
+}
+
+#: Keys, on any effect, whose value is a list of child effects -- the same
+#: set `_walk_effects` already recurses into.
+_CONTAINER_CHILD_KEYS = ("effects", "then", "else", "body", "finally")
+
+
+def _use_path_effects(
+    orch: dict[str, Any], *, tolerant: bool = False
+) -> list[tuple[dict[str, Any], bool]]:
     """Every `use` effect anywhere in *orch* naming a `path:`/legacy
     `orchestration:` child -- never a `ref:` or `inline:` one, each its own
     document (a library entry, or generated at run time) rather than a
-    child of this one.
+    child of this one -- paired with whether a failure reaching it is
+    absorbed rather than failing the root's own check (#833).
+
+    *tolerant*, true when *orch* itself was reached through a `use` effect
+    (possibly in an enclosing document) whose own `on_error` already
+    absorbs anything inside it: carried into every effect found here, and
+    OR'd, going down, with every `dynamic`/`loop` on the path whose own
+    `on_error` absorbs its own subtree (see :data:`_ABSORBING_ON_ERROR`) --
+    once any of them does, every effect further down inherits it, the same
+    width the run's own `try`/`except` gives that container. An
+    `if`/`conditional` or `reflector` never changes it, matching the run
+    (see :data:`_ABSORBING_ON_ERROR`'s own docstring); a `use` effect found
+    here is also never itself recursed into for further containers --
+    `UseEffect` carries no child-effect-list key of its own.
     """
-    out: list[dict[str, Any]] = []
-    effects = orch.get("effects") or orch.get("steps") or []
-    for effect in [*_walk_effects(effects), *_walk_effects(orch.get("finally"))]:
-        if (effect.get("type") or "").strip().lower() != "use":
-            continue
-        ref = effect.get("ref")
-        inline = effect.get("inline")
-        if isinstance(ref, str) and ref.strip():
-            continue
-        if isinstance(inline, str) and inline.strip():
-            continue
-        path_field = effect.get("path")
-        legacy = effect.get("orchestration")
-        if (isinstance(path_field, str) and path_field.strip()) or (
-            isinstance(legacy, str) and legacy.strip()
-        ):
-            out.append(effect)
+    out: list[tuple[dict[str, Any], bool]] = []
+
+    def walk(effects: Any, tolerant: bool) -> None:
+        if not isinstance(effects, list):
+            return
+        for effect in effects:
+            if not isinstance(effect, dict):
+                continue
+            effect_type = (effect.get("type") or "").strip().lower()
+            if effect_type == "use":
+                ref = effect.get("ref")
+                inline = effect.get("inline")
+                if isinstance(ref, str) and ref.strip():
+                    continue
+                if isinstance(inline, str) and inline.strip():
+                    continue
+                path_field = effect.get("path")
+                legacy = effect.get("orchestration")
+                if (isinstance(path_field, str) and path_field.strip()) or (
+                    isinstance(legacy, str) and legacy.strip()
+                ):
+                    on_error = str(effect.get("on_error") or "fail").strip().lower()
+                    out.append((effect, tolerant or on_error in _ABSORBING_ON_ERROR["use"]))
+                continue
+            absorbing = _ABSORBING_ON_ERROR.get(effect_type)
+            if absorbing is not None:
+                on_error = str(effect.get("on_error") or "fail").strip().lower()
+                child_tolerant = tolerant or on_error in absorbing
+            else:
+                child_tolerant = tolerant
+            for child_key in _CONTAINER_CHILD_KEYS:
+                walk(effect.get(child_key), child_tolerant)
+
+    walk(orch.get("effects") or orch.get("steps") or [], tolerant)
+    walk(orch.get("finally"), tolerant)
     return out
 
 
@@ -319,12 +375,15 @@ def check_use_path_children(
     in discovery order. Both empty when every reachable child resolves,
     parses, validates and compiles; `cof check` fails the root on
     anything in *failures*, the same way the run itself would fail on
-    reaching that child. A failure whose own `use` effect sets
-    `on_error: skip`/`continue` lands in *warnings* instead -- the run
-    swallows it there too (`UseRuntime.execute`'s own `on_error` branch),
-    so it shouldn't fail a check the run itself would pass; `on_error`
-    outside the matching 'fail' default is read directly off that one
-    effect, never an ancestor's.
+    reaching that child. A failure absorbed by any effect on the path
+    from the root's own effect list down to it -- the failing `use`
+    itself, or an enclosing `use`/`dynamic`/`loop`, in the same document
+    or in one above it, whose own `on_error` absorbs a failure anywhere
+    in its own subtree (see :data:`_ABSORBING_ON_ERROR`; an
+    `if`/`conditional`'s own `on_error` never does, since it only ever
+    covers a failed condition, never the branch it takes) -- lands in
+    *warnings* instead: the run swallows that same failure there too, so
+    it shouldn't fail a check the run itself would pass.
 
     Unlike :func:`iter_use_path_children` (#611's secrets walk, tolerant
     of an unreachable child so a child the walk can't resolve never fails
@@ -385,11 +444,11 @@ def check_use_path_children(
         document_dir: Path | None,
         doc_trusted: bool,
         document_label: str | None,
+        tolerant: bool,
     ) -> None:
-        for effect in _use_path_effects(orch):
+        for effect, effect_tolerant in _use_path_effects(orch, tolerant=tolerant):
             name = effect.get("name") or "use"
-            on_error = str(effect.get("on_error") or "fail").strip().lower()
-            outcome = warnings if on_error in ("skip", "continue") else failures
+            outcome = warnings if effect_tolerant else failures
 
             path_field = effect.get("path")
             if isinstance(path_field, str) and path_field.strip():
@@ -487,13 +546,14 @@ def check_use_path_children(
                     )
                     continue
 
-            visit(child_orch, child_document_dir, child_trusted, key)
+            visit(child_orch, child_document_dir, child_trusted, key, effect_tolerant)
 
     visit(
         root_orch,
         root_path.parent if root_path is not None else None,
         trusted,
         str(root_path.resolve()) if root_path is not None else None,
+        False,
     )
     return failures, warnings
 
