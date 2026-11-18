@@ -259,7 +259,10 @@ fn resolve_prompt_file(
         )));
     }
 
-    let bytes = std::fs::read(&resolved).map_err(|err| {
+    // Shared with the consent/resume digest (#405): this is the only
+    // on-disk read this file gets in the whole load/consent/compile cycle
+    // it belongs to -- `crate::file_cache::read_cached`'s own doc comment.
+    let bytes = crate::file_cache::read_cached(&resolved).map_err(|err| {
         CompileError(format!(
             "{field}: 'file' {} could not be read: {err}",
             repr_str(&path_str)

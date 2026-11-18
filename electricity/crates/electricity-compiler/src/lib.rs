@@ -163,6 +163,7 @@ pub mod compose;
 pub mod cycles;
 pub mod difflib;
 pub mod digest;
+pub mod file_cache;
 pub mod groups;
 pub mod lint;
 pub mod load;

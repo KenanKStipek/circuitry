@@ -41,7 +41,12 @@ pub fn document_content_digest(
     document: &Value,
     confinement_root: &Path,
 ) -> Result<String, CompileError> {
-    let document_bytes = std::fs::read(resolved_path).map_err(|err| {
+    // Shared with the actual compile step and the document loader (#405):
+    // `crate::file_cache::read_cached` is the one on-disk read this
+    // document's bytes get in the whole load/consent/compile cycle they
+    // belong to, while a cache is active on this thread -- see its own doc
+    // comment.
+    let document_bytes = crate::file_cache::read_cached(resolved_path).map_err(|err| {
         CompileError(format!("could not read {}: {err}", resolved_path.display()))
     })?;
 
@@ -83,7 +88,7 @@ fn add_prompt_files(
     }
 
     for prompt_file in paths {
-        let data = std::fs::read(&prompt_file)?;
+        let data = crate::file_cache::read_cached(&prompt_file)?;
         let label = relative_label(&document_dir, &prompt_file);
         hasher.update(label.as_bytes());
         hasher.update((data.len() as u64).to_be_bytes());
