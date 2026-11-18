@@ -561,6 +561,30 @@ def test_without_hard_links_a_failed_replace_leaves_no_placeholder(
     assert _files(work) == ["doc.yml"]
 
 
+def test_without_hard_links_an_interrupt_during_the_replace_leaves_no_placeholder(
+    tmp_path: Path,
+) -> None:
+    """#608: the placeholder's cleanup must catch BaseException, not just
+    OSError -- a KeyboardInterrupt (or another BaseException) between the
+    placeholder and the replace must not leave an empty file at the target
+    name either."""
+    from circuitry.plugins.http import _replace_exclusively
+
+    def interrupted_replace(src: Any, dst: Any) -> None:
+        raise KeyboardInterrupt
+
+    temp = tmp_path / "temp-body"
+    temp.write_bytes(b"body")
+    target = tmp_path / "image.png"
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(os, "replace", interrupted_replace)
+        with pytest.raises(KeyboardInterrupt):
+            _replace_exclusively(temp, target)
+
+    assert not target.exists()
+
+
 # ---------------------------------------------------------------------------
 # Only a document run by path saves a file.
 # ---------------------------------------------------------------------------

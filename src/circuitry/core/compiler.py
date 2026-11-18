@@ -489,11 +489,12 @@ def compile_orchestration(
     needs no special-casing at the ``use`` boundary.
 
     A document with no file of its own cannot name a ``state_file`` either
-    (the ``systemone`` tool). For a limited document (*trusted* false) that
-    tool's effect records ``ToolDefinition.limited`` and *confinement_root* as
-    ``ToolDefinition.confine_to``, which its ``within`` must stay inside,
-    checked here for a literal ``within`` and at dispatch for one read from
-    ``input``. A limited document with no project reads no file at all.
+    (the ``systemone`` tool). Every tool effect records ``ToolDefinition.limited``
+    from *trusted*, whatever its provider (since #603); ``systemone``'s own
+    effect additionally records *confinement_root* as ``ToolDefinition.confine_to``,
+    which its ``within`` must stay inside, checked here for a literal ``within``
+    and at dispatch for one read from ``input``. A limited document with no
+    project reads no file at all.
     """
     with _document_location(document_dir, confinement_root, trusted):
         _check_runtime_env_secrets(orch.get("runtime"))
@@ -576,10 +577,13 @@ def apply_effect_overrides(
     ``core.disabled``).
 
     A ``provider`` override cannot make a tool effect ``systemone`` or take it
-    away from it: that tool's confinement is fixed at compile time from its
-    provider (``ToolDefinition.limited``), so changing the provider afterwards
-    would bypass it. That is a ``ValueError`` naming *profile_name* (the profile
-    the overrides come from, when known) and the effect path.
+    away from it: that tool's confinement (``ToolDefinition.confine_to``) is
+    fixed at compile time from its provider, so changing the provider
+    afterwards would bypass it. ``ToolDefinition.limited`` itself holds for
+    every effect, whatever its provider (since #603); only ``confine_to``
+    depends on ``systemone``. The provider-change check above is a
+    ``ValueError`` naming *profile_name* (the profile the overrides come
+    from, when known) and the effect path.
 
     Returns the rebuilt root plus the set of override keys that matched an
     effect somewhere in the tree.
