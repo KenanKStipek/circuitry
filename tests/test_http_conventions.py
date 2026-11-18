@@ -232,17 +232,39 @@ def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
 
 def test_redact_request_url_masks_a_credential_query_param_behind_a_hidden_at_sign() -> None:
     """Issue #778: once the authority's own boundary hides a second
-    ``@`` (so the whole value is cut at the LAST one, through
-    :func:`redact_proxy_value`, rather than just the authority's own
-    userinfo), the query string still carries its own credential-like
-    key and must still be masked -- the cut runs first, since masking
-    first would re-encode the query string's own ``@`` as ``%40`` and
-    the cut would no longer find it.
+    ``@`` behind a ``:`` that can't be a port (so the whole value is
+    cut at the LAST one, through :func:`redact_proxy_value`, rather
+    than just the authority's own userinfo), the query string still
+    carries its own credential-like key and must still be masked --
+    the cut runs first, since masking first would re-encode the query
+    string's own ``@`` as ``%40`` and the cut would no longer find it.
     """
-    redacted = redact_request_url("https://alice:443/x@api.example.com/v1?api_key=sk")
+    redacted = redact_request_url("https://alice:longsecret/x@api.example.com/v1?api_key=sk")
     assert redacted == "https://api.example.com/v1?api_key=%2A%2A%2A"
     assert "alice" not in redacted
     assert "sk" not in redacted
+
+
+def test_redact_request_url_leaves_an_at_sign_past_a_real_host_port_alone() -> None:
+    """Issue #819 follow-up: ``443`` is a valid port, so ``alice:443``
+    reads as a real host:port, not a hidden credential -- the later
+    ``@`` is left untouched, the same as ``http://localhost:8080/@alice``.
+    The query's own credential-like key is still masked either way.
+    """
+    redacted = redact_request_url("https://alice:443/x@api.example.com/v1?api_key=sk")
+    assert redacted == "https://alice:443/x@api.example.com/v1?api_key=%2A%2A%2A"
+
+
+def test_redact_request_url_cuts_authority_userinfo_even_with_a_later_at_sign() -> None:
+    """Issue #819 follow-up: the authority's own userinfo is cut first,
+    whether or not another ``@`` also appears later in the value (a
+    scoped-package-style path here).
+    """
+    url = "https://npmTOKEN123@registry.example.test/@acme/widget"
+    assert redact_url(url, "***REDACTED***") == (
+        "https://***REDACTED***@registry.example.test/@acme/widget"
+    )
+    assert redact_request_url(url) == "https://registry.example.test/@acme/widget"
 
 
 def test_redact_request_url_cuts_at_the_last_at_sign_with_no_scheme_at_all() -> None:
@@ -279,6 +301,22 @@ def test_redact_url_cuts_a_password_hidden_behind_a_slash_but_not_a_bare_at_sign
     assert redact_request_url(url) == "http://127.0.0.1"
 
 
+def test_redact_url_leaves_a_real_port_before_a_later_at_sign_alone() -> None:
+    """Issue #819 follow-up: ``8080`` is a valid port, so the later
+    ``@`` (a scoped-path-style ``/@alice``) is left exactly as it is.
+    """
+    url = "http://localhost:8080/@alice"
+    assert redact_url(url, "***REDACTED***") == url
+    assert redact_request_url(url) == url
+
+
+def test_redact_url_masks_a_query_key_matched_in_its_decoded_form() -> None:
+    """Issue #819 follow-up: the key is matched percent-decoded
+    (``token``), but only the value's raw text is replaced."""
+    url = "https://host/x?tok%65n=abcd1234"
+    assert redact_url(url, "***REDACTED***") == "https://host/x?tok%65n=***REDACTED***"
+
+
 def test_redact_url_cuts_a_schemeless_userinfo_value() -> None:
     assert redact_url("alice:longsecret@host:1234", "***REDACTED***") == (
         "***REDACTED***@host:1234"
@@ -294,8 +332,10 @@ def test_redact_url_cuts_a_schemeless_token_with_no_colon_at_all() -> None:
     assert redact_url(url, "") == "host.example.test/api"
 
 
-def test_redact_url_leaves_a_schemeless_value_with_whitespace_unchanged() -> None:
-    assert redact_url("alice:s3cret@proxy:3128 ", "") == "alice:s3cret@proxy:3128 "
+def test_redact_url_cuts_a_schemeless_value_even_with_trailing_whitespace() -> None:
+    """Issue #819 follow-up: every caller already knows *url* is a URL
+    -- whitespace is never an exception to the schemeless cut."""
+    assert redact_url("alice:s3cret@proxy:3128 ", "") == "proxy:3128 "
 
 
 def test_redact_url_masks_a_credential_query_key_among_other_keys() -> None:

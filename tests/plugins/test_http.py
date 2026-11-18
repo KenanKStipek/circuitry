@@ -367,13 +367,17 @@ def test_url_error_never_names_a_password_in_the_url(
     assert message.startswith("HTTP request to https://nonsuch.test/ failed:")
 
 
-def test_url_error_never_names_a_password_hidden_behind_a_slash_in_the_url(
+def test_url_error_leaves_a_path_past_a_real_host_port_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #778: a password made only of digits before the ``/``
-    passes the strict-port check (the host is legitimately ``alice``),
-    but the rest of it, hidden behind the ``/``, must still never
-    reach the connection-failure message.
+    """Issue #819 follow-up: a password made only of digits before the
+    ``/`` passes the strict-port check (the host is legitimately
+    ``alice``) *and* reads as a real port, so the connection-failure
+    message names the URL exactly as given -- the colon-before-a-
+    later-@ rule only cuts when that text *can't* be a port (a real
+    credential, non-digit, is still cut and never reaches this message
+    at all: :func:`http_conventions.check_strict_port` refuses it
+    first, before any connection is attempted).
     """
 
     def fake_urlopen(req: Any, timeout: int = 0) -> Any:
@@ -384,8 +388,10 @@ def test_url_error_never_names_a_password_hidden_behind_a_slash_in_the_url(
     with pytest.raises(RuntimeError) as exc_info:
         HttpPlugin().execute(params={"url": "https://alice:443/secret@nonsuch.test/"})
     message = str(exc_info.value)
-    assert "secret" not in message
-    assert message.startswith("HTTP request to https://nonsuch.test/ failed:")
+    assert message == (
+        "HTTP request to https://alice:443/secret@nonsuch.test/ failed: "
+        "Name or service not known"
+    )
 
 
 def test_a_url_with_no_scheme_never_names_a_password_in_the_scheme_refusal() -> None:

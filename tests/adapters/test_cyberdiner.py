@@ -727,15 +727,17 @@ def test_connection_error_never_names_a_password_in_the_url(
     assert message.startswith("cyberdiner: request to https://expo.example.test/beta/jobs failed:")
 
 
-def test_connection_error_never_names_a_password_hidden_behind_a_slash_in_the_url(
+def test_connection_error_leaves_a_path_past_a_real_host_port_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #778: a password made only of digits before the ``/``
-    passes the strict-port check (the host is legitimately ``alice``),
-    but the rest of it, hidden behind the ``/``, must still never reach
-    the connection-failure message -- a plain ``redact_url`` leaves it
-    untouched, since the parsed netloc (``alice:443``) has no ``@`` of
-    its own.
+    """Issue #819 follow-up: a password made only of digits before the
+    ``/`` passes the strict-port check (the host is legitimately
+    ``alice``) *and* reads as a real port, so the connection-failure
+    message names the URL exactly as given -- the colon-before-a-
+    later-@ rule only cuts when that text *can't* be a port (a real
+    credential, non-digit, is still cut and never reaches this message
+    at all: :func:`http_conventions.check_strict_port` refuses it
+    first, before any connection is attempted).
     """
 
     def fake_urlopen(req: Any, timeout: float = 0) -> Any:
@@ -747,9 +749,9 @@ def test_connection_error_never_names_a_password_hidden_behind_a_slash_in_the_ur
     with pytest.raises(RuntimeError) as exc_info:
         adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
     message = str(exc_info.value)
-    assert "secret" not in message
-    assert message.startswith(
-        "cyberdiner: request to https://expo.example.test/beta/jobs failed:"
+    assert message == (
+        "cyberdiner: request to https://alice:443/secret@expo.example.test/beta/jobs "
+        "failed: Name or service not known"
     )
 
 

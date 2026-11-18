@@ -74,11 +74,46 @@ def test_redacts_a_schemeless_token_used_as_a_username_with_no_colon_at_all() ->
 
 def test_redacts_a_credential_hidden_behind_the_path() -> None:
     """#819: an @ past the parsed authority's own boundary still hides a
-    password — the whole value is cut at the LAST @, not just the netloc's
-    own userinfo."""
-    out = redact({"base_url": "https://alice:443/x@api.example.test/v1"})
+    password, when the text before it can't be a port — the whole value
+    is cut at the LAST @, not just the netloc's own userinfo."""
+    out = redact({"base_url": "https://alice:longsecret/x@api.example.test/v1"})
     assert "alice" not in out["base_url"]
     assert out["base_url"] == f"https://{REDACTED}@api.example.test/v1"
+
+
+def test_leaves_an_at_sign_past_a_real_host_port_alone() -> None:
+    """#819 follow-up: ``443`` is a valid port, so ``alice:443`` reads as
+    a real host:port, not a hidden credential — the later @ is left
+    untouched, the same as ``http://localhost:8080/@alice``."""
+    url = "https://alice:443/x@api.example.test/v1"
+    out = redact({"base_url": url})
+    assert out["base_url"] == url
+
+
+def test_redacts_authority_userinfo_even_with_a_later_at_sign() -> None:
+    """#819 follow-up: the authority's own userinfo is cut first, whether
+    or not another @ also appears later in the value (a scoped-package
+    style path here)."""
+    out = redact(
+        {"base_url": "https://npmTOKEN123@registry.example.test/@acme/widget"}
+    )
+    assert "npmTOKEN123" not in out["base_url"]
+    assert out["base_url"] == f"https://{REDACTED}@registry.example.test/@acme/widget"
+
+
+def test_redacts_a_token_shaped_value_under_a_url_key_whole() -> None:
+    """#819 follow-up: `main`'s own ordinary-string rule (the JWT/key-shape
+    patterns) applies before the URL rule, so a token-shaped value with no
+    @ and no ? under a URL key still redacts wholesale."""
+    key = "sk-" + "a" * 25
+    assert redact({"endpoint": key}) == {"endpoint": REDACTED}
+
+
+def test_redacts_a_query_key_matched_in_its_decoded_form() -> None:
+    """#819 follow-up: the key is matched percent-decoded ("token"), but
+    only the value's raw text is replaced."""
+    out = redact({"url": "https://host/x?tok%65n=abcd1234"})
+    assert out["url"] == f"https://host/x?tok%65n={REDACTED}"
 
 
 def test_redacts_a_credential_like_query_param_with_no_userinfo_at_all() -> None:
