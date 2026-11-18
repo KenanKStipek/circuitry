@@ -142,30 +142,6 @@ def strip_request_url_userinfo(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
 
 
-def _has_non_port_colon(rest: str, start: int, end: int) -> bool:
-    """Whether ``rest[start:end]`` contains a ``:`` that can't be a
-    port: the text after it, up to the next ``/``, ``?``, ``#`` or
-    ``@``, has a character that isn't an ASCII digit (issue #819
-    follow-up). Scans every ``:`` in the span, not just the first --
-    ``rest``'s own next separator after a candidate ``:`` can fall
-    anywhere past *end* too (the span never contains an ``@`` of its
-    own, since *end* is always the position of the next one).
-    """
-    pos = start
-    while True:
-        colon = rest.find(":", pos, end)
-        if colon == -1:
-            return False
-        sep_end = len(rest)
-        for sep in ("/", "?", "#", "@"):
-            idx = rest.find(sep, colon + 1)
-            if idx != -1:
-                sep_end = min(sep_end, idx)
-        if not _PORT_RE.fullmatch(rest[colon + 1 : sep_end]):
-            return True
-        pos = colon + 1
-
-
 def redact_url(url: str, marker: str) -> str:
     """*url* with any userinfo and any credential-like query-string
     value replaced by *marker* -- the one function behind every URL
@@ -193,18 +169,18 @@ def redact_url(url: str, marker: str) -> str:
       ``@``, everything before its last ``@`` is replaced -- whether
       or not another ``@`` also appears later in *url*
       (``https://tok@host/@acme/widget``).
-    - **A ``:`` before a later ``@``, when it can't be a port.** When
-      an ``@`` comes after the authority (in the path, query or
-      fragment) and, between the start of the host (right after any
-      authority userinfo just cut) and that later ``@``, a ``:``
-      appears whose following text (up to the next ``/``, ``?``, ``#``
-      or ``@``) isn't all ASCII digits (:func:`_has_non_port_colon`),
-      the whole span up to that ``@`` is replaced instead -- this
-      catches a password hidden behind a ``/``
-      (``http://alice:secret/x@host``). A ``:`` whose text could be a
-      real port (``http://localhost:8080/@alice``), or no ``:`` at all
-      (``https://medium.com/@alice/post``, ``?q=a@b``), leaves the
-      ``@`` untouched.
+    - **A ``:`` before a later ``@``.** When an ``@`` comes after the
+      authority (in the path, query or fragment) and a ``:`` appears
+      anywhere between the start of the host (right after any
+      authority userinfo just cut) and that later ``@``, the whole
+      span up to that ``@`` is replaced instead -- a port included
+      (``http://localhost:8080/@alice`` is cut: a password containing
+      a ``/`` whose first part happens to be all digits,
+      ``http://user:12/34@host``, must still be cut in full, so this
+      never special-cases a port-shaped ``:`` suffix). This catches a
+      password hidden behind a ``/`` (``http://alice:secret/x@host``).
+      No ``:`` at all (``https://medium.com/@alice/post``, ``?q=a@b``)
+      leaves the ``@`` untouched.
     - **No ``://`` at all.** A schemeless value with an ``@`` is cut
       before its last ``@`` unconditionally -- no ``:`` required, and
       whitespace is no exception: every caller here has already
@@ -264,7 +240,7 @@ def redact_url(url: str, marker: str) -> str:
             host_start = len(userinfo_prefix)
 
         last_at = rest.rfind("@")
-        if last_at >= authority_end and _has_non_port_colon(rest, host_start, last_at):
+        if last_at >= authority_end and ":" in rest[host_start:last_at]:
             rest = rest[:host_start] + userinfo_prefix + rest[last_at + 1 :]
 
     hash_idx = rest.find("#")

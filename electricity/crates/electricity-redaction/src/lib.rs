@@ -258,31 +258,6 @@ fn percent_decode_key(key: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| key.to_string())
 }
 
-/// Whether `rest[start..end]` contains a `:` that can't be a port: the
-/// text after it, up to the next `/`, `?`, `#` or `@`, has a character
-/// that isn't an ASCII digit (issue #819 follow-up). Scans every `:`
-/// in the span, not just the first -- the span never contains an `@`
-/// of its own, since *end* is always the position of the next one.
-fn has_non_port_colon(rest: &str, start: usize, end: usize) -> bool {
-    let mut pos = start;
-    loop {
-        let Some(colon) = rest[pos..end].find(':').map(|idx| pos + idx) else {
-            return false;
-        };
-        let mut sep_end = rest.len();
-        for sep in ['/', '?', '#', '@'] {
-            if let Some(idx) = rest[colon + 1..].find(sep) {
-                sep_end = sep_end.min(colon + 1 + idx);
-            }
-        }
-        let port_text = &rest[colon + 1..sep_end];
-        if port_text.is_empty() || !port_text.chars().all(|c| c.is_ascii_digit()) {
-            return true;
-        }
-        pos = colon + 1;
-    }
-}
-
 /// `http_conventions.py::redact_url` -- the one function behind every
 /// URL redaction on this engine (issue #819 follow-up). Every other
 /// caller that names a request URL or a proxy value in a refusal,
@@ -306,16 +281,17 @@ fn has_non_port_colon(rest: &str, start: usize, end: usize) -> bool {
 ///   everything before its last `@` is replaced -- whether or not
 ///   another `@` also appears later in *url*
 ///   (`https://tok@host/@acme/widget`).
-/// - **A `:` before a later `@`, when it can't be a port.** When an
-///   `@` comes after the authority (in the path, query or fragment)
-///   and, between the start of the host (right after any authority
-///   userinfo just cut) and that later `@`, a `:` appears whose
-///   following text (up to the next `/`, `?`, `#` or `@`) isn't all
-///   ASCII digits ([`has_non_port_colon`]), the whole span up to that
-///   `@` is replaced instead -- this catches a password hidden behind
-///   a `/`. A `:` whose text could be a real port
-///   (`http://localhost:8080/@alice`), or no `:` at all, leaves the
-///   `@` untouched.
+/// - **A `:` before a later `@`.** When an `@` comes after the
+///   authority (in the path, query or fragment) and a `:` appears
+///   anywhere between the start of the host (right after any
+///   authority userinfo just cut) and that later `@`, the whole span
+///   up to that `@` is replaced instead -- a port included
+///   (`http://localhost:8080/@alice` is cut: a password containing a
+///   `/` whose first part happens to be all digits,
+///   `http://user:12/34@host`, must still be cut in full, so this
+///   never special-cases a port-shaped `:` suffix). This catches a
+///   password hidden behind a `/`. No `:` at all leaves the `@`
+///   untouched.
 /// - **No `://` at all.** A schemeless value with an `@` is cut before
 ///   its last `@` unconditionally -- no `:` required, and whitespace
 ///   is no exception: every caller here has already committed to
@@ -390,8 +366,7 @@ pub fn redact_url(url: &str, marker: &str) -> String {
 
             match cut_rest.rfind('@') {
                 Some(last_at)
-                    if last_at >= authority_end
-                        && has_non_port_colon(&cut_rest, host_start, last_at) =>
+                    if last_at >= authority_end && cut_rest[host_start..last_at].contains(':') =>
                 {
                     owned_rest = format!(
                         "{}{userinfo_prefix}{}",
@@ -828,13 +803,17 @@ mod tests {
     }
 
     #[test]
-    fn an_at_sign_past_a_real_host_port_is_left_alone() {
-        // #819 follow-up: "443" is a valid port, so "alice:443" reads
-        // as a real host:port, not a hidden credential -- the later @
-        // is left untouched, the same as `http://localhost:8080/@alice`.
+    fn a_colon_before_a_later_at_sign_is_cut_even_when_it_could_be_a_port() {
+        // #819 follow-up: a port exception was tried and withdrawn --
+        // `http://user:12/34@host` (a password containing a `/` whose
+        // first part happens to be all digits) must still be cut in
+        // full, so a port-shaped `:` suffix is never special-cased.
         let url = "https://alice:443/x@api.example.test/v1";
         let input = dict(vec![("base_url", Value::from(url))]);
-        let expected = dict(vec![("base_url", Value::from(url))]);
+        let expected = dict(vec![(
+            "base_url",
+            Value::from(format!("https://{REDACTED}@api.example.test/v1")),
+        )]);
         assert_eq!(redact(input), expected);
     }
 

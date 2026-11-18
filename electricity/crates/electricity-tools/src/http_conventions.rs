@@ -224,7 +224,8 @@ fn embedded_url_len(s: &str) -> Option<usize> {
     let body_start = scheme_end + 3;
     let mut end = body_start;
     for (idx, c) in s[body_start..].char_indices() {
-        if is_embedded_url_boundary_whitespace(c) || matches!(c, '"' | '\'' | '(' | ')' | '<' | '>') {
+        if is_embedded_url_boundary_whitespace(c) || matches!(c, '"' | '\'' | '(' | ')' | '<' | '>')
+        {
             break;
         }
         end = body_start + idx + c.len_utf8();
