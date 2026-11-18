@@ -183,10 +183,22 @@ pub fn redact_request_url(url: &str) -> String {
     electricity_redaction::redact_url(url, "")
 }
 
+/// The one whitespace set [`embedded_url_len`]'s own boundary uses, on
+/// both engines: ASCII 9-13 (tab, LF, VT, FF, CR), 32 (space), and
+/// U+001C-U+001F (file/group/record/unit separator) -- every one of
+/// these Python's own `\s`/`str.isspace` already matches, spelled out
+/// explicitly rather than through `char::is_whitespace`, which is
+/// false for U+001C-U+001F and would otherwise let the two engines end
+/// an embedded URL at different points (issue #819 follow-up).
+fn is_embedded_url_boundary_whitespace(c: char) -> bool {
+    matches!(c, '\u{09}'..='\u{0d}' | '\u{20}' | '\u{1c}'..='\u{1f}')
+}
+
 /// The length, in bytes from the start of *s*, of a `scheme://...` URL
-/// anchored at `s`'s own start -- bounded at whitespace or a quote/
-/// bracket character, never a comma or period a sentence might put
-/// right after it (issue #819's own `http_conventions.py::
+/// anchored at `s`'s own start -- bounded at
+/// [`is_embedded_url_boundary_whitespace`] or a quote/bracket
+/// character, never a comma or period a sentence might put right
+/// after it (issue #819's own `http_conventions.py::
 /// _EMBEDDED_URL_RE`, hand-matched rather than pulling in a regex
 /// dependency this crate doesn't otherwise need for one scan).
 /// `None` when `s` doesn't start with a scheme (an ASCII letter, then
@@ -212,7 +224,7 @@ fn embedded_url_len(s: &str) -> Option<usize> {
     let body_start = scheme_end + 3;
     let mut end = body_start;
     for (idx, c) in s[body_start..].char_indices() {
-        if c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '<' | '>') {
+        if is_embedded_url_boundary_whitespace(c) || matches!(c, '"' | '\'' | '(' | ')' | '<' | '>') {
             break;
         }
         end = body_start + idx + c.len_utf8();
@@ -331,6 +343,19 @@ mod tests {
             scrubbed,
             "cannot connect to ws://host:8000/rpc (ConnectionRefusedError)"
         );
+    }
+
+    #[test]
+    fn scrub_embedded_urls_ends_a_url_at_a_unit_separator() {
+        // issue #819 follow-up: U+001F is whitespace to Python's own
+        // `\s` (what cof's `_EMBEDDED_URL_RE` uses) but not to Rust's
+        // `char::is_whitespace` -- the explicit ASCII set both engines
+        // now share must end the URL there too.
+        let password = "pw_value_pw_value";
+        let text = format!("bad url http://alice:{password}@host\u{1f}next");
+        let scrubbed = scrub_embedded_urls(&text);
+        assert!(!scrubbed.contains(password));
+        assert_eq!(scrubbed, "bad url http://host\u{1f}next");
     }
 
     #[test]

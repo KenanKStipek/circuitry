@@ -183,6 +183,16 @@ fn redact_embedded_url(value: &str) -> String {
     out
 }
 
+/// `cli/redaction.py::_redact_string`'s own JWT/key-shape check --
+/// `main`'s own ordinary-string rule applied first, even to a string
+/// under a URL key ([`is_url_key`]): a token-shaped value is redacted
+/// wholesale regardless of the key it's under, same as it always was
+/// on `main` (issue #819 follow-up -- a URL key's own value is never
+/// *only* sent through [`redact_url`]).
+fn is_token_shaped(value: &str) -> bool {
+    jwt_re().is_match(value) || keyish_re().is_match(value)
+}
+
 /// `cli/redaction.py::_redact_string` -- `main`'s own, unmodified
 /// redaction of an ordinary string: a JWT or API-key-shaped string
 /// redacts wholesale; a URL carrying both `://` and `@` goes through
@@ -191,10 +201,7 @@ fn redact_embedded_url(value: &str) -> String {
 /// string under a URL key ([`is_url_key`]), handled by [`redact`]
 /// itself.
 fn redact_string(value: &str) -> String {
-    if jwt_re().is_match(value) {
-        return REDACTED.to_string();
-    }
-    if keyish_re().is_match(value) {
+    if is_token_shaped(value) {
         return REDACTED.to_string();
     }
     if value.contains("://") && value.contains('@') {
@@ -219,6 +226,63 @@ fn is_url_key(key: &str) -> bool {
     URL_KEY_NAMES.contains(&lower.as_str()) || lower.ends_with("_url") || lower.ends_with("_proxy")
 }
 
+/// A minimal `%XX`-hex URI-percent-decoder, used only to match a
+/// query key against [`looks_like_credential_key`] in its decoded form
+/// (issue #819 follow-up: `?tok%65n=...` must still be recognized as
+/// `token`) -- never to transform the value text that is actually
+/// written back out, which stays exactly as given. Every byte that
+/// isn't a well-formed `%` escape passes through unchanged.
+fn percent_decode_key(key: &str) -> String {
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = key.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| key.to_string())
+}
+
+/// Whether `rest[start..end]` contains a `:` that can't be a port: the
+/// text after it, up to the next `/`, `?`, `#` or `@`, has a character
+/// that isn't an ASCII digit (issue #819 follow-up). Scans every `:`
+/// in the span, not just the first -- the span never contains an `@`
+/// of its own, since *end* is always the position of the next one.
+fn has_non_port_colon(rest: &str, start: usize, end: usize) -> bool {
+    let mut pos = start;
+    loop {
+        let Some(colon) = rest[pos..end].find(':').map(|idx| pos + idx) else {
+            return false;
+        };
+        let mut sep_end = rest.len();
+        for sep in ['/', '?', '#', '@'] {
+            if let Some(idx) = rest[colon + 1..].find(sep) {
+                sep_end = sep_end.min(colon + 1 + idx);
+            }
+        }
+        let port_text = &rest[colon + 1..sep_end];
+        if port_text.is_empty() || !port_text.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+        pos = colon + 1;
+    }
+}
+
 /// `http_conventions.py::redact_url` -- the one function behind every
 /// URL redaction on this engine (issue #819 follow-up). Every other
 /// caller that names a request URL or a proxy value in a refusal,
@@ -239,29 +303,37 @@ fn is_url_key(key: &str) -> bool {
 /// - **Userinfo in the authority.** The authority is the text right
 ///   after `scheme://`, up to the first `/`, `?` or `#` (or, with no
 ///   `scheme://` at all, *url* itself). When it contains an `@`,
-///   everything before its last `@` is replaced.
-/// - **A `:` before a later `@`.** When an `@` comes after the
-///   authority (in the path, query or fragment) and a `:` appears
-///   anywhere between the start of the authority and that later `@`,
-///   the whole span up to that `@` is replaced instead -- this catches
-///   a password hidden behind a `/`. A credential-free `@` with no such
-///   `:` is left untouched.
-/// - **No `://` at all.** A schemeless value with an `@` and no
-///   whitespace anywhere (the same shape a schemeless proxy value
-///   carries) is cut before its last `@` unconditionally -- no `:`
-///   required: a bare `token@host` is itself a credential when *url*
-///   is already known to be a URL (a value under a URL key) or a
-///   request/proxy value, never prose.
+///   everything before its last `@` is replaced -- whether or not
+///   another `@` also appears later in *url*
+///   (`https://tok@host/@acme/widget`).
+/// - **A `:` before a later `@`, when it can't be a port.** When an
+///   `@` comes after the authority (in the path, query or fragment)
+///   and, between the start of the host (right after any authority
+///   userinfo just cut) and that later `@`, a `:` appears whose
+///   following text (up to the next `/`, `?`, `#` or `@`) isn't all
+///   ASCII digits ([`has_non_port_colon`]), the whole span up to that
+///   `@` is replaced instead -- this catches a password hidden behind
+///   a `/`. A `:` whose text could be a real port
+///   (`http://localhost:8080/@alice`), or no `:` at all, leaves the
+///   `@` untouched.
+/// - **No `://` at all.** A schemeless value with an `@` is cut before
+///   its last `@` unconditionally -- no `:` required, and whitespace
+///   is no exception: every caller here has already committed to
+///   treating *url* as a URL (a URL-key value, or a request/proxy
+///   value), never prose, so a bare `token@host` is itself a
+///   credential.
 /// - Either cut replaces the matched span with `marker` followed by
 ///   `@` when *marker* is non-empty, or with nothing at all (dropping
 ///   the `@` too) when it is empty.
 /// - **Query.** Every `&`-separated `key=value` pair (raw text,
-///   nothing decoded or re-encoded) whose key looks like a credential
-///   ([`looks_like_credential_key`]) has its value replaced -- with
-///   *marker* when non-empty, or the fixed `%2A%2A%2A` (`main`'s own
-///   percent-encoded `***`) when empty, so a value without a marker
-///   still fails `has_redacted_secrets` for the right reason. A `?`
-///   that comes after a `#` is fragment text, never a query delimiter.
+///   nothing decoded or re-encoded) whose KEY, percent-decoded
+///   ([`percent_decode_key`]), looks like a credential
+///   ([`looks_like_credential_key`]) has its VALUE's raw text replaced
+///   -- with *marker* when non-empty, or the fixed `%2A%2A%2A` (`main`'s
+///   own percent-encoded `***`) when empty, so a value without a
+///   marker still fails `has_redacted_secrets` for the right reason. A
+///   `?` that comes after a `#` is fragment text, never a query
+///   delimiter.
 pub fn redact_url(url: &str, marker: &str) -> String {
     // A scheme boundary is the FIRST ':' in the value, immediately
     // followed by "//" -- not just the first occurrence of the
@@ -274,14 +346,9 @@ pub fn redact_url(url: &str, marker: &str) -> String {
     let scheme_end = url
         .find(':')
         .filter(|&idx| url[idx + 1..].starts_with("//"));
-    let (prefix, mut rest) = match scheme_end {
+    let (prefix, rest) = match scheme_end {
         Some(idx) => (&url[..idx + 3], &url[idx + 3..]),
-        None => {
-            if url.chars().any(char::is_whitespace) {
-                return url.to_string();
-            }
-            ("", url)
-        }
+        None => ("", url),
     };
 
     let userinfo_prefix: String = if marker.is_empty() {
@@ -289,29 +356,57 @@ pub fn redact_url(url: &str, marker: &str) -> String {
     } else {
         format!("{marker}@")
     };
-    let authority_end = ['/', '?', '#']
-        .iter()
-        .filter_map(|sep| rest.find(*sep))
-        .min()
-        .unwrap_or(rest.len());
 
-    let mut cut: Option<String> = None;
-    if let Some(last_at) = rest.rfind('@') {
-        if scheme_end.is_none() {
+    let owned_rest: String;
+    let rest: &str = match scheme_end {
+        None => {
             // Schemeless: every caller here has already committed to
             // treating *url* as a URL (a URL-key value, or a request/
-            // proxy value), so a bare `token@host` -- no ':' at all --
-            // is itself a credential, not just the user:pass@host shape.
-            cut = Some(format!("{userinfo_prefix}{}", &rest[last_at + 1..]));
-        } else if last_at < authority_end || rest[..last_at].contains(':') {
-            cut = Some(format!("{userinfo_prefix}{}", &rest[last_at + 1..]));
+            // proxy value), so a bare `token@host` -- no ':' at all,
+            // and whitespace no exception -- is itself a credential,
+            // not just the user:pass@host shape.
+            match rest.rfind('@') {
+                Some(last_at) => {
+                    owned_rest = format!("{userinfo_prefix}{}", &rest[last_at + 1..]);
+                    &owned_rest
+                }
+                None => rest,
+            }
         }
-    }
-    let owned_rest;
-    if let Some(cut) = cut {
-        owned_rest = cut;
-        rest = &owned_rest;
-    }
+        Some(_) => {
+            let mut authority_end = ['/', '?', '#']
+                .iter()
+                .filter_map(|sep| rest.find(*sep))
+                .min()
+                .unwrap_or(rest.len());
+
+            let mut host_start = 0usize;
+            let mut cut_rest: String = rest.to_string();
+            if let Some(authority_at) = rest[..authority_end].rfind('@') {
+                cut_rest = format!("{userinfo_prefix}{}", &rest[authority_at + 1..]);
+                authority_end = authority_end + userinfo_prefix.len() - (authority_at + 1);
+                host_start = userinfo_prefix.len();
+            }
+
+            match cut_rest.rfind('@') {
+                Some(last_at)
+                    if last_at >= authority_end
+                        && has_non_port_colon(&cut_rest, host_start, last_at) =>
+                {
+                    owned_rest = format!(
+                        "{}{userinfo_prefix}{}",
+                        &cut_rest[..host_start],
+                        &cut_rest[last_at + 1..]
+                    );
+                    &owned_rest
+                }
+                _ => {
+                    owned_rest = cut_rest;
+                    &owned_rest
+                }
+            }
+        }
+    };
 
     let (body, fragment) = match rest.find('#') {
         Some(idx) => (&rest[..idx], &rest[idx..]),
@@ -328,7 +423,7 @@ pub fn redact_url(url: &str, marker: &str) -> String {
     let masked_query: Vec<String> = body[query_idx + 1..]
         .split('&')
         .map(|segment| match segment.split_once('=') {
-            Some((key, _)) if looks_like_credential_key(key) => {
+            Some((key, _)) if looks_like_credential_key(&percent_decode_key(key)) => {
                 format!("{key}={query_mask}")
             }
             _ => segment.to_string(),
@@ -374,13 +469,15 @@ fn redact_adapter_env(mut adapters: Value) -> Value {
 /// fields: a dict value is wholesale-redacted when its own key matches
 /// [`is_sensitive_key`]; every value of an `env` mapping under an
 /// `adapters` key is redacted ([`redact_adapter_env`]); a string value
-/// under a URL key ([`is_url_key`]) gets the URL rule ([`redact_url`])
-/// regardless of its shape; any other string is redacted (wholesale,
-/// or just its URL userinfo) when it looks like a JWT, an API key, or
-/// a URL carrying both `://` and `@`; lists and nested dicts are
-/// walked; every other scalar passes through unchanged. Returns a new
-/// [`Value`]; never mutates in place (there is nothing to mutate --
-/// `Value` has no shared interior mutability of its own).
+/// under a URL key ([`is_url_key`]) redacts wholesale when it's
+/// token-shaped ([`is_token_shaped`], `main`'s own ordinary-string
+/// rule applied first), else gets the URL rule ([`redact_url`]); any
+/// other string is redacted (wholesale, or just its URL userinfo) when
+/// it looks like a JWT, an API key, or a URL carrying both `://` and
+/// `@`; lists and nested dicts are walked; every other scalar passes
+/// through unchanged. Returns a new [`Value`]; never mutates in place
+/// (there is nothing to mutate -- `Value` has no shared interior
+/// mutability of its own).
 pub fn redact(mut value: Value) -> Value {
     // `Value::Dict(dict) = value` would move `dict`'s `IndexMap` out of
     // a type that implements `Drop` (electricity-value's iterative
@@ -401,7 +498,11 @@ pub fn redact(mut value: Value) -> Value {
                     redact_adapter_env(inner)
                 } else if is_url {
                     if let Value::Str(s) = &mut inner {
-                        Value::Str(redact_url(s, REDACTED))
+                        if is_token_shaped(s) {
+                            Value::Str(REDACTED.to_string())
+                        } else {
+                            Value::Str(redact_url(s, REDACTED))
+                        }
                     } else {
                         redact(inner)
                     }
@@ -422,8 +523,10 @@ pub fn redact(mut value: Value) -> Value {
 /// (the `-e` flag shape, and `cli/last_run.py`'s own stashed `env_vars`):
 /// the key is kept as given (so a replay can show what was supplied), the
 /// value is replaced with [`REDACTED`] when the key matches
-/// [`is_sensitive_key`], the URL rule ([`redact_url`]) when the key
-/// matches [`is_url_key`], else redacted at the string level
+/// [`is_sensitive_key`]; under a URL key ([`is_url_key`]), a
+/// token-shaped value redacts wholesale ([`is_token_shaped`], `main`'s
+/// own ordinary-string rule applied first), else it gets the URL rule
+/// ([`redact_url`]); any other value is redacted at the string level
 /// ([`redact_string`]) the same way any other string value is -- so a
 /// credential-shaped value under an innocuous key (`my_var=sk-...`) is
 /// still caught. An entry with no `=` passes through unchanged, same as
@@ -437,7 +540,11 @@ pub fn redact_env_pairs(pairs: &[String]) -> Vec<String> {
                 if is_sensitive_key(key) {
                     format!("{key}={REDACTED}")
                 } else if is_url_key(key) {
-                    format!("{key}={}", redact_url(value, REDACTED))
+                    if is_token_shaped(value) {
+                        format!("{key}={REDACTED}")
+                    } else {
+                        format!("{key}={}", redact_url(value, REDACTED))
+                    }
                 } else {
                     format!("{key}={}", redact_string(value))
                 }
@@ -709,13 +816,25 @@ mod tests {
     #[test]
     fn a_credential_hidden_behind_the_path_still_redacts() {
         // #819: an @ past the parsed authority's own boundary still
-        // hides a password -- the whole value is cut at the LAST @.
-        let url = "https://alice:443/x@api.example.test/v1";
+        // hides a password when the text before it couldn't be a
+        // port -- the whole value is cut at the LAST @.
+        let url = "https://alice:longpw/x@api.example.test/v1";
         let input = dict(vec![("base_url", Value::from(url))]);
         let expected = dict(vec![(
             "base_url",
             Value::from(format!("https://{REDACTED}@api.example.test/v1")),
         )]);
+        assert_eq!(redact(input), expected);
+    }
+
+    #[test]
+    fn an_at_sign_past_a_real_host_port_is_left_alone() {
+        // #819 follow-up: "443" is a valid port, so "alice:443" reads
+        // as a real host:port, not a hidden credential -- the later @
+        // is left untouched, the same as `http://localhost:8080/@alice`.
+        let url = "https://alice:443/x@api.example.test/v1";
+        let input = dict(vec![("base_url", Value::from(url))]);
+        let expected = dict(vec![("base_url", Value::from(url))]);
         assert_eq!(redact(input), expected);
     }
 
@@ -924,11 +1043,10 @@ mod tests {
     }
 
     #[test]
-    fn redact_url_leaves_a_schemeless_value_with_whitespace_unchanged() {
-        assert_eq!(
-            redact_url("alice:s3cret@proxy:3128 ", ""),
-            "alice:s3cret@proxy:3128 "
-        );
+    fn redact_url_cuts_a_schemeless_value_even_with_trailing_whitespace() {
+        // #819 follow-up: every caller already knows *url* is a URL --
+        // whitespace is never an exception to the schemeless cut.
+        assert_eq!(redact_url("alice:s3cret@proxy:3128 ", ""), "proxy:3128 ");
     }
 
     #[test]
@@ -941,6 +1059,55 @@ mod tests {
         assert_eq!(
             redact_url(url, ""),
             "https://host/x?foo=1&api_key=%2A%2A%2A&bar=2"
+        );
+    }
+
+    #[test]
+    fn redact_url_cuts_authority_userinfo_even_when_a_later_at_sign_has_no_colon() {
+        // #819 follow-up: the authority's own userinfo is cut first,
+        // whether or not another @ also appears later in the value
+        // (a scoped-package path here).
+        let url = "https://npmTOKEN123@registry.example.test/@acme/widget";
+        assert_eq!(
+            redact_url(url, REDACTED),
+            format!("https://{REDACTED}@registry.example.test/@acme/widget")
+        );
+        assert_eq!(
+            redact_url(url, ""),
+            "https://registry.example.test/@acme/widget"
+        );
+    }
+
+    #[test]
+    fn redact_url_masks_a_credential_query_key_matched_in_decoded_form() {
+        // #819 follow-up: the key is matched percent-decoded
+        // ("token"), but only the value's raw text is replaced.
+        let url = "https://host/x?tok%65n=abcd1234";
+        assert_eq!(
+            redact_url(url, REDACTED),
+            format!("https://host/x?tok%65n={REDACTED}")
+        );
+    }
+
+    #[test]
+    fn a_token_shaped_value_under_a_url_key_redacts_whole() {
+        // #819 follow-up: `main`'s own ordinary-string rule (the JWT/
+        // key-shape patterns) applies before the URL rule, so a
+        // token-shaped value with no @ and no ? under a URL key still
+        // redacts wholesale, not byte for byte.
+        let key = format!("sk-{}", "a".repeat(20));
+        let input = dict(vec![("endpoint", Value::from(key.as_str()))]);
+        let expected = dict(vec![("endpoint", Value::from(REDACTED))]);
+        assert_eq!(redact(input), expected);
+    }
+
+    #[test]
+    fn redact_env_pairs_applies_the_token_shape_check_before_the_url_rule() {
+        let key = format!("xoxb-{}", "a".repeat(20));
+        let pairs = vec![format!("webhook_url={key}")];
+        assert_eq!(
+            redact_env_pairs(&pairs),
+            vec![format!("webhook_url={REDACTED}")]
         );
     }
 
