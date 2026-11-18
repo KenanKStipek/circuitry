@@ -928,6 +928,22 @@
   {
     "entry": "both",
     "expect": {
+      "kind": "syntax",
+      "message": "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"
+    },
+    "text": "﻿{\"a\": 1}"
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "syntax",
+      "message": "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"
+    },
+    "text": "﻿"
+  },
+  {
+    "entry": "both",
+    "expect": {
       "kind": "ok",
       "value": {
         "t": "str",

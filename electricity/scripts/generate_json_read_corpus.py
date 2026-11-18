@@ -202,6 +202,13 @@ def build_corpus() -> list[dict]:
         '["café", "中文",\n  1 2]',
         '"é中\x01b"',
         '"café\\xZ"',
+        # A leading UTF-8 byte-order mark (issue #576): `json.loads` checks
+        # for it before any scanning at all, so it gets this fixed message
+        # instead of whatever the ordinary scanner would otherwise say
+        # about an actual U+FEFF character -- even when what follows is
+        # itself valid JSON.
+        '\ufeff{"a": 1}',
+        '\ufeff',
     ]
     lone_surrogate_texts = [
         '"\\ud800"',  # a lone high surrogate, with nothing following it
