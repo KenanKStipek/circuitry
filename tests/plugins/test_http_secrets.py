@@ -908,6 +908,300 @@ effects:
     assert DOC_TOKEN not in json.dumps(result.state)
 
 
+def test_check_on_a_root_lists_a_secret_its_path_child_names(tmp_path: Path) -> None:
+    """#611 acceptance 1: a root's check also lists the secrets its
+    `use: path:` children name, attributed to the child."""
+    _write(
+        tmp_path,
+        "child.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: x}}
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+runtime:
+  secrets:
+    x: {env: ROOT_X}
+effects:
+  - type: use
+    name: child
+    path: child.yml
+""",
+    )
+
+    report = validate(root, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == ["x"]
+    assert report["secret_sources"] == {"x": "document"}
+    assert report["secret_children"] == {"x": [str((tmp_path / "child.yml").resolve())]}
+
+    text = _cof(tmp_path, "check", str(root), "--skip-preflight")
+    assert text.returncode == 0, text.stdout + text.stderr
+    assert "Secrets: x (document), named by" in text.stdout
+    assert str((tmp_path / "child.yml").resolve()) in text.stdout
+
+
+def test_check_on_a_root_reports_a_child_named_secret_as_not_defined(tmp_path: Path) -> None:
+    """#611 acceptance 2: with no definition anywhere, the root's check
+    still lists the child's secret, as not defined."""
+    _write(
+        tmp_path,
+        "child.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: x}}
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: child
+    path: child.yml
+""",
+    )
+
+    report = validate(root, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == ["x"]
+    assert report["secret_sources"] == {"x": "not defined"}
+
+
+def test_check_json_carries_the_child_path_naming_a_secret(tmp_path: Path) -> None:
+    """#611 acceptance 3: --json carries the same information, with the
+    child's path."""
+    _write(
+        tmp_path,
+        "child.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: x}}
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+runtime:
+  secrets:
+    x: {env: ROOT_X}
+effects:
+  - type: use
+    name: child
+    path: child.yml
+""",
+    )
+
+    report = _cof(tmp_path, "check", str(root), "--skip-preflight", "--json")
+    assert report.returncode == 0, report.stdout + report.stderr
+    payload = json.loads(report.stdout)
+    assert payload["secret_sources"] == {"x": "document"}
+    assert payload["secret_children"] == {"x": [str((tmp_path / "child.yml").resolve())]}
+
+
+def test_check_follows_a_two_level_use_path_chain_for_secrets(tmp_path: Path) -> None:
+    """The root's check follows `use: path:` children recursively, as far
+    as the compiler resolves them."""
+    _write(
+        tmp_path,
+        "grandchild.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: y}}
+""",
+    )
+    _write(
+        tmp_path,
+        "child.yml",
+        """
+effects:
+  - type: use
+    name: grandchild
+    path: grandchild.yml
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+runtime:
+  secrets:
+    y: {env: ROOT_Y}
+effects:
+  - type: use
+    name: child
+    path: child.yml
+""",
+    )
+
+    report = validate(root, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == ["y"]
+    assert report["secret_sources"] == {"y": "document"}
+    assert report["secret_children"] == {"y": [str((tmp_path / "grandchild.yml").resolve())]}
+
+
+def test_check_lists_a_secret_named_by_both_the_root_and_a_child_once(tmp_path: Path) -> None:
+    """A secret the root names directly, and a `use: path:` child also
+    names, is listed once, with both names in the attribution."""
+    _write(
+        tmp_path,
+        "child.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/child"
+      headers: {Authorization: {secret: z}}
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+runtime:
+  secrets:
+    z: {env: ROOT_Z}
+effects:
+  - type: tool
+    name: direct
+    provider: http
+    params:
+      url: "https://example.com/root"
+      headers: {Authorization: {secret: z}}
+  - type: use
+    name: child
+    path: child.yml
+""",
+    )
+
+    report = validate(root, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == ["z"]
+    assert report["secret_children"] == {
+        "z": ["root", str((tmp_path / "child.yml").resolve())]
+    }
+
+
+def test_check_on_a_child_run_on_its_own_keeps_its_own_view(tmp_path: Path) -> None:
+    """A document checked on its own (not through a root's walk) keeps
+    today's view: its own definitions only, plus the hint that a parent
+    running it as a `use: path:` child may define a secret it shows as
+    not defined."""
+    child = _write(
+        tmp_path,
+        "child.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: x}}
+""",
+    )
+
+    text = _cof(tmp_path, "check", str(child), "--skip-preflight")
+    assert text.returncode == 0, text.stdout + text.stderr
+    assert "Secrets: x (not defined)" in text.stdout
+    assert "Hint:" in text.stdout
+    assert "use: path: child" in text.stdout
+
+
+def test_a_ref_childs_secret_is_not_surfaced_by_check_but_the_run_still_refuses_it(
+    tmp_path: Path,
+) -> None:
+    """#611 acceptance 4: a library-resolved (limited) child naming a
+    secret is never walked by the root's check -- a `ref:` child is always
+    limited, whatever its parent's trust, so it never resolves the root's
+    own secrets -- and is still refused when it actually runs, as today."""
+    library = tmp_path / "lib"
+    library.mkdir()
+    _write(
+        library,
+        "shared.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: api}}
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        f"""
+adapter: scripted
+model: none
+runtime:
+  secrets:
+    api: {{env: API}}
+  library:
+    sources: [{{type: folder, name: local, path: {json.dumps(str(library))}}}]
+effects:
+  - type: use
+    name: child
+    ref: shared
+""",
+    )
+
+    report = validate(root, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == []
+    assert report["secret_children"] == {}
+
+    result = run(
+        RunRequest(
+            orchestration_path=root,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=_config({"api": {"env": "API"}}),
+            skip_preflight=True,
+            trust_document=True,
+            allow_capabilities=frozenset({"network"}),
+        )
+    )
+    assert not result.ok
+    assert (
+        "names secret 'api': only a document run by path may name a secret"
+        in (result.error or "")
+    )
+
+
 @pytest.mark.parametrize(
     ("params", "message"),
     [
