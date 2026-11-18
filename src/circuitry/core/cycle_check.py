@@ -81,13 +81,19 @@ def resolve_reference(
     parent_dir: Path | None,
     registry: LibraryRegistry | None = None,
     runtime: dict[str, Any] | None = None,
+    allow_library_fallback: bool = True,
 ) -> Path | None:
     """Resolve a `ref:` / `path:` value to an absolute file path, or None if unresolvable.
 
     `ref:` goes through the library registry (cross-source, cache paths
     included); `path:` keeps its filesystem-first chain with a library lookup
-    as the final fallback. An unfetched remote source resolves to None here —
-    a missing cache is preflight's error to raise, not a cycle.
+    as the final fallback, unless *allow_library_fallback* is false — the
+    chain the run's own `path:` field uses, which never consults the
+    library (`core.use.UseRuntime._resolve_orchestration`; only the legacy
+    `orchestration:` field falls back to it, and doing so there makes the
+    run treat the child as untrusted). An unfetched remote source resolves
+    to None here — a missing cache is preflight's error to raise, not a
+    cycle.
     """
     from .library_ref import LibraryRefError, build_registry, resolve_ref
 
@@ -114,14 +120,45 @@ def resolve_reference(
         if relative.exists() and relative.is_file():
             return relative.resolve()
 
+    if not allow_library_fallback:
+        return None
+
     return library_lookup(value)
 
 
 def load_orch(path: Path) -> dict[str, Any]:
-    """Parse an orchestration file, treating unreadable content as empty."""
+    """Parse an orchestration file, treating unreadable content as empty.
+
+    Deliberately `yaml.safe_load`, not the run's own loader -- a `use`
+    cycle through a child with a duplicate YAML key must still be found
+    even though the run's own loader (`cli.orchestration_loader`) rejects
+    one (#415); the cycle check reads ahead of that rejection, last-value-
+    wins like plain YAML, rather than let a document hide a cycle behind a
+    parse error the run hasn't reached yet.
+    """
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_path_child_orch(path: Path) -> dict[str, Any]:
+    """Parse a `use: path:`/`orchestration:` child the way the run loads it
+    (`cli.orchestration_loader.load_orchestration_file`, which also handles
+    `.json`/`.toon`), for :func:`iter_use_path_children` -- unlike
+    :func:`load_orch`, this walk is never fooled by a cycle hiding behind a
+    parse error (it only follows `path:`/`orchestration:` edges, which the
+    compiler itself loads the same way), so matching the run's own format
+    support, and its duplicate-key rejection, matters more here than
+    tolerating what the run would refuse: a child the run can't load names
+    no secrets either, so it's skipped exactly like an unresolvable path.
+    """
+    from ..cli.orchestration_loader import load_orchestration_file
+
+    try:
+        data = load_orchestration_file(path)
+    except Exception:
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -202,8 +239,15 @@ def iter_use_path_children(
     secrets) or an ``inline:`` one (generated at run time, also always
     limited) -- a child named by `path:` inherits its parent's trust and so
     is the only kind this walk needs for a caller that resolves what a
-    trusted root's own run would (`cof check`'s secrets listing). An
-    unresolvable `path:` is skipped, same as `iter_use_children`.
+    trusted root's own run would (`cof check`'s secrets listing). Resolves
+    both the `path:` field and the legacy `orchestration:` one from the
+    filesystem only, with no library fallback -- the chain the run's own
+    `path:` field uses (`core.use.UseRuntime._resolve_orchestration`). A
+    legacy `orchestration:` child the filesystem can't resolve is a library
+    child once the run falls back for it, pinned and so untrusted
+    (`UseRuntime._pin`) -- out of scope the same way a `ref:` child is,
+    rather than walked as if trusted. An unresolvable `path:` is skipped,
+    same as `iter_use_children`.
     """
     from .library_ref import build_registry
 
@@ -216,12 +260,16 @@ def iter_use_path_children(
             if kind != "path":
                 continue
             resolved = resolve_reference(
-                kind, value, parent_dir=parent_dir, registry=registry
+                kind,
+                value,
+                parent_dir=parent_dir,
+                registry=registry,
+                allow_library_fallback=False,
             )
             if resolved is None or str(resolved) in seen:
                 continue
             seen.add(str(resolved))
-            child = load_orch(resolved)
+            child = _load_path_child_orch(resolved)
             out.append((str(resolved), child, resolved.parent))
             visit(child, resolved.parent)
 
