@@ -303,7 +303,7 @@ def _use_path_effects(
     `orchestration:` child -- never a `ref:` or `inline:` one, each its own
     document (a library entry, or generated at run time) rather than a
     child of this one -- paired with whether a failure reaching it is
-    absorbed rather than failing the root's own check (#833).
+    absorbed rather than failing the root's own check (#832).
 
     *tolerant*, true when *orch* itself was reached through a `use` effect
     (possibly in an enclosing document) whose own `on_error` already
@@ -445,7 +445,7 @@ def check_use_path_children(
     #: (label, message) -> whether it is currently reported as an error --
     #: the same underlying failure, reached again through a stricter or
     #: looser `use` on another path to it, is reported exactly once, as an
-    #: error if any reference to it is itself not tolerant (#833).
+    #: error if any reference to it is itself not tolerant (#832).
     reported: dict[tuple[str, str], bool] = {}
     registry_box: list[LibraryRegistry] = []
 
@@ -536,7 +536,7 @@ def check_use_path_children(
             # distinct reachability context the run re-evaluates from
             # scratch every time it takes that `use` -- so this check must
             # too, rather than silently skipping the second reference
-            # because the first one already resolved fine (#833). At most
+            # because the first one already resolved fine (#832). At most
             # four visits per document (two `tolerant` values by two
             # `validate` values).
             check_validate = bool(effect.get("validate", True))
