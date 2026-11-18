@@ -200,6 +200,21 @@ pub enum ErrorCause {
     /// unchanged through every wrap, so the cause set at the leaf
     /// survives to whatever ancestor reads it.
     SchemaRejected { raw_response_text: String },
+    /// `plugins/_subprocess.py::ParseFailure` (issue #576): `parse: json`
+    /// on empty or invalid stdout -- the process's own raw stdout/
+    /// stderr/exit code (already secret-scrubbed), so a failed effect
+    /// still records them the way a successful run of the same tool
+    /// would. `exec/tool.rs`'s own failure block writes these three
+    /// into `meta.stdout`/`meta.stderr`/`meta.exit_code`, the same as
+    /// `core/tool.py` reads them off the raised exception's own
+    /// attributes. `retry.rs`'s own exhaustive match on this enum
+    /// treats this variant like [`ErrorCause::None`] -- never retried
+    /// by status; a subprocess tool is never HTTP-family anyway.
+    ParseFailureRawOutput {
+        stdout: String,
+        stderr: String,
+        exit_code: i32,
+    },
 }
 
 /// A tool call's own raised error (as opposed to [`ToolResult::ok`]

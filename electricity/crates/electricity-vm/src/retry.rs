@@ -75,6 +75,7 @@ pub fn is_tool_failure_retryable(
         // but an exhaustive match still has to place it somewhere, and
         // Python has no classification for it either.
         Some(electricity_tools::ErrorCause::SchemaRejected { .. })
+        | Some(electricity_tools::ErrorCause::ParseFailureRawOutput { .. })
         | Some(electricity_tools::ErrorCause::None)
         | None => false,
     }

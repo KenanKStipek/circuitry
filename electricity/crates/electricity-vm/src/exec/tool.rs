@@ -2100,6 +2100,25 @@ pub async fn execute_tool<R: ParamsCtx>(
                 "error",
                 Value::Str(failure.message.clone()),
             );
+            // Issue #576: `plugins/_subprocess.py::ParseFailure`'s own
+            // raw-output fields -- a `parse: json` failure still
+            // records them, the same raw-output fields a successful
+            // run of the same tool already gets.
+            if let electricity_tools::ErrorCause::ParseFailureRawOutput {
+                stdout,
+                stderr,
+                exit_code,
+            } = &failure.cause
+            {
+                set_leaf(store, &meta_node, "stdout", Value::Str(stdout.clone()));
+                set_leaf(store, &meta_node, "stderr", Value::Str(stderr.clone()));
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "exit_code",
+                    Value::from(i64::from(*exit_code)),
+                );
+            }
             retry_attempts.push(attempt_entry(
                 store,
                 &meta_node,
@@ -4145,6 +4164,98 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.to_string(), "flaky tool reported failure (ok=False)");
+    }
+
+    #[tokio::test]
+    async fn a_parse_json_failures_own_raw_output_is_recorded_on_meta() {
+        // Issue #576: a `parse: json` failure (`ErrorCause::
+        // ParseFailureRawOutput`) still records `meta.stdout`/
+        // `meta.stderr`/`meta.exit_code`, the same raw-output fields a
+        // successful run of the same tool already gets.
+        struct ParseFailsTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for ParseFailsTool {
+            fn name(&self) -> &str {
+                "parsey"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                _call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                Err(electricity_tools::ToolError {
+                    py_class: electricity_tools::PyExc::ValueError,
+                    message: "parsey parse: json: stdout is not valid JSON (exit 1): \
+                              Expecting value: line 1 column 1 (char 0); stdout begins \
+                              'not json'"
+                        .to_string(),
+                    cause: electricity_tools::ErrorCause::ParseFailureRawOutput {
+                        stdout: "not json".to_string(),
+                        stderr: "warn\n".to_string(),
+                        exit_code: 1,
+                    },
+                })
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "parsey".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(ParseFailsTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("stdout")),
+            Some(&Value::from("not json"))
+        );
+        assert_eq!(
+            meta.get(&Value::from("stderr")),
+            Some(&Value::from("warn\n"))
+        );
+        assert_eq!(
+            meta.get(&Value::from("exit_code")),
+            Some(&Value::from(1i64))
+        );
     }
 
     #[tokio::test]
