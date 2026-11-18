@@ -383,7 +383,16 @@ def check_use_path_children(
     `if`/`conditional`'s own `on_error` never does, since it only ever
     covers a failed condition, never the branch it takes) -- lands in
     *warnings* instead: the run swallows that same failure there too, so
-    it shouldn't fail a check the run itself would pass.
+    it shouldn't fail a check the run itself would pass. A child reached
+    more than once -- a diamond dependency, or two separate `use`
+    effects naming the same file under a different `on_error`/`validate:`
+    of their own -- is revisited once per distinct (path, tolerant,
+    validate) combination it's reached under, the same way the run
+    itself resolves and compiles each `use` effect's own child
+    independently rather than reusing an earlier one's outcome; the same
+    underlying failure found this way more than once is still reported
+    exactly once, as an error if any reference to it is itself not
+    tolerant, a warning only when every one of them is -- never as both.
 
     Unlike :func:`iter_use_path_children` (#611's secrets walk, tolerant
     of an unreachable child so a child the walk can't resolve never fails
@@ -429,15 +438,39 @@ def check_use_path_children(
         resolve_filesystem_use_path,
     )
 
-    seen: set[str] = {str(root_path.resolve())} if root_path is not None else set()
+    root_identity = str(root_path.resolve()) if root_path is not None else None
+    seen: set[tuple[str, bool, bool]] = set()
     failures: list[tuple[str, str]] = []
     warnings: list[tuple[str, str]] = []
+    #: (label, message) -> whether it is currently reported as an error --
+    #: the same underlying failure, reached again through a stricter or
+    #: looser `use` on another path to it, is reported exactly once, as an
+    #: error if any reference to it is itself not tolerant (#833).
+    reported: dict[tuple[str, str], bool] = {}
     registry_box: list[LibraryRegistry] = []
 
     def get_registry() -> LibraryRegistry:
         if not registry_box:
             registry_box.append(build_registry(runtime))
         return registry_box[0]
+
+    def report(tolerant: bool, label: str, message: str) -> None:
+        rkey = (label, message)
+        already_error = reported.get(rkey)
+        if already_error:
+            return
+        if already_error is False:
+            if not tolerant:
+                warnings.remove((label, message))
+                failures.append((label, message))
+                reported[rkey] = True
+            return
+        if tolerant:
+            warnings.append((label, message))
+            reported[rkey] = False
+        else:
+            failures.append((label, message))
+            reported[rkey] = True
 
     def visit(
         orch: dict[str, Any],
@@ -448,7 +481,6 @@ def check_use_path_children(
     ) -> None:
         for effect, effect_tolerant in _use_path_effects(orch, tolerant=tolerant):
             name = effect.get("name") or "use"
-            outcome = warnings if effect_tolerant else failures
 
             path_field = effect.get("path")
             if isinstance(path_field, str) and path_field.strip():
@@ -465,8 +497,10 @@ def check_use_path_children(
                 try:
                     lib = resolve_ref(value, registry=get_registry())
                 except (LibraryRefError, LibrarySourceError) as exc:
-                    outcome.append(
-                        (document_label or value, f"Use effect '{name}': {exc}")
+                    report(
+                        effect_tolerant,
+                        document_label or value,
+                        f"Use effect '{name}': {exc}",
                     )
                     continue
                 if lib is not None:
@@ -481,7 +515,7 @@ def check_use_path_children(
                     if is_path
                     else orchestration_not_found_message(name, value)
                 )
-                outcome.append((document_label or value, message))
+                report(effect_tolerant, document_label or value, message)
                 continue
 
             # Normalized once here, same as the run's own `identity`
@@ -494,27 +528,39 @@ def check_use_path_children(
             # caller's own cwd.
             resolved = resolved.resolve()
             key = str(resolved)
-            if key in seen:
+            if key == root_identity:
                 continue
-            seen.add(key)
+            # Keyed on (path, tolerant, validate), not the path alone: the
+            # same child reached a second time through a stricter (or
+            # looser) `use`, or with `validate:` set differently, is a
+            # distinct reachability context the run re-evaluates from
+            # scratch every time it takes that `use` -- so this check must
+            # too, rather than silently skipping the second reference
+            # because the first one already resolved fine (#833). At most
+            # four visits per document (two `tolerant` values by two
+            # `validate` values).
+            check_validate = bool(effect.get("validate", True))
+            seen_key = (key, effect_tolerant, check_validate)
+            if seen_key in seen:
+                continue
+            seen.add(seen_key)
 
             try:
                 child_orch = load_orchestration_file(resolved)
             except Exception as exc:
-                outcome.append((key, str(exc)))
+                report(effect_tolerant, key, str(exc))
                 continue
             if not isinstance(child_orch, dict):
                 continue
 
-            if bool(effect.get("validate", True)):
+            if check_validate:
                 schema_errors = structural_errors(child_orch)
                 if schema_errors:
-                    outcome.append(
-                        (
-                            key,
-                            f"Orchestration {resolved} validation failed:\n"
-                            + "\n".join(f"  - {e}" for e in schema_errors),
-                        )
+                    report(
+                        effect_tolerant,
+                        key,
+                        f"Orchestration {resolved} validation failed:\n"
+                        + "\n".join(f"  - {e}" for e in schema_errors),
                     )
                     continue
 
@@ -531,18 +577,17 @@ def check_use_path_children(
                     trusted=child_trusted,
                 )
             except Exception as exc:
-                outcome.append((key, str(exc)))
+                report(effect_tolerant, key, str(exc))
                 continue
 
             if known_groups:
                 group_errors = unknown_concurrency_group_errors(child_def, known_groups)
                 if group_errors:
-                    outcome.append(
-                        (
-                            key,
-                            f"Orchestration {resolved} validation failed:\n"
-                            + "\n".join(f"  - {e}" for e in group_errors),
-                        )
+                    report(
+                        effect_tolerant,
+                        key,
+                        f"Orchestration {resolved} validation failed:\n"
+                        + "\n".join(f"  - {e}" for e in group_errors),
                     )
                     continue
 
