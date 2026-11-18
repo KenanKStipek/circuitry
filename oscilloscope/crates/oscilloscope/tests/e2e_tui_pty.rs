@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use support::{
-    AutoKill, ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome,
+    AutoKill, DrainedPty, ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome,
     assert_no_leftover_process, diagnose_stalled_wait, drain_continuously, e2e_electricity_enabled,
     e2e_enabled, engine_pid_for_doc, open_pty, osi_command, registry_json_entries, screen_grid,
     screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
@@ -61,7 +61,7 @@ fn find_text(grid: &[String], needle: &str) -> Option<(usize, usize)> {
 /// runs out without it. `#[track_caller]` so that panic points at
 /// the call site, not this function's own `panic!`.
 #[track_caller]
-fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration) {
+fn wait_for_pattern(buf: &DrainedPty, pattern: &[u8], timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
         let whole = buf.lock().unwrap().clone();
@@ -70,9 +70,12 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
         }
         if Instant::now() >= deadline {
             let screen = screen_grid(&whole, 200, 60).join("\n");
-            let diagnostics = diagnose_stalled_wait();
+            let why = buf
+                .stop_reason()
+                .unwrap_or_else(|| "still reading".to_string());
+            let diagnostics = diagnose_stalled_wait(None);
             panic!(
-                "{:?} never appeared within {timeout:?}; screen:\n{screen}\n{diagnostics}",
+                "{:?} never appeared within {timeout:?} ({why}); screen:\n{screen}\n{diagnostics}",
                 String::from_utf8_lossy(pattern)
             );
         }
@@ -90,12 +93,7 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
 /// stale match satisfy this wait immediately, before the real thing
 /// has happened at all.
 #[track_caller]
-fn wait_for_pattern_since(
-    buf: &Arc<Mutex<Vec<u8>>>,
-    since_len: usize,
-    pattern: &[u8],
-    timeout: Duration,
-) {
+fn wait_for_pattern_since(buf: &DrainedPty, since_len: usize, pattern: &[u8], timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
         let whole = buf.lock().unwrap().clone();
@@ -107,9 +105,12 @@ fn wait_for_pattern_since(
         }
         if Instant::now() >= deadline {
             let screen = screen_grid(&whole, 200, 60).join("\n");
-            let diagnostics = diagnose_stalled_wait();
+            let why = buf
+                .stop_reason()
+                .unwrap_or_else(|| "still reading".to_string());
+            let diagnostics = diagnose_stalled_wait(None);
             panic!(
-                "{:?} never appeared within {timeout:?}; screen:\n{screen}\n{diagnostics}",
+                "{:?} never appeared within {timeout:?} ({why}); screen:\n{screen}\n{diagnostics}",
                 String::from_utf8_lossy(pattern)
             );
         }
@@ -179,11 +180,16 @@ fn wait_for_pattern_on_master(
         0,
         "fcntl F_SETFL O_NONBLOCK failed"
     );
-    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let deadline = started + timeout;
     let mut chunk = [0u8; 4096];
+    let mut stopped_early: Option<String> = None;
     while Instant::now() < deadline {
         match master.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) => {
+                stopped_early = Some("EOF, read returned 0".to_string());
+                break;
+            }
             Ok(n) => {
                 carry.extend_from_slice(&chunk[..n]);
                 if carry.windows(pattern.len()).any(|w| w == pattern) {
@@ -193,14 +199,22 @@ fn wait_for_pattern_on_master(
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(20));
             }
-            Err(_) => break,
+            Err(e) => {
+                stopped_early = Some(format!("read error: {e}"));
+                break;
+            }
         }
     }
     let screen = screen_grid(carry, 200, 60).join("\n");
-    let diagnostics = diagnose_stalled_wait();
-    panic!(
-        "pattern {pattern:?} never appeared within {timeout:?}; screen:\n{screen}\n{diagnostics}"
-    );
+    let diagnostics = diagnose_stalled_wait(None);
+    let elapsed = started.elapsed();
+    let why = match stopped_early {
+        Some(reason) => format!(
+            "stopped reading after {elapsed:?} ({reason}), short of the {timeout:?} this wait was given"
+        ),
+        None => format!("never appeared within the full {timeout:?}"),
+    };
+    panic!("pattern {pattern:?} {why}; screen:\n{screen}\n{diagnostics}");
 }
 
 #[test]
@@ -3000,7 +3014,7 @@ fn spawn_scripted_run_on_tape(
     home: &TestHome,
     work: &Path,
     out_dir: &Path,
-) -> (File, PathBuf, std::process::Child, Arc<Mutex<Vec<u8>>>) {
+) -> (File, PathBuf, std::process::Child, DrainedPty) {
     let doc = write_doc(
         work,
         "do.yml",
