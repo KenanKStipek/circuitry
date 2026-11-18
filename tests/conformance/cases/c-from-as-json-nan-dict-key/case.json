@@ -1,7 +1,14 @@
 {
   "spec_case": "orchestration-reference.md 'Params by reference' (issue #576)",
-  "description": "A `{from: <path>, as: json}` reference whose resolved value is a dict with a NaN (or infinite) float key fails to serialize, the same as one used as a value -- `json.dumps(..., allow_nan=False)` rejects a non-finite key too.",
-  "engines": ["python", "electricity"],
+  "description": "A `{from: <path>, as: json}` reference whose resolved value is a dict with a NaN (or infinite) float key fails to serialize, the same as one used as a value -- `json.dumps(..., allow_nan=False)` rejects a non-finite key too. The Python runner checks it on CPython 3.10 and 3.11 only: from 3.12 on, CPython appends the offending value to the message (`...: nan`).",
+  "engines": [
+    "python",
+    "electricity"
+  ],
   "expect": "failure",
-  "error_compare": "exact"
+  "error_compare": "exact",
+  "python_runner_versions": [
+    "3.10",
+    "3.11"
+  ]
 }
