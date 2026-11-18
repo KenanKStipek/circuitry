@@ -433,8 +433,10 @@ impl EventLog {
                 _ => continue,
             };
             if key_str == "values" {
-                match electricity_json::dumps_default_str(value, electricity_json::WriteMode::EVENTS)
-                {
+                match electricity_json::dumps_default_str(
+                    value,
+                    electricity_json::WriteMode::EVENTS,
+                ) {
                     Ok(text) => {
                         let byte_len = text.len();
                         if byte_len > REPORT_DATA_MAX_BYTES {

@@ -1665,7 +1665,7 @@ async fn run_while<'a>(
         // `cof run --resume` (#573): the one pass `resume_pass` names
         // runs without asking its condition again -- the condition
         // held when the saved pass started.
-let should_continue = if Some(iteration_count) == resume_pass
+        let should_continue = if Some(iteration_count) == resume_pass
             || iteration_count < min_iterations
         {
             true

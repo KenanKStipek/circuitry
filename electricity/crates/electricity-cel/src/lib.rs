@@ -1271,7 +1271,11 @@ fn decision_input_value(path: &str, state: &Value) -> Option<Value> {
         };
         current = dict.get(&Value::Str(part.to_string()))?;
     }
-    if current.is_none() { None } else { Some(current.clone()) }
+    if current.is_none() {
+        None
+    } else {
+        Some(current.clone())
+    }
 }
 
 #[cfg(test)]

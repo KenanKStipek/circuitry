@@ -146,7 +146,10 @@ pub(crate) fn cel_decision_inputs(expr: &str, state: &Value) -> Vec<(&'static st
         Ok((values, unset)) => {
             let mut inputs = vec![("values", values)];
             if !unset.is_empty() {
-                inputs.push(("unset", Value::List(unset.into_iter().map(Value::Str).collect())));
+                inputs.push((
+                    "unset",
+                    Value::List(unset.into_iter().map(Value::Str).collect()),
+                ));
             }
             inputs
         }
