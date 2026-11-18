@@ -60,6 +60,50 @@ class PromptFileError(ValueError):
     """A ``{file: <path>}`` prompt source could not be used, named by field."""
 
 
+#: A per-run cache of path -> bytes already read from disk, shared by every
+#: caller in one load/consent/compile cycle (#405): the consent digest, the
+#: document loader and the actual compile step must all see the exact same
+#: bytes for a given file, so each one is read from disk at most once. The
+#: caller that owns a cycle's lifetime builds the dict and threads it through
+#: every call below; ``None`` (the default everywhere) disables caching
+#: entirely -- a plain, uncached read, exactly like before this existed.
+FileReadCache = dict[Path, bytes]
+
+#: The ``runtime_config`` key a run's own file-read cache rides under
+#: (same private-key convention as ``core.concurrency.RUNTIME_CONFIG_KEY``/
+#: ``_orchestration_dir``) -- set once, on the shared dict every effect in
+#: the run sees, by whichever surface built it (``cli.runtime_shim.run``),
+#: so a ``use: ref:`` child `core.use.UseRuntime` loads and digests, however
+#: much later in a long run, shares the exact same cache a static consent
+#: pre-scan of that same child may already have populated (#405).
+RUNTIME_CONFIG_FILE_CACHE_KEY = "_prompt_file_cache"
+
+
+def read_file_cached(path: Path, file_cache: FileReadCache | None) -> bytes:
+    """*path*'s bytes: from *file_cache* if already read there this cycle,
+    else a fresh read, recorded in *file_cache* (when given) for the next
+    caller in the same cycle to reuse instead of touching disk again.
+    """
+    if file_cache is not None:
+        cached = file_cache.get(path)
+        if cached is not None:
+            return cached
+    data = path.read_bytes()
+    if file_cache is not None:
+        file_cache[path] = data
+    return data
+
+
+def _decode_prompt_text(data: bytes) -> str:
+    """*data* as ``Path.read_text(encoding="utf-8")`` would decode it:
+    UTF-8, then universal-newline translated (``\\r\\n``/``\\r`` -> ``\\n``)
+    -- text-mode semantics, applied uniformly whether *data* came from a
+    fresh read or a :data:`FileReadCache` hit.
+    """
+    text = data.decode("utf-8")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def path_is_inside(path: Path, root: Path) -> bool:
     """True when *path* is *root* itself or lies under it; both already resolved."""
     return path == root or path.is_relative_to(root)
@@ -134,35 +178,50 @@ def resolve_prompt_file(
     document_dir: Path,
     confinement_root: Path,
     field: str,
+    file_cache: FileReadCache | None = None,
 ) -> str:
     """Read and return the text of a ``{file: <path_str>}`` prompt source.
 
     Raises :class:`PromptFileError`, naming *field*, for anything
     :func:`resolve_prompt_file_path` rejects, or a file that is missing,
-    unreadable, not UTF-8, or too large.
+    unreadable, not UTF-8, or too large. *file_cache*, when given, is the
+    single on-disk read this file gets in its whole load/consent/compile
+    cycle (#405) — shared with :func:`circuitry.core.prompt_compose.
+    document_content_digest`'s own prompt-file walk, so the bytes the
+    consent digest hashed are exactly the bytes compilation uses here.
     """
     resolved = resolve_prompt_file_path(
         path_str, document_dir=document_dir, confinement_root=confinement_root, field=field
     )
 
-    if not resolved.exists():
-        raise PromptFileError(f"{field}: 'file' {path_str!r} does not exist.")
-    if not resolved.is_file():
-        raise PromptFileError(f"{field}: 'file' {path_str!r} is not a regular file.")
+    cached = file_cache.get(resolved) if file_cache is not None else None
+    if cached is None:
+        if not resolved.exists():
+            raise PromptFileError(f"{field}: 'file' {path_str!r} does not exist.")
+        if not resolved.is_file():
+            raise PromptFileError(f"{field}: 'file' {path_str!r} is not a regular file.")
 
-    size = resolved.stat().st_size
-    if size > MAX_PROMPT_FILE_BYTES:
-        raise PromptFileError(
-            f"{field}: 'file' {path_str!r} is {size} bytes, over the "
-            f"{MAX_PROMPT_FILE_BYTES}-byte limit for a prompt file."
-        )
+        size = resolved.stat().st_size
+        if size > MAX_PROMPT_FILE_BYTES:
+            raise PromptFileError(
+                f"{field}: 'file' {path_str!r} is {size} bytes, over the "
+                f"{MAX_PROMPT_FILE_BYTES}-byte limit for a prompt file."
+            )
+        try:
+            data = resolved.read_bytes()
+        except OSError as exc:
+            raise PromptFileError(
+                f"{field}: 'file' {path_str!r} could not be read: {exc}"
+            ) from exc
+        if file_cache is not None:
+            file_cache[resolved] = data
+    else:
+        data = cached
 
     try:
-        return resolved.read_text(encoding="utf-8")
+        return _decode_prompt_text(data)
     except UnicodeDecodeError as exc:
         raise PromptFileError(f"{field}: 'file' {path_str!r} is not valid UTF-8: {exc}") from exc
-    except OSError as exc:
-        raise PromptFileError(f"{field}: 'file' {path_str!r} could not be read: {exc}") from exc
 
 
 def resolve_text_or_file(
@@ -171,6 +230,7 @@ def resolve_text_or_file(
     field: str,
     document_dir: Path | None,
     confinement_root: Path | None,
+    file_cache: FileReadCache | None = None,
 ) -> str:
     """A template/content field's text: *value* itself, or a ``{file: ...}``'s.
 
@@ -179,6 +239,7 @@ def resolve_text_or_file(
     source when *document_dir* is ``None`` — this document was generated at
     run time or has no file of its own (see the module docstring) — and for
     any ``file:`` violation :func:`resolve_prompt_file` itself raises.
+    *file_cache* is threaded straight through to it.
     """
     if isinstance(value, str):
         return value
@@ -196,6 +257,7 @@ def resolve_text_or_file(
             document_dir=document_dir,
             confinement_root=confinement_root,
             field=field,
+            file_cache=file_cache,
         )
     raise PromptFileError(f"{field} must be a string or {{file: <path>}}.")
 

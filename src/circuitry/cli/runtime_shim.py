@@ -42,6 +42,7 @@ from ..core.interface_inputs import check_interface_inputs
 from ..core.label import clean_label as _clean_label
 from ..core.label import render_document_label
 from ..core.parsed_stdout import parsed_stdout_errors
+from ..core.prompt_files import RUNTIME_CONFIG_FILE_CACHE_KEY
 from ..core.prompt_record import prompt_sent_errors
 from ..core.report import build_report_payload
 from ..core.runtime_plugins import (
@@ -530,7 +531,15 @@ def run(req: RunRequest) -> RunResult:
         # A skipped (untrusted) project config, first, so a failing run
         # still says which settings it ran without.
         warnings.extend(cfg.resolution_warnings())
-        orch = load_orchestration_file(req.orchestration_path)
+        # This run's single on-disk read for the document and every prompt
+        # file it references (#405): built once, here, and threaded through
+        # the consent gate below, the `document_hash` stamped further down
+        # and the actual compile step, so none of them can see different
+        # bytes than another -- and, via `runtime_config` once that exists,
+        # through to a `use: ref:` child's own load/digest/compile, however
+        # much later in the run it actually dispatches.
+        file_cache: dict[Path, bytes] = {}
+        orch = load_orchestration_file(req.orchestration_path, file_cache=file_cache)
 
         allowlist_errors = check_allowlist(
             orch=orch, config=cfg, root_path=req.orchestration_path
@@ -568,6 +577,7 @@ def run(req: RunRequest) -> RunResult:
             store_path=trust_store_path(),
             allow_capabilities=req.allow_capabilities,
             prompt=req.capability_prompt,
+            file_cache=file_cache,
         )
         # A path inside a library source's own cache directory names the
         # exact same fetched content a library-name run would resolve to
@@ -695,6 +705,11 @@ def run(req: RunRequest) -> RunResult:
         runtime_config["_orchestration_dir"] = str(
             req.orchestration_path.resolve().parent
         )
+        # This run's own file-read cache (#405), so a `use: ref:` child
+        # `core.use.UseRuntime` loads and digests later shares the exact
+        # same single read the gate above (and `document_hash` below) used,
+        # however much later in the run it actually dispatches.
+        runtime_config[RUNTIME_CONFIG_FILE_CACHE_KEY] = file_cache
         # What every nested runtime builds — `use` children, generated plans,
         # profile provider overrides — is checked against these as it is
         # built; the document check above only sees the document's text.
@@ -836,6 +851,7 @@ def run(req: RunRequest) -> RunResult:
                     is_cache_path=document_is_cache_path,
                     remote_library_source=req.remote_library_source,
                 ),
+                file_cache=file_cache,
             )
         except OSError:
             # The document check above already loaded this same file; an
@@ -866,7 +882,9 @@ def run(req: RunRequest) -> RunResult:
         # already in here, isn't JSON-serializable at all — dropped before
         # this snapshot, never before a live call reads `effective.runtime`.
         _snapshot_runtime = {
-            k: v for k, v in effective.runtime.items() if k != _CONCURRENCY_LIMITER_KEY
+            k: v
+            for k, v in effective.runtime.items()
+            if k not in (_CONCURRENCY_LIMITER_KEY, RUNTIME_CONFIG_FILE_CACHE_KEY)
         }
         state["runtime"]["effective_settings"] = {
             "model": effective.model,
@@ -946,6 +964,12 @@ def run(req: RunRequest) -> RunResult:
             # run by path can name any `within` for a prompt's
             # `file: {from: ...}`; a limited one stays inside its project.
             trusted=document_trust_document or cfg.trust_orchestration_runtime,
+            # Both read through the same single on-disk read the consent
+            # gate and `document_hash` above already used (#405); passing
+            # `resolved_path` makes this call compute and return that exact
+            # digest again, for free, as `root_def.content_digest`.
+            file_cache=file_cache,
+            resolved_path=req.orchestration_path,
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names

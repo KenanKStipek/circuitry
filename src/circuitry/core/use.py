@@ -909,7 +909,13 @@ class UseRuntime:
             return Path(str(self._pin["cache_path"]))
         return default_project_root(document_dir)
 
-    def _content_digest(self, resolved_path: Path, child_orch: dict[str, Any]) -> str:
+    def _content_digest(
+        self,
+        resolved_path: Path,
+        child_orch: dict[str, Any],
+        *,
+        file_cache: dict[Path, bytes] | None = None,
+    ) -> str:
         """SHA-256 of *resolved_path*'s bytes, plus every prompt file it
         references (#396) — capability consent (``cof trust``) is recorded
         by this digest, so editing a referenced prompt file must ask again
@@ -917,7 +923,11 @@ class UseRuntime:
         Delegates to ``core.prompt_compose.document_content_digest``, the
         same function ``cof trust``/``cli.document_consent`` use, so a
         ``ref:`` child consented to from either surface is found by the
-        other at run time (#396 — the two must hash identically).
+        other at run time (#396 — the two must hash identically). *file_cache*,
+        when given, is this child's single on-disk read for its whole
+        load/consent/compile cycle (#405) — the same one its own compile
+        step reads through later, so this digest and that compile step
+        never see different bytes for the same file.
         """
         from .prompt_compose import document_content_digest
 
@@ -926,6 +936,7 @@ class UseRuntime:
             resolved_path,
             child_orch,
             confinement_root=self._confinement_root_for(document_dir),
+            file_cache=file_cache,
         )
 
     def _check_interface(
@@ -1040,11 +1051,18 @@ class UseRuntime:
 
         # File-based resolution
         from ..cli.orchestration_loader import load_orchestration_file
+        from .prompt_files import RUNTIME_CONFIG_FILE_CACHE_KEY
 
         resolved_path = self._resolve_orchestration()
         identity = str(resolved_path.resolve())
-        child_orch = load_orchestration_file(resolved_path)
-        digest = self._content_digest(resolved_path, child_orch)
+        # This run's own file-read cache (#405), when the caller built one
+        # (`cli.runtime_shim.run`) — shared with the compile step this
+        # child gets further down `execute_use`, so neither this digest nor
+        # that compile reads this child's own file, or any prompt file it
+        # references, more than once for the whole run.
+        file_cache = self.runtime_config.get(RUNTIME_CONFIG_FILE_CACHE_KEY)
+        child_orch = load_orchestration_file(resolved_path, file_cache=file_cache)
+        digest = self._content_digest(resolved_path, child_orch, file_cache=file_cache)
         # A path/ref child gets the same structural check `cof check` gives a
         # file named on the command line — `cof check` on the parent never
         # loads it, and nothing else would before it runs.
@@ -1617,12 +1635,21 @@ class UseRuntime:
                         and not meta["inline"]
                         and self._pin is None
                     )
+                    from .prompt_files import (
+                        RUNTIME_CONFIG_FILE_CACHE_KEY as _FILE_CACHE_KEY,
+                    )
+
                     child_root = compile_orchestration(
                         orch=child_orch,
                         root_name="prime",
                         document_dir=child_document_dir,
                         confinement_root=child_confinement_root,
                         trusted=child_trusted,
+                        # Reused rather than re-derived: this child's own file-read
+                        # cache (#405), already populated above by `_load_child_orch`/
+                        # `_content_digest`, so its own `{file: ...}` sources read
+                        # here see the exact same bytes that digest already hashed.
+                        file_cache=self.runtime_config.get(_FILE_CACHE_KEY),
                     )
                     # "A child document run with `use` sees only its own
                     # declared prompts" (#396) — set fresh here rather than
