@@ -171,16 +171,22 @@ def redact_url(url: str, marker: str) -> str:
       (``https://tok@host/@acme/widget``).
     - **A ``:`` before a later ``@``.** When an ``@`` comes after the
       authority (in the path, query or fragment) and a ``:`` appears
-      anywhere between the start of the host (right after any
-      authority userinfo just cut) and that later ``@``, the whole
-      span up to that ``@`` is replaced instead -- a port included
-      (``http://localhost:8080/@alice`` is cut: a password containing
-      a ``/`` whose first part happens to be all digits,
+      anywhere between the start of the ORIGINAL authority --
+      userinfo included, not just the host -- and that later ``@``,
+      the whole span up to that ``@`` is replaced instead -- a port
+      included (``http://localhost:8080/@alice`` is cut: a password
+      containing a ``/`` whose first part happens to be all digits,
       ``http://user:12/34@host``, must still be cut in full, so this
       never special-cases a port-shaped ``:`` suffix). This catches a
-      password hidden behind a ``/`` (``http://alice:secret/x@host``).
-      No ``:`` at all (``https://medium.com/@alice/post``, ``?q=a@b``)
-      leaves the ``@`` untouched.
+      password hidden behind a ``/`` (``http://alice:secret/x@host``),
+      including one whose own userinfo contains an ``@`` of its own
+      (``http://alice:p@ss/word@proxy:3128``: the ``:`` inside
+      ``alice:p@ss`` still counts, even though it comes before that
+      ``@``, not just after it). No ``:`` at all
+      (``https://medium.com/@alice/post``, ``?q=a@b``) leaves the
+      ``@`` untouched. This can over-redact: ``http://u:p@host/@alice``
+      is cut all the way to the later ``@``, matching `main`'s own
+      request-URL behaviour.
     - **No ``://`` at all.** A schemeless value with an ``@`` is cut
       before its last ``@`` unconditionally -- no ``:`` required, and
       whitespace is no exception: every caller here has already
@@ -231,17 +237,20 @@ def redact_url(url: str, marker: str) -> str:
             if idx != -1:
                 authority_end = min(authority_end, idx)
 
-        host_start = 0
         authority = rest[:authority_end]
-        if "@" in authority:
-            authority_at = authority.rfind("@")
-            rest = userinfo_prefix + rest[authority_at + 1 :]
-            authority_end -= authority_at + 1 - len(userinfo_prefix)
-            host_start = len(userinfo_prefix)
+        authority_at = authority.rfind("@") if "@" in authority else -1
 
+        # The ":" search runs from the start of the ORIGINAL authority
+        # (userinfo included), never from the host alone: a password
+        # that itself contains an "@" ("alice:p@ss") must still be
+        # found by this search when a later "@" follows it, or its own
+        # tail ("ss/word", past the authority's own cut) would survive
+        # uncut.
         last_at = rest.rfind("@")
-        if last_at >= authority_end and ":" in rest[host_start:last_at]:
-            rest = rest[:host_start] + userinfo_prefix + rest[last_at + 1 :]
+        if last_at >= authority_end and ":" in rest[:last_at]:
+            rest = userinfo_prefix + rest[last_at + 1 :]
+        elif authority_at != -1:
+            rest = userinfo_prefix + rest[authority_at + 1 :]
 
     hash_idx = rest.find("#")
     body = rest if hash_idx == -1 else rest[:hash_idx]

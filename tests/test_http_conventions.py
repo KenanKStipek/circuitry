@@ -14,6 +14,7 @@ from circuitry.http_conventions import (
     redact_request_url,
     redact_url,
     resolve_proxy,
+    scrub_embedded_urls,
     split_proxy_url,
     strip_request_url_userinfo,
 )
@@ -351,6 +352,49 @@ def test_redact_url_masks_a_credential_query_key_among_other_keys() -> None:
     assert redact_request_url(url) == "https://host/x?foo=1&api_key=%2A%2A%2A&bar=2"
 
 
+def test_redact_url_masks_a_credential_query_key_decoded_lossily_on_invalid_utf8() -> None:
+    """Issue #827 follow-up: ``urllib.parse.unquote``'s own default
+    (``errors="replace"``) substitutes U+FFFD for an invalid byte
+    sequence -- ``tok%65n%ff`` decodes to ``"token�"``, which
+    still contains ``"token"``.
+    """
+    url = "https://host/x?tok%65n%ff=abcd1234"
+    assert redact_url(url, "***REDACTED***") == "https://host/x?tok%65n%ff=***REDACTED***"
+
+
+def test_redact_url_masks_a_credential_query_key_folded_as_unicode_case() -> None:
+    """Issue #827 follow-up: ``re.IGNORECASE`` folds the Kelvin sign
+    (U+212A) to ``k``, matching ``key`` against a decoded key of
+    ``"Key"``.
+    """
+    url = "https://h/?%E2%84%AAey=abcd1234"
+    assert redact_url(url, "***REDACTED***") == "https://h/?%E2%84%AAey=***REDACTED***"
+
+
+def test_redact_url_cuts_the_whole_authority_when_its_own_userinfo_colon_precedes_a_later_at_sign() -> (
+    None
+):
+    """Issue #827 follow-up: the ``:`` search for a later ``@`` runs
+    from the start of the ORIGINAL authority (userinfo included), not
+    just the host -- a password containing an ``@`` of its own
+    (``alice:p@ss``) must still be found, or its own tail (past the
+    authority's own cut) survives uncut.
+    """
+    for sep in ("/", "?", "#"):
+        url = f"http://alice:p@ss{sep}word@proxy:3128"
+        assert redact_url(url, "") == "http://proxy:3128"
+        assert redact_url(url, "***REDACTED***") == "http://***REDACTED***@proxy:3128"
+
+
+def test_redact_url_cuts_to_the_later_at_sign_when_the_authority_already_has_its_own_userinfo() -> (
+    None
+):
+    """Issue #827 follow-up correction: this over-redaction is
+    accepted -- it matches `main`'s own request-URL behaviour.
+    """
+    assert redact_url("http://u:p@host/@alice", "") == "http://alice"
+
+
 @pytest.mark.parametrize("char", (" ", "\r"))
 def test_check_url_never_leaks_a_password_containing_whitespace_or_a_control_char(
     char: str,
@@ -586,3 +630,15 @@ def test_split_proxy_url_stops_the_authority_at_a_query_string_or_fragment() -> 
     """
     assert split_proxy_url("http://proxy.corp:3128?x").hostport == "proxy.corp:3128"
     assert split_proxy_url("http://proxy.corp:3128#x").hostport == "proxy.corp:3128"
+
+
+def test_scrub_embedded_urls_ends_a_url_at_a_unit_separator_even_before_a_colon_and_at_sign() -> (
+    None
+):
+    """Issue #827 follow-up: U+001F is whitespace to Python's own
+    ``\\s`` (what ``_EMBEDDED_URL_RE`` uses) -- it ends the embedded
+    URL at ``/a``, so the ``:c@d`` past it is never even recognized as
+    part of a URL, let alone cut for a credential.
+    """
+    text = "bad url http://h/a\x1fb:c@d"
+    assert scrub_embedded_urls(text) == text
