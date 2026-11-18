@@ -1068,8 +1068,10 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   [`runtime.state.parsed_stdout: drop`](#recording-parsed-stdout-runtimestateparsed_stdout)
   keeps it out of state. Empty or invalid stdout fails the effect, naming the exit code and
   quoting the first 200 characters of stdout; `meta.stdout`, `meta.stderr` and `meta.exit_code`
-  still record the real values, the same fields a non-zero exit of the same tool already
-  records, also under `on_error: continue`. Deeply nested stdout fails the same way, never as
+  still record the real values, also under `on_error: continue` — the same fields a *successful*
+  run of the same tool always records. (A non-zero exit without `allow_nonzero` has no such
+  values to record either way: it fails before a result exists, and `meta.stdout`/`stderr`/
+  `exit_code` stay null.) Deeply nested stdout fails the same way, never as
   an uncaught recursion error. With `allow_nonzero: true` a non-zero exit's stdout is parsed
   the same way and `meta.exit_code` keeps the code. `parse: ""` is the same as omitting it
   (off) — a template that renders empty doesn't fail the effect. Any other `parse` value fails

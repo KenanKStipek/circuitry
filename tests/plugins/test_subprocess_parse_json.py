@@ -82,6 +82,16 @@ def test_parse_null_is_the_same_as_omitted(tmp_path: Path) -> None:
     assert result.value == '{"ok": true}'
 
 
+@pytest.mark.parametrize("parse", ["", "  "])
+def test_parse_empty_or_blank_string_is_the_same_as_omitted(
+    tmp_path: Path, parse: str
+) -> None:
+    result = _generic(_script(tmp_path, '{"ok": true}')).execute(
+        params={"args": [], "parse": parse}
+    )
+    assert result.value == '{"ok": true}'
+
+
 def test_generic_tool_invalid_json_fails_showing_the_start_of_stdout(
     tmp_path: Path,
 ) -> None:
@@ -101,6 +111,20 @@ def test_invalid_json_excerpt_is_bounded(tmp_path: Path) -> None:
     assert "x" * 200 in str(excinfo.value)
     assert "x" * 201 not in str(excinfo.value)
     assert len(str(excinfo.value)) < 600
+
+
+def test_deeply_nested_stdout_fails_as_an_ordinary_parse_failure(
+    tmp_path: Path,
+) -> None:
+    """Stdout nested beyond Python's recursion limit raises a plain
+    ``RecursionError`` from ``json.loads`` -- this must not escape as
+    that, only as the same "not valid JSON" failure any other decode
+    error produces (#576)."""
+    stdout = "[" * 100_000 + "]" * 100_000
+    tool = _generic(_script(tmp_path, stdout))
+    with pytest.raises(ValueError, match="stdout is not valid JSON") as excinfo:
+        tool.execute(params={"args": [], "parse": "json"})
+    assert not isinstance(excinfo.value, RecursionError)
 
 
 @pytest.mark.parametrize("stdout", ["", "  \n\t\n"])
@@ -251,6 +275,9 @@ def test_tool_effect_invalid_json_fails_the_effect() -> None:
     assert node["value"] is None
     assert "not valid JSON" in node["meta"]["error"]
     assert "plain text" in node["meta"]["error"]
+    assert node["meta"]["stdout"] == "plain text\n"
+    assert node["meta"]["stderr"] == ""
+    assert node["meta"]["exit_code"] == 0
 
 
 def test_e2e_cof_run_subprocess_secret_straddling_parse_json_cut_never_leaks(

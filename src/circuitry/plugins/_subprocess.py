@@ -37,8 +37,9 @@ class ParseFailure(ValueError):
     """``parse: json`` on empty or invalid stdout -- carries the process's
     own raw stdout/stderr/exit code (already secret-scrubbed), so a failed
     effect still records them the way a successful run of the same tool
-    would (#576). ``core.tool`` reads these three attributes off any
-    raised exception, by name, not by this class."""
+    would (#576). ``core.tool`` reads them off an instance of this
+    class, specifically -- a plain nonzero-exit failure carries no such
+    attributes and still records them as null."""
 
     def __init__(self, message: str, *, stdout: str, stderr: str, exit_code: int) -> None:
         super().__init__(message)

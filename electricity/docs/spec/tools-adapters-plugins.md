@@ -267,23 +267,29 @@ Output: `value = stdout`; `raw = {"args": cmd[1:], "cwd": cwd, "binary": binary}
 `stdout`/`stderr`/`exit_code` populated.
 
 **`parse: json`** (`parse_mode`/`_parse_json_stdout`, `_subprocess.py`; shared by `shell` and
-`GenericSubprocessTool`): `parse` absent or null is off; a string equal to `json` after `strip()
-.lower()` turns it on; anything else raises `ValueError("{plugin}: params['parse'] must be 'json'
-(or omitted), got {value!r}.")` before the process runs (for `shell`, after the allowlist gate and
-before the `args` checks). When on, `value = json.loads(stdout)` (stdout stays on `stdout`),
-applied after the nonzero-exit check, so a nonzero exit still fails first unless `allow_nonzero`
-(then its stdout is parsed too). Whitespace-only stdout raises `ValueError("{binary} parse: json:
-stdout is empty (exit {code}).")`; a decode failure raises `ValueError("{binary} parse: json:
-stdout is not valid JSON (exit {code}): {json_error}; stdout begins {stdout[:200]!r}")`, with
-`...` appended when stdout is longer than 200 characters. `{binary}` is the resolved path.
+`GenericSubprocessTool`): `parse` absent, null, or an empty (or whitespace-only) string is off; a
+string equal to `json` after `strip().lower()` turns it on; anything else raises
+`ValueError("{plugin}: params['parse'] must be 'json' (or omitted), got {value!r}.")` before the
+process runs (for `shell`, after the allowlist gate and before the `args` checks). When on,
+`value = json.loads(stdout)` (stdout stays on `stdout`), applied after the nonzero-exit check, so
+a nonzero exit still fails first unless `allow_nonzero` (then its stdout is parsed too).
+Whitespace-only stdout raises `ParseFailure("{binary} parse: json: stdout is empty (exit
+{code}).", ...)`; a decode failure, including a `RecursionError` from stdout nested beyond
+Python's recursion limit, raises `ParseFailure("{binary} parse: json: stdout is not valid JSON
+(exit {code}): {json_error}; stdout begins {stdout[:200]!r}", ...)`, with `...` appended when
+stdout is longer than 200 characters. `{binary}` is the resolved path. `ParseFailure` (a
+`ValueError` subclass, #576) carries the process's own `stdout`/`stderr`/`exit_code`
+(already secret-scrubbed), so `core/tool.py` records them on `meta` exactly as a successful run
+would, including under `on_error: continue`.
 
 A parsed result carries `stdout_parsed = True` (`ToolResult.stdout_parsed`). Under
 **`runtime.state.parsed_stdout: drop`** (#592, `core/parsed_stdout.py`) the tool runtime then
 records `meta.stdout = None` plus `meta.stdout_chars` (code points of the whole stdout) and
 `meta.stdout_sha256` (lowercase hex SHA-256 of its UTF-8 bytes); the two new keys follow
 `params_rendered` in key order and are popped at the start of every attempt. `full` (the
-default) records stdout as before. A failed parse raises before a result exists, so it records
-`meta.stdout = None` and no new key in either mode. Any other value is a configuration error,
+default) records stdout as before. A failed parse's raw output is unaffected by this setting --
+it always records the real `meta.stdout`/`stderr`/`exit_code`, never `None`, and never the
+`stdout_chars`/`stdout_sha256` pair. Any other value is a configuration error,
 `runtime.state.parsed_stdout must be 'full' or 'drop', got {value!r}.`, reported by `cof check`
 after the `runtime.state.prompt_sent` error and raised by a run right after it.
 

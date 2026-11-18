@@ -23,7 +23,7 @@ from ..cli.redaction import redact
 from ..generated_doc import dispatch_errors
 from ..output import console as _console
 from ..output import live_region as _live_region
-from ..plugins._subprocess import GenericSubprocessTool
+from ..plugins._subprocess import GenericSubprocessTool, ParseFailure
 from ..plugins.agent import AgentPlugin
 from ..plugins.base import ToolResult
 from ..plugins.cel import CelPlugin
@@ -1208,13 +1208,8 @@ class ToolRuntime:
 
             except Exception as e:
                 failure = e
-                stdout_attr = getattr(e, "stdout", None)
-                if stdout_attr is not None:
-                    parse_raw_output = (
-                        stdout_attr,
-                        getattr(e, "stderr", None),
-                        getattr(e, "exit_code", None),
-                    )
+                if isinstance(e, ParseFailure):
+                    parse_raw_output = (e.stdout, e.stderr, e.exit_code)
                 retryable = (
                     not timeout_unresolved
                     and not prompt_file_unread

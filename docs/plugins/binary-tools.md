@@ -132,8 +132,11 @@ effect:
 - Empty (or whitespace-only) stdout, and stdout that is not valid JSON,
   fail the effect. The message names the exit code and quotes the first
   200 characters of stdout; `meta.stdout`, `meta.stderr` and
-  `meta.exit_code` still record the real values, the same fields a
-  non-zero exit already records, also under `on_error: continue`.
+  `meta.exit_code` still record the real values, also under
+  `on_error: continue` — the same fields a successful run always records.
+  (A non-zero exit without `allow_nonzero` has none of these to record
+  either way, and still leaves them null.) Deeply nested stdout fails
+  the same way, never as an uncaught recursion error.
 - With `allow_nonzero: true`, a non-zero exit's stdout is parsed the same
   way and `meta.exit_code` keeps the code; if that stdout is not JSON the
   effect fails as above.
