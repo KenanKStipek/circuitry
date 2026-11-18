@@ -1324,13 +1324,16 @@ host `env` (`runtime.plugins.<name>.env`, see
   (#611), recursively, as far as the compiler resolves them: a `path:`
   child inherits its parent's trust, so its own `{secret: ...}` resolves
   from the root's `runtime.secrets` exactly as an actual run would, and
-  `cof check` shows it that way, naming the child
-  (`Secrets: billing (host), github (document), named by child.yml`;
+  `cof check` shows it that way, naming the child and, apart from the
+  secrets list with a semicolon rather than its comma, printed relative to
+  the root's own folder when it is inside it
+  (`Secrets: billing (host), github (document; named by child.yml)`;
   `--json` adds `secret_children`, the resolved path of every child naming
   each secret, by name). A secret both the root and a child name is listed
-  once, with `root` and the child both in `secret_children`. A `use: ref:`
-  or `inline:` child is always limited whatever its parent's trust, so it
-  never resolves the root's own secrets and is never walked this way — one
+  once, with `root` and the child both in `secret_children`
+  (`z (document; named by root, flows/child.yml)`). The deprecated
+  `orchestration:` field, like `use: ref:`, is always limited once it
+  falls back to the library, so it is never walked this way either — one
   that names a secret anyway is still refused when it actually runs, the
   same as any other limited document. Checking a document on its own (not
   through a root's walk) keeps this view unchanged — its own definitions
