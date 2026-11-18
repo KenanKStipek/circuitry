@@ -218,7 +218,7 @@
     },
     {
       "url": "alice:pw@host/x?next=http://y",
-      "redacted": "host/x?next=http%3A%2F%2Fy"
+      "redacted": "host/x?next=http://y"
     },
     {
       "url": "alice:p://w@host/x",

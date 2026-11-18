@@ -246,15 +246,48 @@ def build_redaction_cases() -> list[dict]:
     cases.append(redact_case("https://u:p@h/p?#f"))  # empty query, present fragment
     cases.append(redact_case("https://u:p@h[invalid"))  # unbalanced bracket: unchanged
 
-    # --- issue #819: the same last-@ cut as redact_request_url ---
-    cases.append(redact_case("alice:hunter2hunter2@host:1234"))  # no :// at all
-    cases.append(redact_case("https://alice:443/x@api.example.test/v1"))  # @ behind the path
+    # --- issue #819 follow-up: the URL rule applies only to a string
+    # under a URL key (url, base_url, api_base, endpoint, expo_url,
+    # proxy, *_url, *_proxy), at any depth -- never to an ordinary
+    # string, which redacts exactly as it always has on `main`. ---
     cases.append(
-        redact_case("https://api.example.test/search?api_key=hunter2hunter2")
+        redact_case({"base_url": "alice:hunter2hunter2@host:1234"})
+    )  # no :// at all
+    cases.append(
+        redact_case({"base_url": "https://alice:443/x@api.example.test/v1"})
+    )  # @ behind the path
+    cases.append(
+        redact_case({"base_url": "https://api.example.test/search?api_key=hunter2hunter2"})
     )  # credential-like query key, no userinfo at all
+    cases.append(
+        redact_case({"endpoint": "http://alice:longsecret/x@127.0.0.1"})
+    )  # a password hidden behind a /, at any depth under a URL key
+    cases.append(
+        redact_case({"nested": {"PROXY_URL": "alice:longsecret@host:1"}})
+    )  # schemeless, nested, key matched case-insensitively
+    cases.append(
+        redact_case(
+            {"base_url": "https://host/x?foo=1&api_key=sk-test&bar=2"}
+        )
+    )  # a credential query key among other keys, order preserved
+
+    # --- issue #819 follow-up: a credential-free URL under a URL key
+    # comes back byte for byte -- no re-encoding, no case change ---
+    cases.append(redact_case({"url": "https://medium.com/@alice/post"}))
+    cases.append(redact_case({"url": "https://x.test/?q=a@b"}))
+    cases.append(redact_case({"url": "https://host/p?q=a/b"}))
+    cases.append(redact_case({"url": "https://host/p?q=a%20b"}))
+    cases.append(redact_case({"url": "https://host/p?flag"}))
+    cases.append(redact_case({"url": "https://host/p?%7e"}))
+    cases.append(redact_case({"url": "https://host/p?q=é"}))
+    cases.append(redact_case({"url": "HTTPS://host/p"}))
+    cases.append(redact_case({"url": "https://host/p?"}))
+    cases.append(redact_case({"url": "https://host/p?&"}))
+    cases.append(redact_case({"url": "https://host/path#frag?a=1"}))
 
     # --- issue #819 follow-up: the redaction gate must not treat plain
-    # prose, an email address or an @-bearing identifier as a URL ---
+    # prose, compact JSON, a mailto: link, an image digest, an email
+    # address or an @-bearing identifier as a URL ---
     cases.append(redact_case({"to": ["alice@example.test"]}))  # no : before the @
     cases.append(
         redact_case('<a href="https://x.test/?a=1">x</a> more')
@@ -269,6 +302,18 @@ def build_redaction_cases() -> list[dict]:
     cases.append(
         redact_case("https://host/path#frag?a=1")
     )  # a ? inside the fragment (after #) is never a query delimiter
+    cases.append(
+        redact_case('{"id":1,"email":"alice@example.test"}')
+    )  # compact JSON with an e-mail address, not under a URL key
+    cases.append(
+        redact_case('{"next":"https://api.example.test/items?page=2"}')
+    )  # compact JSON with a ? link
+    cases.append(redact_case("mailto:alice@example.test"))
+    cases.append(redact_case("python:3.11@sha256:" + "a" * 64))  # image digest
+    cases.append(
+        redact_case("https://a.test/x?y=1\nhttps://b.test/z")
+    )  # a multi-line value naming two URLs, not a single URL value
+    cases.append(redact_case("https://h/x?q=1\n"))  # a URL with a trailing newline
 
     return cases
 

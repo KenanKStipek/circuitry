@@ -6,59 +6,19 @@
 //! this is never third-party text -- it is Circuitry's own, compared
 //! exactly.
 
-// `http_conventions.py::_mask_credential_query_params`'s own
-// `looks_like_credential_key`/`parse_qsl`/`percent_decode_plus` --
-// one copy of the rule, in `electricity-redaction` (the lower
-// crate this one already depends on for `http_error_excerpt`'s own
-// `redact()` call), used through
-// `electricity_redaction::mask_credential_query_params` below rather
-// than reimplemented here a second time.
+// `http_conventions.py::redact_url` -- one copy of the URL
+// redaction rule, in `electricity-redaction` (the lower crate this
+// one already depends on for `http_error_excerpt`'s own `redact()`
+// call), used through `electricity_redaction::redact_url` below
+// rather than reimplemented here a second time.
 
-/// `http_conventions.strip_request_url_userinfo` -- the LAST `@`
-/// inside [`crate::http::http_url::urlsplit`]'s own `netloc`, not a
-/// `/`, `?`, `#` or whitespace boundary: this always receives one
-/// whole URL, never prose with one embedded somewhere, so building the
-/// redaction from the parsed authority directly -- instead of a regex-
-/// style heuristic -- means a password containing any ASCII control
-/// character or whitespace (none of which end `urlsplit`'s own
-/// `netloc` the way `/` does) still comes out fully removed (issue
-/// #778).
-fn strip_request_url_userinfo(url: &str) -> String {
-    let parsed = crate::http::http_url::urlsplit(url, "");
-    let Some(at) = parsed.netloc.rfind('@') else {
-        return url.to_string();
-    };
-    let netloc = parsed.netloc[at + 1..].to_string();
-    crate::http::http_url::urlunsplit(&crate::http::http_url::Split { netloc, ..parsed })
-}
-
-/// `http_conventions._redact_url` -- the two masks every refusal
-/// message that names a request URL (never a proxy value, see
-/// [`redact_proxy_value`]) applies before naming it: userinfo
-/// stripped, then any credential-like query parameter masked. Never
-/// called directly outside this module ([`redact_request_url`] is the
-/// one public redactor for a request URL); kept for the test that
-/// exercises it in isolation.
-#[cfg(test)]
-fn redact_url(url: &str) -> String {
-    strip_request_url_userinfo(&electricity_redaction::mask_credential_query_params(url))
-}
-
-/// `http_conventions.redact_proxy_value` -- a proxy value has no
-/// meaningful path, so (unlike [`redact_request_url`]) this never stops at a
-/// `/`, `?`, `#` or whitespace boundary: only the LAST `@` in the
-/// *whole* value (after its `scheme://`, when it has one) counts, so a
-/// password containing any of those still comes out fully removed
-/// (issue #778).
+/// `http_conventions.redact_proxy_value` -- *value* (a proxy URL or
+/// value, normalized or not) redacted through
+/// [`electricity_redaction::redact_url`], dropping any credential
+/// outright (the classic, marker-less form every refusal message that
+/// names a proxy value uses).
 pub fn redact_proxy_value(value: &str) -> String {
-    let (prefix, tail) = match value.find("://") {
-        Some(idx) => (&value[..idx + 3], &value[idx + 3..]),
-        None => ("", value),
-    };
-    match tail.rfind('@') {
-        Some(at) => format!("{prefix}{}", &tail[at + 1..]),
-        None => value.to_string(),
-    }
+    electricity_redaction::redact_url(value, "")
 }
 
 /// `http_conventions._proxy_authority` -- the authority text of
@@ -212,39 +172,15 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
     ))
 }
 
-/// *url*, redacted for any refusal, warning, event, state, hint or
-/// `host:` text that names a request URL -- the one function every
-/// such caller uses, never `redact_url` (the private test helper) or
-/// [`redact_proxy_value`] directly: the whole value is cut at the
-/// LAST `@` (never just the authority's own userinfo) when *url*'s
-/// parsed `netloc` is empty (a userinfo-bearing value with no scheme
-/// at all, or one whose scheme has no `//` authority of its own even
-/// though the literal text `://` appears somewhere later in it, e.g.
-/// in a query value -- neither leaves [`crate::http::http_url::urlsplit`]
-/// any authority for [`strip_request_url_userinfo`] to find anything
-/// in) or [`at_follows_netloc`] is true (a password hidden behind a
-/// `/`, `?` or `#` can still smuggle a second, real host past the
-/// parsed authority); [`strip_request_url_userinfo`] otherwise. Either
-/// way, the cut runs *before* any credential-like query parameter is
-/// masked: masking first re-encodes a query string's own `@` as
-/// `%40`, so a cut that ran afterward would no longer find it (issue
-/// #778). Shared by every surface that names a request URL after
-/// parsing it: [`check_scheme`], [`strict_port`],
+/// *url*, redacted through [`electricity_redaction::redact_url`] with
+/// no marker (the credential dropped outright, with its `@`) -- the
+/// one function every refusal, warning, event, state or hint that
+/// names a request URL uses. Shared by every surface that names a
+/// request URL after parsing it: [`check_scheme`], [`strict_port`],
 /// `curl_text::redact_host_url`, `curl_text::curl_failure_message`,
 /// and every adapter error that names a request URL after I/O.
 pub fn redact_request_url(url: &str) -> String {
-    let netloc = crate::http::http_url::urlsplit(url, "").netloc;
-    let cut = if netloc.is_empty() {
-        match url.rsplit_once('@') {
-            Some((_, after)) => after.to_string(),
-            None => url.to_string(),
-        }
-    } else if at_follows_netloc(url, &netloc) {
-        redact_proxy_value(url)
-    } else {
-        strip_request_url_userinfo(url)
-    };
-    electricity_redaction::mask_credential_query_params(&cut)
+    electricity_redaction::redact_url(url, "")
 }
 
 /// The length, in bytes from the start of *s*, of a `scheme://...` URL
@@ -550,13 +486,16 @@ mod tests {
         // `electricity-adapters::transport` cuts its scheme at the first
         // literal `://`; for these values that text runs into the
         // userinfo. cof's `check_url` names `alice` for both, and the
-        // same whole message (issue #778).
+        // same whole message (issue #778). The query's own `next` value
+        // is left exactly as written, never re-encoded -- only a
+        // credential-like query key is ever touched (issue #819
+        // follow-up).
         for (cut, url, named_url) in [
             ("alice:p", "alice:p://w@host/x", "host/x"),
             (
                 "alice:pw@host/x?next=http",
                 "alice:pw@host/x?next=http://y",
-                "host/x?next=http%3A%2F%2Fy",
+                "host/x?next=http://y",
             ),
         ] {
             let err = check_scheme(cut, url, &["http", "https"]).unwrap_err();
@@ -577,29 +516,23 @@ mod tests {
     }
 
     #[test]
-    fn mask_credential_query_params_masks_a_matching_key_only() {
+    fn redact_url_masks_a_matching_query_key_only() {
         assert_eq!(
-            electricity_redaction::mask_credential_query_params(
-                "https://host/x?api_key=sk-test&q=widgets"
-            ),
+            redact_request_url("https://host/x?api_key=sk-test&q=widgets"),
             "https://host/x?api_key=%2A%2A%2A&q=widgets"
         );
     }
 
     #[test]
-    fn mask_credential_query_params_leaves_a_url_with_no_query_unchanged() {
-        assert_eq!(
-            electricity_redaction::mask_credential_query_params("https://host/x"),
-            "https://host/x"
-        );
+    fn redact_url_leaves_a_url_with_no_query_unchanged() {
+        assert_eq!(redact_request_url("https://host/x"), "https://host/x");
     }
 
     #[test]
     fn redact_url_strips_userinfo_and_masks_a_credential_query_param() {
-        assert_eq!(
-            redact_url("https://user:s3cr3t@host/x?api_key=sk-test"),
-            "https://host/x?api_key=%2A%2A%2A"
-        );
+        let password = "pw_value_pw_value";
+        let url = format!("https://user:{password}@host/x?api_key=sk-test");
+        assert_eq!(redact_request_url(&url), "https://host/x?api_key=%2A%2A%2A");
     }
 
     #[test]

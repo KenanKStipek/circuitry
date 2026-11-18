@@ -472,32 +472,568 @@
     },
     {
       "input": {
-        "t": "str",
-        "v": "alice:hunter2hunter2@host:1234"
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "alice:hunter2hunter2@host:1234"
+            }
+          ]
+        ]
       },
       "output": {
-        "t": "str",
-        "v": "***REDACTED***@host:1234"
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "***REDACTED***@host:1234"
+            }
+          ]
+        ]
       }
     },
     {
       "input": {
-        "t": "str",
-        "v": "https://alice:443/x@api.example.test/v1"
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://alice:443/x@api.example.test/v1"
+            }
+          ]
+        ]
       },
       "output": {
-        "t": "str",
-        "v": "https://***REDACTED***@api.example.test/v1"
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://***REDACTED***@api.example.test/v1"
+            }
+          ]
+        ]
       }
     },
     {
       "input": {
-        "t": "str",
-        "v": "https://api.example.test/search?api_key=hunter2hunter2"
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://api.example.test/search?api_key=hunter2hunter2"
+            }
+          ]
+        ]
       },
       "output": {
-        "t": "str",
-        "v": "https://api.example.test/search?api_key=%2A%2A%2A"
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://api.example.test/search?api_key=***REDACTED***"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "endpoint"
+            },
+            {
+              "t": "str",
+              "v": "http://alice:longsecret/x@127.0.0.1"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "endpoint"
+            },
+            {
+              "t": "str",
+              "v": "http://***REDACTED***@127.0.0.1"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "nested"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "PROXY_URL"
+                  },
+                  {
+                    "t": "str",
+                    "v": "alice:longsecret@host:1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "nested"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "PROXY_URL"
+                  },
+                  {
+                    "t": "str",
+                    "v": "***REDACTED***@host:1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/x?foo=1&api_key=sk-test&bar=2"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/x?foo=1&api_key=***REDACTED***&bar=2"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://medium.com/@alice/post"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://medium.com/@alice/post"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://x.test/?q=a@b"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://x.test/?q=a@b"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?q=a/b"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?q=a/b"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?q=a%20b"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?q=a%20b"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?flag"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?flag"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?%7e"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?%7e"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?q=é"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?q=é"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "HTTPS://host/p"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "HTTPS://host/p"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?&"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/p?&"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/path#frag?a=1"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/path#frag?a=1"
+            }
+          ]
+        ]
       }
     },
     {
@@ -630,6 +1166,66 @@
       "output": {
         "t": "str",
         "v": "https://host/path#frag?a=1"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "{\"id\":1,\"email\":\"alice@example.test\"}"
+      },
+      "output": {
+        "t": "str",
+        "v": "{\"id\":1,\"email\":\"alice@example.test\"}"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "{\"next\":\"https://api.example.test/items?page=2\"}"
+      },
+      "output": {
+        "t": "str",
+        "v": "{\"next\":\"https://api.example.test/items?page=2\"}"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "mailto:alice@example.test"
+      },
+      "output": {
+        "t": "str",
+        "v": "mailto:alice@example.test"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "python:3.11@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "output": {
+        "t": "str",
+        "v": "python:3.11@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "https://a.test/x?y=1\nhttps://b.test/z"
+      },
+      "output": {
+        "t": "str",
+        "v": "https://a.test/x?y=1\nhttps://b.test/z"
+      }
+    },
+    {
+      "input": {
+        "t": "str",
+        "v": "https://h/x?q=1\n"
+      },
+      "output": {
+        "t": "str",
+        "v": "https://h/x?q=1\n"
       }
     }
   ]
