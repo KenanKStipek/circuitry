@@ -1319,6 +1319,16 @@ def _comparable_event(event: dict[str, Any]) -> dict[str, Any]:
     for key in _EVENT_FIELD_RULES:
         if key in comparable:
             comparable[key] = _normalize_event_field(key, comparable[key])
+    # A `decision` line's own `values` (#628) is literal captured state --
+    # a CEL condition that reads a whole effect node via `has(state.x)`
+    # rather than `state.x.value` carries that node's own `created_at`/
+    # `completed_at` straight into the line, the same volatile fields
+    # `normalize()` already knows how to replace in `--out` state; this is
+    # the one place a `decision` line's own value tree reaches this suite's
+    # comparison at all, so it gets the same treatment here rather than a
+    # dedicated `_EVENT_FIELD_RULES` entry of its own.
+    if "values" in comparable:
+        comparable["values"] = normalize(comparable["values"])
     return comparable
 
 

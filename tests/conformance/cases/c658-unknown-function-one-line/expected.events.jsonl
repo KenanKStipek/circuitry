@@ -1,12 +1,13 @@
-{"v":1,"seq":0,"ts":"2026-11-10T03:31:59.941Z","ev":"run_start","run_id":"0d22eb55-6232-412d-bda3-6012986b2d48","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":14129}
-{"v":1,"seq":1,"ts":"2026-11-10T03:31:59.942Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-11-10T03:31:59.942Z","ev":"start","id":1,"path":"prime.gate"}
-{"v":1,"seq":3,"ts":"2026-11-10T03:31:59.943Z","ev":"start","id":2,"path":"prime.gate.else_step"}
-{"v":1,"seq":4,"ts":"2026-11-10T03:31:59.943Z","ev":"end","id":2,"path":"prime.gate.else_step","ok":true,"ms":0}
-{"v":1,"seq":5,"ts":"2026-11-10T03:31:59.943Z","ev":"end","id":1,"path":"prime.gate","ok":false,"ms":1,"error":"CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'"}
-{"v":1,"seq":6,"ts":"2026-11-10T03:31:59.943Z","ev":"start","id":3,"path":"prime.expect_gate"}
-{"v":1,"seq":7,"ts":"2026-11-10T03:31:59.944Z","ev":"end","id":3,"path":"prime.expect_gate","ok":false,"ms":0,"error":"expect failed: nope(value)"}
-{"v":1,"seq":8,"ts":"2026-11-10T03:31:59.944Z","ev":"start","id":4,"path":"prime.marker"}
-{"v":1,"seq":9,"ts":"2026-11-10T03:31:59.944Z","ev":"end","id":4,"path":"prime.marker","ok":true,"ms":0}
-{"v":1,"seq":10,"ts":"2026-11-10T03:31:59.944Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
-{"v":1,"seq":11,"ts":"2026-11-10T03:31:59.944Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-18T21:36:04.604Z","ev":"run_start","run_id":"ed8c3ad8-0c49-4d65-9faf-dec6180fc86c","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":8507}
+{"v":1,"seq":1,"ts":"2026-11-18T21:36:04.605Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-18T21:36:04.605Z","ev":"start","id":1,"path":"prime.gate"}
+{"v":1,"seq":3,"ts":"2026-11-18T21:36:04.606Z","ev":"decision","path":"prime.gate","kind":"if","mode":"cel","branch":"else","values":{},"error":"CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'"}
+{"v":1,"seq":4,"ts":"2026-11-18T21:36:04.606Z","ev":"start","id":2,"path":"prime.gate.else_step"}
+{"v":1,"seq":5,"ts":"2026-11-18T21:36:04.606Z","ev":"end","id":2,"path":"prime.gate.else_step","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-11-18T21:36:04.606Z","ev":"end","id":1,"path":"prime.gate","ok":false,"ms":1,"error":"CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'"}
+{"v":1,"seq":7,"ts":"2026-11-18T21:36:04.606Z","ev":"start","id":3,"path":"prime.expect_gate"}
+{"v":1,"seq":8,"ts":"2026-11-18T21:36:04.606Z","ev":"end","id":3,"path":"prime.expect_gate","ok":false,"ms":0,"error":"expect failed: nope(value)"}
+{"v":1,"seq":9,"ts":"2026-11-18T21:36:04.607Z","ev":"start","id":4,"path":"prime.marker"}
+{"v":1,"seq":10,"ts":"2026-11-18T21:36:04.607Z","ev":"end","id":4,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":11,"ts":"2026-11-18T21:36:04.607Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":12,"ts":"2026-11-18T21:36:04.607Z","ev":"run_end","ok":true}
