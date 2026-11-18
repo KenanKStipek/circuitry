@@ -81,9 +81,42 @@ def _as_document(block: str) -> str:
     return body
 
 
+def _stub_use_path_children(document_text: str, tmp_path: Path) -> None:
+    """Write a trivially valid stand-in at every `use: path:`/legacy
+    `orchestration:` reference *document_text* names, when nothing is
+    there already.
+
+    Each fenced example validates alone, in its own empty `tmp_path`
+    (#832): a `path:` naming another block of the same chapter's own
+    prose -- a real file in the project this guidebook describes, never
+    one in the sandbox -- would otherwise fail `cof check`'s own
+    compile of that child for a reason this test was never about: that
+    the file does not exist here, rather than anything the example
+    itself gets wrong.
+    """
+    try:
+        parsed = yaml.safe_load(document_text)
+    except yaml.YAMLError:
+        return
+    if not isinstance(parsed, dict):
+        return
+    from circuitry.core.cycle_check import collect_use_refs
+
+    for kind, value in collect_use_refs(parsed):
+        if kind != "path":
+            continue
+        candidate = tmp_path / value
+        if candidate.exists():
+            continue
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("effects: []\n", encoding="utf-8")
+
+
 def _validate(block: str, tmp_path: Path) -> dict:
+    document = _as_document(block)
+    _stub_use_path_children(document, tmp_path)
     target = tmp_path / "example.yml"
-    target.write_text(_as_document(block), encoding="utf-8")
+    target.write_text(document, encoding="utf-8")
     return validate_orchestration(orchestration_path=target)
 
 
