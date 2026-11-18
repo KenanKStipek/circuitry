@@ -168,6 +168,11 @@ def _redaction_cases() -> list[dict[str, Any]]:
         # left alone because `"://" in url` is true.
         "alice:pw@host/x?next=http://y",
         "alice:p://w@host/x",
+        # A schemeless value with an `@` and no `:` at all -- a bare
+        # token used as a username is itself a credential once *url*
+        # is already known to be a request URL, not just the
+        # `user:pass@host` shape.
+        "mytoken@host.example.test/api",
     ]
     return [{"url": url, "redacted": http_conventions.redact_request_url(url)} for url in urls]
 

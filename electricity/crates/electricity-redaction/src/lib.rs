@@ -246,12 +246,12 @@ fn is_url_key(key: &str) -> bool {
 ///   the whole span up to that `@` is replaced instead -- this catches
 ///   a password hidden behind a `/`. A credential-free `@` with no such
 ///   `:` is left untouched.
-/// - **No `://` at all.** The same `:`-before-`@` cut applies to a
-///   schemeless `user:pass@host...` value (the same shape a
-///   schemeless proxy value carries) -- including one that also
-///   contains whitespace or a control character, since every caller
-///   here has already committed to treating *url* as a URL or proxy
-///   value, never prose.
+/// - **No `://` at all.** A schemeless value with an `@` and no
+///   whitespace anywhere (the same shape a schemeless proxy value
+///   carries) is cut before its last `@` unconditionally -- no `:`
+///   required: a bare `token@host` is itself a credential when *url*
+///   is already known to be a URL (a value under a URL key) or a
+///   request/proxy value, never prose.
 /// - Either cut replaces the matched span with `marker` followed by
 ///   `@` when *marker* is non-empty, or with nothing at all (dropping
 ///   the `@` too) when it is empty.
@@ -276,7 +276,12 @@ pub fn redact_url(url: &str, marker: &str) -> String {
         .filter(|&idx| url[idx + 1..].starts_with("//"));
     let (prefix, mut rest) = match scheme_end {
         Some(idx) => (&url[..idx + 3], &url[idx + 3..]),
-        None => ("", url),
+        None => {
+            if url.chars().any(char::is_whitespace) {
+                return url.to_string();
+            }
+            ("", url)
+        }
     };
 
     let userinfo_prefix: String = if marker.is_empty() {
@@ -292,8 +297,13 @@ pub fn redact_url(url: &str, marker: &str) -> String {
 
     let mut cut: Option<String> = None;
     if let Some(last_at) = rest.rfind('@') {
-        let userinfo_in_authority = scheme_end.is_some() && last_at < authority_end;
-        if userinfo_in_authority || rest[..last_at].contains(':') {
+        if scheme_end.is_none() {
+            // Schemeless: every caller here has already committed to
+            // treating *url* as a URL (a URL-key value, or a request/
+            // proxy value), so a bare `token@host` -- no ':' at all --
+            // is itself a credential, not just the user:pass@host shape.
+            cut = Some(format!("{userinfo_prefix}{}", &rest[last_at + 1..]));
+        } else if last_at < authority_end || rest[..last_at].contains(':') {
             cut = Some(format!("{userinfo_prefix}{}", &rest[last_at + 1..]));
         }
     }
@@ -897,6 +907,27 @@ mod tests {
         assert_eq!(
             redact_url("alice:longsecret@host:1234", REDACTED),
             format!("{REDACTED}@host:1234")
+        );
+    }
+
+    #[test]
+    fn redact_url_cuts_a_schemeless_token_with_no_colon_at_all() {
+        // A bare token@host with no `:` is still a credential once
+        // *url* is already known to be a URL/proxy value -- only
+        // whitespace, never the `:` shape, gates the schemeless cut.
+        let url = "mytoken@host.example.test/api";
+        assert_eq!(
+            redact_url(url, REDACTED),
+            format!("{REDACTED}@host.example.test/api")
+        );
+        assert_eq!(redact_url(url, ""), "host.example.test/api");
+    }
+
+    #[test]
+    fn redact_url_leaves_a_schemeless_value_with_whitespace_unchanged() {
+        assert_eq!(
+            redact_url("alice:s3cret@proxy:3128 ", ""),
+            "alice:s3cret@proxy:3128 "
         );
     }
 

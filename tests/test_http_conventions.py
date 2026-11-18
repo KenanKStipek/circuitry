@@ -285,6 +285,19 @@ def test_redact_url_cuts_a_schemeless_userinfo_value() -> None:
     )
 
 
+def test_redact_url_cuts_a_schemeless_token_with_no_colon_at_all() -> None:
+    """A bare token@host with no `:` is still a credential once *url* is
+    already known to be a URL/proxy value -- only whitespace, never the
+    `:` shape, gates the schemeless cut."""
+    url = "mytoken@host.example.test/api"
+    assert redact_url(url, "***REDACTED***") == "***REDACTED***@host.example.test/api"
+    assert redact_url(url, "") == "host.example.test/api"
+
+
+def test_redact_url_leaves_a_schemeless_value_with_whitespace_unchanged() -> None:
+    assert redact_url("alice:s3cret@proxy:3128 ", "") == "alice:s3cret@proxy:3128 "
+
+
 def test_redact_url_masks_a_credential_query_key_among_other_keys() -> None:
     url = "https://host/x?foo=1&api_key=sk-test&bar=2"
     assert redact_url(url, "***REDACTED***") == (

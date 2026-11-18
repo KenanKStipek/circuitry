@@ -64,6 +64,14 @@ def test_redacts_a_schemeless_base_url_without_any_double_slash() -> None:
     assert out["base_url"] == f"{REDACTED}@host:1234"
 
 
+def test_redacts_a_schemeless_token_used_as_a_username_with_no_colon_at_all() -> None:
+    """A bare token@host (no `:` at all) is still a credential once the
+    value is under a URL key."""
+    out = redact({"base_url": "mytoken@host.example.test/api"})
+    assert "mytoken" not in out["base_url"]
+    assert out["base_url"] == f"{REDACTED}@host.example.test/api"
+
+
 def test_redacts_a_credential_hidden_behind_the_path() -> None:
     """#819: an @ past the parsed authority's own boundary still hides a
     password — the whole value is cut at the LAST @, not just the netloc's

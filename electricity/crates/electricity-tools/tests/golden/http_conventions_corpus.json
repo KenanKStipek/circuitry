@@ -223,6 +223,10 @@
     {
       "url": "alice:p://w@host/x",
       "redacted": "host/x"
+    },
+    {
+      "url": "mytoken@host.example.test/api",
+      "redacted": "host.example.test/api"
     }
   ],
   "proxy_redaction_cases": [
@@ -264,7 +268,7 @@
     },
     {
       "value": "alice:s3cret@proxy:3128 ",
-      "redacted": "proxy:3128 "
+      "redacted": "alice:s3cret@proxy:3128 "
     }
   ],
   "proxy_cases": [

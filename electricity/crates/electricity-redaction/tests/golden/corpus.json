@@ -663,6 +663,38 @@
             },
             {
               "t": "str",
+              "v": "mytoken@host.example.test/api"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "***REDACTED***@host.example.test/api"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
               "v": "https://host/x?foo=1&api_key=sk-test&bar=2"
             }
           ]

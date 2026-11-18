@@ -175,12 +175,12 @@ def redact_url(url: str, marker: str) -> str:
       (``http://alice:secret/x@host``). A credential-free ``@`` with
       no such ``:`` (``https://medium.com/@alice/post``, ``?q=a@b``)
       is left untouched.
-    - **No ``://`` at all.** The same ``:``-before-``@`` cut applies to
-      a schemeless ``user:pass@host...`` value (the same shape a
-      schemeless proxy value carries) -- including one that also
-      contains whitespace or a control character, since every caller
-      here has already committed to treating *url* as a URL or proxy
-      value, never prose.
+    - **No ``://`` at all.** A schemeless value with an ``@`` and no
+      whitespace anywhere (the same shape a schemeless proxy value
+      carries) is cut before its last ``@`` unconditionally -- no ``:``
+      required: a bare ``token@host`` is itself a credential when
+      *url* is already known to be a URL (a value under a URL key) or
+      a request/proxy value, never prose.
     - Either cut replaces the matched span with ``f"{marker}@"`` when
       *marker* is non-empty, or with nothing at all (dropping the
       ``@`` too) when it is empty.
@@ -204,6 +204,8 @@ def redact_url(url: str, marker: str) -> str:
     if scheme_end != -1:
         prefix, rest = url[: scheme_end + 3], url[scheme_end + 3 :]
     else:
+        if any(c.isspace() for c in url):
+            return url
         prefix, rest = "", url
 
     userinfo_prefix = f"{marker}@" if marker else ""
@@ -215,8 +217,13 @@ def redact_url(url: str, marker: str) -> str:
 
     last_at = rest.rfind("@")
     if last_at != -1:
-        userinfo_in_authority = scheme_end != -1 and last_at < authority_end
-        if userinfo_in_authority or ":" in rest[:last_at]:
+        if scheme_end == -1:
+            # Schemeless: every caller here has already committed to
+            # treating *url* as a URL (a URL-key value, or a request/
+            # proxy value), so a bare ``token@host`` -- no ":" at all --
+            # is itself a credential, not just the user:pass@host shape.
+            rest = userinfo_prefix + rest[last_at + 1 :]
+        elif last_at < authority_end or ":" in rest[:last_at]:
             rest = userinfo_prefix + rest[last_at + 1 :]
 
     hash_idx = rest.find("#")

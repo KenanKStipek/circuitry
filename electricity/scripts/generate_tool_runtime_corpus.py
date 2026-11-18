@@ -266,6 +266,9 @@ def build_redaction_cases() -> list[dict]:
         redact_case({"nested": {"PROXY_URL": "alice:longsecret@host:1"}})
     )  # schemeless, nested, key matched case-insensitively
     cases.append(
+        redact_case({"base_url": "mytoken@host.example.test/api"})
+    )  # schemeless, no : at all -- a bare token@host is still a credential
+    cases.append(
         redact_case(
             {"base_url": "https://host/x?foo=1&api_key=sk-test&bar=2"}
         )
