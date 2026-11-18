@@ -1373,9 +1373,10 @@ fn do_run(args: RunArgs) -> ExitCode {
 /// default run directory only) where its files ended up. Returns the
 /// engine's own exit code (issue #828: `received_signal` overrides
 /// it, through `exit_code_with_signal_priority`, with a real signal
-/// osi itself received and forwarded; `None` from both plain-mode
-/// callers, which never race a terminal check against the forwarded
-/// signal the way the TUI loop can).
+/// osi itself received and forwarded while the engine was still
+/// running; `None` from both plain-mode callers, which never race a
+/// terminal check against the forwarded signal the way the TUI loop
+/// can).
 #[allow(clippy::too_many_arguments)]
 fn finish_run(
     out: &mut impl Write,
@@ -2238,9 +2239,12 @@ fn run_tui(
     let mut app = App::new(false);
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
-    // The first real signal osi itself receives this run, forwarded
-    // or not -- set once, at the top of the tick that first saw it,
-    // and never overwritten. See `exit_code_with_signal_priority`.
+    // The first real signal osi itself receives while the engine is
+    // still running -- set once, at the top of the tick that first
+    // saw it, and never overwritten. A signal that arrives once the
+    // engine has already exited leaves this `None`, so that run's
+    // own exit code stands (issue #795). See `exit_code_with_signal_
+    // priority`.
     let mut received_signal: Option<ForwardSignal> = None;
 
     // Issue #535: the colour mode is detected once at startup, never
@@ -2431,14 +2435,19 @@ fn run_tui(
     'tui: loop {
         if let Some(watcher) = signals.as_mut() {
             for sig in watcher.pending() {
-                // Issue #828: remembered once, from the first real
-                // signal this run ever sees -- a terminal lost later
-                // in this same tick also forwards a synthetic SIGHUP
-                // (`cancel_for_lost_terminal` below), and that must
-                // never retroactively change which signal this run's
-                // own exit code reports.
-                received_signal.get_or_insert(sig);
                 if exit_status.is_none() {
+                    // Issue #828: remembered only while the engine is
+                    // still running, from the first real signal this
+                    // run ever sees -- a terminal lost later in this
+                    // same tick also forwards a synthetic SIGHUP
+                    // (`cancel_for_lost_terminal` below), and that
+                    // must never retroactively change which signal
+                    // this run's own exit code reports. A signal
+                    // that arrives once the engine has already
+                    // exited (the finished screen already up) must
+                    // leave that engine's own exit code in place
+                    // (issue #795), so it is never recorded here.
+                    received_signal.get_or_insert(sig);
                     cancel_once(
                         &child,
                         sig,

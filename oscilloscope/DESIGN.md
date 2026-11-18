@@ -1123,9 +1123,12 @@ one, above) and leaves at once, before the engine's own exit -- but the
 run's own exit code still comes from the signal osi itself received,
 never from whichever of the two the engine happened to die from first
 (issue #828): `received_signal`, set the moment the real one is first
-seen, decides it ahead of the engine's own exit status, through
-`exit_code_with_signal_priority`, the same function `osi watch`'s
-analogous `local_signal` decides its own exit code through. If the TUI
+seen *while the engine is still running*, decides it ahead of the
+engine's own exit status, through `exit_code_with_signal_priority`,
+the same function `osi watch`'s analogous `local_signal` decides its
+own exit code through. A signal that arrives once the engine has
+already exited leaves `received_signal` unset, so that run's own exit
+code -- 0 for a success, say -- still stands (issue #795). If the TUI
 itself can't start (an exotic CI pty, a stdout swapped out from under
 osi), both `osi <doc>` and `osi watch` fall back to their own plain
 supervise/watch loop rather than a bare, signal-blind wait. `osi` itself
