@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import signal
 import threading
 import time
@@ -1576,6 +1577,35 @@ def _record_library_pins(
     state.setdefault("runtime", {})[STATE_KEY] = pins
 
 
+def _use_path_child_check_errors(
+    orch: dict[str, Any],
+    *,
+    orchestration_path: Path,
+    trusted: bool,
+    runtime: dict[str, Any] | None,
+) -> list[str]:
+    """Every `use: path:`/legacy `orchestration:` child of *orch* that fails
+    to resolve, parse, validate or compile, recursively (#832), as one
+    display string per failure: the child's own reference, relative to
+    *orchestration_path*'s directory when it resolved to a file at all,
+    followed by the same message a run of the root would raise reaching it
+    (`core.cycle_check.check_use_path_children`).
+    """
+    from ..core.cycle_check import check_use_path_children
+
+    root_dir = orchestration_path.resolve().parent
+    failures = check_use_path_children(
+        orch, root_path=orchestration_path, trusted=trusted, runtime=runtime
+    )
+    errors = []
+    for label, message in failures:
+        display = (
+            os.path.relpath(label, root_dir) if Path(label).is_absolute() else label
+        )
+        errors.append(f"{display}: {message}")
+    return errors
+
+
 def _use_path_child_secrets(
     orch: dict[str, Any],
     *,
@@ -1788,6 +1818,26 @@ def validate(
         merged_runtime = _merge_runtime(
             (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
         )
+
+        # A `use: path:`/legacy `orchestration:` child that fails to
+        # resolve, parse, validate or compile fails the root's own check
+        # (#832) -- the real run would fail reaching it too. `merged_runtime`,
+        # not the config's own alone, so a legacy `orchestration:` child this
+        # document's own `runtime.library.sources` falls back for resolves
+        # here exactly as the run's own registry resolves it.
+        child_check_errors = _use_path_child_check_errors(
+            orch,
+            orchestration_path=orchestration_path,
+            trusted=trusted,
+            runtime=merged_runtime,
+        )
+        if child_check_errors:
+            return {
+                "ok": False,
+                "errors": child_check_errors,
+                "warnings": lint_warnings,
+            }
+
         from ..core.lint import splitting_merge_warnings
 
         lint_warnings += splitting_merge_warnings(orch, merged_runtime)
