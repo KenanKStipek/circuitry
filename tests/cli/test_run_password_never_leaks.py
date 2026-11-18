@@ -85,13 +85,22 @@ def test_password_in_url_never_reaches_any_output_surface(
         encoding="utf-8",
     )
 
+    # The configured adapter's own base_url also carries the credential
+    # (issue #819), so the effective-settings snapshot path is covered
+    # too, not just the tool's own params/raw.
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(
         json.dumps(
             {
                 "default_adapter": "ollama",
                 "default_model": "llama3.1:8b",
-                "runtime": {"adapters": {"ollama": {"base_url": "http://localhost:11434"}}},
+                "runtime": {
+                    "adapters": {
+                        "ollama": {
+                            "base_url": f"http://{user}:{PASSWORD}@127.0.0.1:{mock_server}"
+                        }
+                    }
+                },
             }
         ),
         encoding="utf-8",

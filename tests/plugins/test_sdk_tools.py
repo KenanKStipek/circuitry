@@ -12,6 +12,7 @@ import importlib.util
 import json
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -584,6 +585,66 @@ def test_s3_tool_list_via_fake_boto3(monkeypatch: pytest.MonkeyPatch) -> None:
     assert r.value[0]["key"] == "a.txt"
 
 
+def test_screenshot_raw_url_is_redacted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
+) -> None:
+    """#819: `raw['url']` must never carry a configured page URL's
+    userinfo."""
+    password = "pw_value_pw_value"
+
+    fake_mod = types.ModuleType("playwright")
+    fake_sync_api = types.ModuleType("playwright.sync_api")
+
+    class FakePage:
+        def goto(self, url: str) -> None:
+            pass
+
+        def set_default_timeout(self, ms: int) -> None:
+            pass
+
+        def screenshot(self, path: str, full_page: bool) -> None:
+            Path(path).write_bytes(b"png")
+
+    class FakeContext:
+        def new_page(self) -> FakePage:
+            return FakePage()
+
+    class FakeBrowser:
+        def new_context(self, **kwargs: Any) -> FakeContext:
+            return FakeContext()
+
+        def close(self) -> None:
+            pass
+
+    class FakeChromium:
+        def launch(self, **kwargs: Any) -> FakeBrowser:
+            return FakeBrowser()
+
+    class FakeSyncContext:
+        def __init__(self) -> None:
+            self.chromium = FakeChromium()
+
+        def __enter__(self) -> FakeSyncContext:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+    fake_sync_api.sync_playwright = FakeSyncContext
+    fake_mod.sync_api = fake_sync_api
+    monkeypatch.setitem(sys.modules, "playwright", fake_mod)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+
+    r = ScreenshotPlugin().execute(
+        params={
+            "url": f"https://alice:{password}@x.example.test/",
+            "output": str(tmp_path / "out.png"),
+        }
+    )
+    assert password not in r.raw["url"]
+    assert "alice" not in r.raw["url"]
+
+
 def test_playwright_text_mode_via_fake_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -641,6 +702,128 @@ def test_playwright_text_mode_via_fake_sdk(
     assert r.value == "page text"
     assert captured["url"] == "https://x.test/"
     assert captured["closed"] is True
+
+
+def test_playwright_raw_url_and_final_url_are_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: `raw['url']`/`raw['final_url']` must never carry a
+    configured page URL's userinfo."""
+    password = "pw_value_pw_value"
+
+    fake_mod = types.ModuleType("playwright")
+    fake_sync_api = types.ModuleType("playwright.sync_api")
+
+    class FakePage:
+        url = f"https://alice:{password}@x.example.test/landed"
+
+        def goto(self, url: str) -> None:
+            pass
+
+        def set_default_timeout(self, ms: int) -> None:
+            pass
+
+        def inner_text(self, selector: str) -> str:
+            return "page text"
+
+    class FakeContext:
+        def new_page(self) -> FakePage:
+            return FakePage()
+
+    class FakeBrowser:
+        def new_context(self, **kwargs: Any) -> FakeContext:
+            return FakeContext()
+
+        def close(self) -> None:
+            pass
+
+    class FakeBrowserType:
+        def launch(self, **kwargs: Any) -> FakeBrowser:
+            return FakeBrowser()
+
+    class FakeSyncContext:
+        def __init__(self) -> None:
+            self.chromium = FakeBrowserType()
+            self.firefox = FakeBrowserType()
+            self.webkit = FakeBrowserType()
+
+        def __enter__(self) -> FakeSyncContext:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+    fake_sync_api.sync_playwright = FakeSyncContext
+    fake_mod.sync_api = fake_sync_api
+    monkeypatch.setitem(sys.modules, "playwright", fake_mod)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+
+    r = PlaywrightPlugin().execute(
+        params={"url": f"https://alice:{password}@x.example.test/"}
+    )
+    assert password not in r.raw["url"]
+    assert password not in r.raw["final_url"]
+    assert "alice" not in r.raw["url"]
+    assert "alice" not in r.raw["final_url"]
+
+
+def test_playwright_goto_failure_scrubs_the_url_from_the_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: Playwright's own navigation error names the URL, userinfo
+    included."""
+    password = "pw_value_pw_value"
+
+    fake_mod = types.ModuleType("playwright")
+    fake_sync_api = types.ModuleType("playwright.sync_api")
+
+    class FakePage:
+        url = "https://x.example.test/"
+
+        def goto(self, url: str) -> None:
+            raise RuntimeError(
+                f"net::ERR_CONNECTION_REFUSED at https://alice:{password}@x.example.test/"
+            )
+
+        def set_default_timeout(self, ms: int) -> None:
+            pass
+
+    class FakeContext:
+        def new_page(self) -> FakePage:
+            return FakePage()
+
+    class FakeBrowser:
+        def new_context(self, **kwargs: Any) -> FakeContext:
+            return FakeContext()
+
+        def close(self) -> None:
+            pass
+
+    class FakeBrowserType:
+        def launch(self, **kwargs: Any) -> FakeBrowser:
+            return FakeBrowser()
+
+    class FakeSyncContext:
+        def __init__(self) -> None:
+            self.chromium = FakeBrowserType()
+            self.firefox = FakeBrowserType()
+            self.webkit = FakeBrowserType()
+
+        def __enter__(self) -> FakeSyncContext:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+    fake_sync_api.sync_playwright = FakeSyncContext
+    fake_mod.sync_api = fake_sync_api
+    monkeypatch.setitem(sys.modules, "playwright", fake_mod)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        PlaywrightPlugin().execute(params={"url": "https://x.example.test/"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
 
 
 def test_embed_via_fake_sentence_transformers(

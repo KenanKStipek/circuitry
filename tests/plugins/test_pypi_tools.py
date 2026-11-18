@@ -671,6 +671,32 @@ def test_webhook_posts_json_with_mocked_requests(
     assert captured["headers"] == {"X-Token": "y"}
 
 
+def test_webhook_raw_url_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#819: `raw['url']` must never carry a configured webhook URL's
+    userinfo."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.text = "ok"
+            self.headers = {"Content-Type": "text/plain"}
+
+    fake_mod.request = lambda **kwargs: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    password = "pw_value_pw_value"
+    r = WebhookPlugin().execute(
+        params={"url": f"https://alice:{password}@hooks.example.test/x"}
+    )
+    assert password not in r.raw["url"]
+    assert "alice" not in r.raw["url"]
+
+
 def test_webhook_5xx_retry_then_succeed(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_mod = types.ModuleType("requests")
     fake_exc_mod = types.ModuleType("requests.exceptions")
@@ -861,6 +887,30 @@ def test_web_fetch_4xx_sets_ok_false_by_default(
         params={"url": "https://x.test", "mode": "html", "fail_on_error": "False"}
     )
     assert r2.ok is True
+
+
+def test_web_fetch_raw_url_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#819: `raw['url']` must never carry a configured URL's userinfo."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class FakeResponse:
+        status_code = 200
+        text = "hello"
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/html"}
+
+    fake_mod.get = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    password = "pw_value_pw_value"
+    r = WebFetchPlugin().execute(
+        params={"url": f"https://alice:{password}@x.example.test", "mode": "html"}
+    )
+    assert password not in r.raw["url"]
+    assert "alice" not in r.raw["url"]
 
 
 def test_web_fetch_connection_failure_scrubs_a_url_in_the_exception_text(

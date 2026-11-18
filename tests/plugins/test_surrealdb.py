@@ -474,6 +474,22 @@ def test_query_passes_surrealql_and_params(fake_sdk: type[FakeSurreal]) -> None:
     assert db.closed is True
 
 
+def test_raw_url_is_redacted(fake_sdk: type[FakeSurreal]) -> None:
+    """#819: `raw['url']` must never carry the configured url's
+    userinfo, even though auth is read from the environment, never
+    from the url itself."""
+    fake_sdk.query_raw_result = {"result": [{"status": "OK", "result": []}]}
+    password = "pw_value_pw_value"
+    plugin = SurrealDBPlugin(
+        url=f"ws://alice:{password}@x.example.test:8000/rpc",
+        namespace="test_ns",
+        database="test_db",
+    )
+    result = plugin.execute(params={"mode": "query", "query": "INFO FOR DB"})
+    assert password not in result.raw["url"]
+    assert "alice" not in result.raw["url"]
+
+
 def test_query_without_params_omits_variables(fake_sdk: type[FakeSurreal]) -> None:
     _plugin().execute(params={"mode": "query", "query": "INFO FOR DB"})
     assert ("query_raw", ("INFO FOR DB",)) in fake_sdk.instances[-1].calls
