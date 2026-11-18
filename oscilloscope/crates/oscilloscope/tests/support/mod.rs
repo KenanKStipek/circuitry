@@ -13,6 +13,7 @@
 
 #![allow(dead_code)]
 
+use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -165,11 +166,216 @@ pub fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::process::E
             return status;
         }
         if start.elapsed() > timeout {
+            // Collected before the kill below: once `osi` and its
+            // children are dead there is nothing left for `ps` or
+            // `/proc` to report (issue #825's "a failure should
+            // explain itself").
+            let diagnostics = diagnose_stalled_wait(Some(child.id()));
             let _ = child.kill();
             let _ = child.wait();
-            panic!("e2e test exceeded its {timeout:?} hard timeout; osi was killed");
+            panic!("e2e test exceeded its {timeout:?} hard timeout; osi was killed\n{diagnostics}");
         }
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+thread_local! {
+    /// Every `osi` this test's own thread has spawned on a pty
+    /// (`spawn_osi_on_pty`/`spawn_osi_on_pty_with_env`) -- a
+    /// thread-local, not one shared list, because `RUST_TEST_THREADS`
+    /// runs several tests at once, each pinned to its own thread for
+    /// its own lifetime; a `diagnose_stalled_wait` called with no pid
+    /// of its own to go on (every `wait_for_pattern*`/`wait_for_screen*`/
+    /// `wait_for_step_start` caller: none of them ever sees the
+    /// `Child` itself, only a captured pty buffer, an events file, or
+    /// a bare master fd) still needs to know which `osi` is this
+    /// test's own. Never cleared: a pid a long-finished earlier test
+    /// on this same thread spawned is harmless to keep around (it's
+    /// long gone, and simply won't show up in a later `ps -A` at
+    /// all) -- [`diagnose_stalled_wait`] only ever trusts an entry
+    /// here as a *root* once `ps` itself still names that exact pid
+    /// `osi`, `cof` or `electricity`, so a pid the OS has since
+    /// recycled for some unrelated process is never mistaken for
+    /// this test's own.
+    static SPAWNED_OSI_PIDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Records *pid* as one of this test's own spawned `osi` processes,
+/// for [`diagnose_stalled_wait`] to find later from a caller that
+/// never itself sees the `Child` it belongs to.
+fn note_spawned_osi(pid: u32) {
+    SPAWNED_OSI_PIDS.with(|pids| pids.borrow_mut().push(pid));
+}
+
+/// What *this test's* own spawned `osi` (and whatever it in turn
+/// spawned) is doing right now (issue #825): `ps -A`'s own pid,
+/// parent, state, elapsed time and full command line for exactly
+/// that process's own subtree -- never another test's, even though
+/// `RUST_TEST_THREADS` runs several at once, all spawning their own
+/// `osi`/`cof` under the same names at the same time -- plus, on
+/// Linux, each one's own `/proc/<pid>/wchan` (the kernel function
+/// it's blocked in, if any), its own exit status if it has already
+/// exited (a zombie `osi` that wrote nothing at all before dying is
+/// otherwise indistinguishable from one still working), and its
+/// per-thread state from `/proc/<pid>/task/*/stat`. Called from a
+/// `wait_for_pattern*`/`wait_for_screen*`/`wait_for_step_start`/
+/// `wait_with_timeout` panic instead of letting it report only the
+/// missing pattern or the bare fact of a timeout.
+///
+/// *extra_pid*, when given, is the pid of the `Child` the caller is
+/// itself waiting on (`wait_with_timeout` always has one) -- added to
+/// whatever [`note_spawned_osi`] already recorded for this test's own
+/// thread, which is the only source every other caller here has, since
+/// none of them ever sees a `Child` at all.
+///
+/// `ps -A`, not a plain `ps`: `spawn_osi_on_pty`'s own `setsid()`,
+/// plus the pty slave's `O_NOCTTY`, leave `osi` with no controlling
+/// terminal of its own at all, which a plain `ps` (BSD or procps
+/// alike) only ever lists a process under on terms this one never
+/// meets -- without `-A` this silently reported `osi` as not running
+/// while it plainly was.
+///
+/// Each candidate root is checked against this very same `ps` output
+/// before it's trusted enough to walk a subtree from: a pid
+/// [`note_spawned_osi`] recorded for an `osi` that has since exited
+/// *and been reaped*, with its number since handed to some unrelated
+/// process by the OS, must never be mistaken for that unrelated
+/// process's own subtree -- so a root only counts once `ps` still
+/// names that exact pid `osi`, `cof` or `electricity`.
+pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
+    let mut out = String::new();
+    let ps = match Command::new("ps")
+        .args(["-A", "-ww", "-o", "pid,ppid,stat,etime,args"])
+        .output()
+    {
+        Ok(result) => result,
+        Err(e) => {
+            out.push_str(&format!("<ps failed: {e}>\n"));
+            return out;
+        }
+    };
+    let text = String::from_utf8_lossy(&ps.stdout);
+
+    struct ProcLine<'a> {
+        pid: u32,
+        ppid: u32,
+        line: &'a str,
+        looks_like_ours: bool,
+    }
+    let mut header: Option<&str> = None;
+    let mut procs: Vec<ProcLine> = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("PID") {
+            header = Some(line);
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(pid) = fields.next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(ppid) = fields.next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        let looks_like_ours = ["osi", "cof", "electricity"]
+            .iter()
+            .any(|n| line.contains(n));
+        procs.push(ProcLine {
+            pid,
+            ppid,
+            line,
+            looks_like_ours,
+        });
+    }
+
+    let mut roots: Vec<u32> = SPAWNED_OSI_PIDS.with(|pids| pids.borrow().clone());
+    if let Some(pid) = extra_pid {
+        roots.push(pid);
+    }
+    roots.sort_unstable();
+    roots.dedup();
+
+    let mut keep: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for root in roots {
+        let Some(root_proc) = procs.iter().find(|p| p.pid == root) else {
+            continue;
+        };
+        if !root_proc.looks_like_ours {
+            continue;
+        }
+        let mut queue = vec![root];
+        keep.insert(root);
+        while let Some(pid) = queue.pop() {
+            for p in &procs {
+                if p.ppid == pid && keep.insert(p.pid) {
+                    queue.push(p.pid);
+                }
+            }
+        }
+    }
+
+    if let Some(header) = header {
+        out.push_str(header);
+        out.push('\n');
+    }
+    if keep.is_empty() {
+        out.push_str("<this test's own osi/cof/electricity subtree is not alive>\n");
+    }
+    let mut kept_pids: Vec<u32> = Vec::new();
+    for p in &procs {
+        if keep.contains(&p.pid) {
+            out.push_str(p.line);
+            out.push('\n');
+            kept_pids.push(p.pid);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    for pid in &kept_pids {
+        if let Ok(wchan) = std::fs::read_to_string(format!("/proc/{pid}/wchan")) {
+            out.push_str(&format!("pid {pid} wchan: {wchan}\n"));
+        }
+        if let Some(status) = linux_proc_exit_status(*pid) {
+            out.push_str(&format!("pid {pid} has already exited: {status}\n"));
+        }
+        if let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/task")) {
+            for entry in entries.flatten() {
+                let tid = entry.file_name();
+                if let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) {
+                    out.push_str(&format!("pid {pid} task {tid:?} stat: {stat}\n"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Decodes the wait-status `/proc/<pid>/stat`'s own last field holds
+/// for a zombie -- the same encoding `waitpid(2)` itself reports:
+/// a zero low byte means it called `exit`, with the code in the next
+/// byte up; a non-zero low byte names the signal that killed it
+/// instead. `None` for anything that isn't a zombie at all (a live
+/// process's own last field there is always `0`, never an exit
+/// status to read in the first place) or whose `stat` this couldn't
+/// parse.
+#[cfg(target_os = "linux")]
+fn linux_proc_exit_status(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `comm` (field 2) is parenthesised and free to contain a `)` of
+    // its own, so only the text after its own *last* `)` is reliably
+    // every field from `state` on.
+    let after_comm = stat.rsplit_once(')')?.1;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    let state = *fields.first()?;
+    if state != "Z" {
+        return None;
+    }
+    let raw: i64 = fields.last()?.parse().ok()?;
+    let status = raw as i32;
+    let term_signal = status & 0x7f;
+    if term_signal == 0 {
+        Some(format!("exit code {}", (status >> 8) & 0xff))
+    } else {
+        Some(format!("signal {term_signal}"))
     }
 }
 
@@ -273,8 +479,9 @@ pub fn wait_for_step_start(events_path: &Path, step_path: &str, timeout: Duratio
             }
         }
         if start.elapsed() > timeout {
+            let diagnostics = diagnose_stalled_wait(None);
             panic!(
-                "{events_path:?} never carried a start event for {step_path:?} within {timeout:?}"
+                "{events_path:?} never carried a start event for {step_path:?} within {timeout:?}\n{diagnostics}"
             );
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -766,6 +973,40 @@ pub fn resize_pty(slave_path: &Path, cols: u16, rows: u16) {
     }
 }
 
+/// [`drain_continuously`]'s own return value: the pty bytes captured
+/// so far, plus why its own background read stopped, once it has --
+/// a `wait_for_screen*` panic on a buffer that stopped growing early
+/// (the master closed, or errored) must say so (issue #825), rather
+/// than report a wait that in fact never ran anywhere near its own
+/// full timeout. `Deref`s straight through to the same
+/// `Arc<Mutex<Vec<u8>>>` this used to be on its own, so every
+/// existing `.lock()`/`&captured_buf` call site here still compiles
+/// unchanged.
+pub struct DrainedPty {
+    buf: Arc<Mutex<Vec<u8>>>,
+    stopped: Arc<Mutex<Option<(String, Instant)>>>,
+}
+
+impl std::ops::Deref for DrainedPty {
+    type Target = Arc<Mutex<Vec<u8>>>;
+    fn deref(&self) -> &Arc<Mutex<Vec<u8>>> {
+        &self.buf
+    }
+}
+
+impl DrainedPty {
+    /// Why the background read stopped, and how long ago -- `None`
+    /// while it's still reading.
+    pub fn stop_reason(&self) -> Option<String> {
+        self.stopped.lock().unwrap().as_ref().map(|(reason, at)| {
+            format!(
+                "its drain thread stopped reading {:.1}s ago ({reason})",
+                at.elapsed().as_secs_f32()
+            )
+        })
+    }
+}
+
 /// Drains `master` continuously, from the moment it's called, into a
 /// shared buffer a caller can inspect at any time -- started right
 /// after the pty is opened, *before* the child is even spawned,
@@ -774,19 +1015,30 @@ pub fn resize_pty(slave_path: &Path, cols: u16, rows: u16) {
 /// draining it would make osi's own writes block, delaying its exit
 /// for however long this wasn't reading, and risking losing whatever
 /// it tried to write once it finally did get to exit).
-pub fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
+pub fn drain_continuously(mut master: File) -> DrainedPty {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let shared = Arc::clone(&buf);
+    let stopped = Arc::new(Mutex::new(None));
+    let stopped_writer = Arc::clone(&stopped);
     std::thread::spawn(move || {
         let mut chunk = [0u8; 4096];
         loop {
             match master.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => {
+                    *stopped_writer.lock().unwrap() =
+                        Some(("EOF, read returned 0".to_string(), Instant::now()));
+                    break;
+                }
                 Ok(n) => shared.lock().unwrap().extend_from_slice(&chunk[..n]),
+                Err(e) => {
+                    *stopped_writer.lock().unwrap() =
+                        Some((format!("read error: {e}"), Instant::now()));
+                    break;
+                }
             }
         }
     });
-    buf
+    DrainedPty { buf, stopped }
 }
 
 /// Polls the replayed screen (every drawn byte so far through
@@ -797,11 +1049,7 @@ pub fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
 /// wants "whatever the screen shows right now", timeout or not, reads
 /// `captured_buf` directly instead, and says why at its own call site.
 #[track_caller]
-pub fn wait_for_screen_text(
-    captured_buf: &Arc<Mutex<Vec<u8>>>,
-    needle: &str,
-    timeout: Duration,
-) -> String {
+pub fn wait_for_screen_text(captured_buf: &DrainedPty, needle: &str, timeout: Duration) -> String {
     let deadline = Instant::now() + timeout;
     loop {
         let whole = captured_buf.lock().unwrap().clone();
@@ -810,7 +1058,13 @@ pub fn wait_for_screen_text(
             return screen;
         }
         if Instant::now() >= deadline {
-            panic!("{needle:?} never appeared on screen within {timeout:?}; screen:\n{screen}");
+            let why = captured_buf
+                .stop_reason()
+                .unwrap_or_else(|| "still reading".to_string());
+            let diagnostics = diagnose_stalled_wait(None);
+            panic!(
+                "{needle:?} never appeared on screen within {timeout:?} ({why}); screen:\n{screen}\n{diagnostics}"
+            );
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -824,7 +1078,7 @@ pub fn wait_for_screen_text(
 /// reading a half-drawn frame.
 #[track_caller]
 pub fn wait_for_screen_texts(
-    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    captured_buf: &DrainedPty,
     needles: &[&str],
     timeout: Duration,
 ) -> String {
@@ -836,8 +1090,12 @@ pub fn wait_for_screen_texts(
             return screen;
         }
         if Instant::now() >= deadline {
+            let why = captured_buf
+                .stop_reason()
+                .unwrap_or_else(|| "still reading".to_string());
+            let diagnostics = diagnose_stalled_wait(None);
             panic!(
-                "{needles:?} never all appeared on screen within {timeout:?}; screen:\n{screen}"
+                "{needles:?} never all appeared on screen within {timeout:?} ({why}); screen:\n{screen}\n{diagnostics}"
             );
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -850,7 +1108,7 @@ pub fn wait_for_screen_texts(
 /// but not drawn the new one yet shows neither.
 #[track_caller]
 pub fn wait_for_screen(
-    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    captured_buf: &DrainedPty,
     timeout: Duration,
     done: impl Fn(&str) -> bool,
 ) -> String {
@@ -862,7 +1120,13 @@ pub fn wait_for_screen(
             return screen;
         }
         if Instant::now() >= deadline {
-            panic!("screen never matched within {timeout:?}; screen:\n{screen}");
+            let why = captured_buf
+                .stop_reason()
+                .unwrap_or_else(|| "still reading".to_string());
+            let diagnostics = diagnose_stalled_wait(None);
+            panic!(
+                "screen never matched within {timeout:?} ({why}); screen:\n{screen}\n{diagnostics}"
+            );
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -1003,7 +1267,9 @@ pub fn spawn_osi_on_pty_with_env(
             Ok(())
         });
     }
-    cmd.spawn().expect("spawn osi on a pty")
+    let child = cmd.spawn().expect("spawn osi on a pty");
+    note_spawned_osi(child.id());
+    child
 }
 
 /// A long-running document (a `sleep` tool, allow-listed) so a run
