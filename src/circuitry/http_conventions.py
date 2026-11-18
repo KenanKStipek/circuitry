@@ -231,14 +231,14 @@ def redact_url(url: str, marker: str) -> str:
     fragment = "" if hash_idx == -1 else rest[hash_idx:]
     query_idx = body.find("?")
     if query_idx != -1:
-        query_mask = marker if marker else "%2A%2A%2A"
+        query_mask = marker or "%2A%2A%2A"
         masked_segments = []
         for segment in body[query_idx + 1 :].split("&"):
-            if "=" in segment:
-                key, _, value = segment.partition("=")
-                if _CREDENTIAL_QUERY_KEY_RE.search(key):
-                    segment = f"{key}={query_mask}"
-            masked_segments.append(segment)
+            key, has_value, _ = segment.partition("=")
+            if has_value and _CREDENTIAL_QUERY_KEY_RE.search(key):
+                masked_segments.append(f"{key}={query_mask}")
+            else:
+                masked_segments.append(segment)
         body = body[: query_idx + 1] + "&".join(masked_segments)
 
     return prefix + body + fragment
