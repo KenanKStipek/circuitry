@@ -12,6 +12,9 @@ source is caught before anything runs.
 
 `iter_use_children` walks the same graph for callers that need every child
 document rather than a cycle — the allowlist check in `cof check`.
+`iter_use_path_children` walks only the `path:`/`orchestration:` subset —
+the secrets-listing check in `cof check` (#611), since a `ref:` or `inline:`
+child is always limited and so never resolves the root's own secrets.
 """
 
 from __future__ import annotations
@@ -178,6 +181,49 @@ def iter_use_children(
             # Inline children have no directory of their own; nested `path:`
             # references resolve against the enclosing document's.
             visit(child, parent_dir)
+
+    visit(root_orch, root_path.parent if root_path is not None else None)
+    return out
+
+
+def iter_use_path_children(
+    root_orch: dict[str, Any],
+    *,
+    root_path: Path | None = None,
+    runtime: dict[str, Any] | None = None,
+) -> list[tuple[str, dict[str, Any], Path | None]]:
+    """Every orchestration reachable from root_orch by following only
+    `path:`/legacy `orchestration:` `use` edges, recursively.
+
+    Returns ``(label, orch, parent_dir)`` triples, the root excluded, each
+    file once, in the same order ``iter_use_children`` would visit them.
+    Never follows a ``ref:`` edge (a library entry is always limited,
+    whatever its parent's trust, so it never resolves the root's own
+    secrets) or an ``inline:`` one (generated at run time, also always
+    limited) -- a child named by `path:` inherits its parent's trust and so
+    is the only kind this walk needs for a caller that resolves what a
+    trusted root's own run would (`cof check`'s secrets listing). An
+    unresolvable `path:` is skipped, same as `iter_use_children`.
+    """
+    from .library_ref import build_registry
+
+    registry = build_registry(runtime)
+    seen: set[str] = {str(root_path.resolve())} if root_path is not None else set()
+    out: list[tuple[str, dict[str, Any], Path | None]] = []
+
+    def visit(orch: dict[str, Any], parent_dir: Path | None) -> None:
+        for kind, value in collect_use_refs(orch):
+            if kind != "path":
+                continue
+            resolved = resolve_reference(
+                kind, value, parent_dir=parent_dir, registry=registry
+            )
+            if resolved is None or str(resolved) in seen:
+                continue
+            seen.add(str(resolved))
+            child = load_orch(resolved)
+            out.append((str(resolved), child, resolved.parent))
+            visit(child, resolved.parent)
 
     visit(root_orch, root_path.parent if root_path is not None else None)
     return out
