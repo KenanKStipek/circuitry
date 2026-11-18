@@ -13,10 +13,19 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from .. import http_conventions
 
 REDACTED = "***REDACTED***"
+
+#: Keys whose string VALUE gets the URL redaction rule
+#: (:func:`http_conventions.redact_url`), regardless of its shape --
+#: Circuitry's own literal names, plus any key ending in ``_url`` or
+#: ``_proxy`` (which already covers the proxy environment variables:
+#: ``http_proxy``, ``https_proxy``, ``all_proxy``, ``no_proxy``, either
+#: case). Matched case-insensitively.
+_URL_KEY_NAMES = frozenset({"url", "base_url", "api_base", "endpoint", "expo_url", "proxy"})
 
 # Keys whose VALUES should be redacted regardless of content.
 # Match is case-insensitive against the final segment of dotted/snake/kebab keys.
@@ -48,54 +57,53 @@ _KEYISH_RE = re.compile(
 )
 
 
-#: Leading characters :func:`urllib.parse.urlsplit` itself strips before
-#: parsing (its own ``_WHATWG_C0_CONTROL_OR_SPACE``) -- applied here so
-#: this gate agrees with what :func:`http_conventions.
-#: redact_request_url_with_marker` (which calls the real ``urlsplit``)
-#: will actually parse, rather than rejecting a value on a leading
-#: control character it would have ignored anyway.
-_URL_LSTRIP_CHARS = "".join(chr(c) for c in range(0x21))
-
-
-def _looks_like_single_url(value: str) -> bool:
-    """Whether *value* is shaped like one whole URL, rather than prose
-    that merely contains an ``@`` or a ``://`` somewhere inside it: once
-    cleaned the same way :func:`urllib.parse.urlsplit` itself would
-    (leading control/space stripped, embedded ``\\t``/``\\r``/``\\n``
-    removed), no whitespace remains, and either it has a scheme
-    (``://``) or the ``user:pass@host`` shape (a ``:`` before the last
-    ``@``, the same shape a schemeless ``base_url``/proxy value
-    carries). A bare email address (``name@host``, no ``:`` before the
-    ``@``) or a sentence that happens to contain a URL or an ``@`` is
-    never treated as one (issue #819's redaction-gate regression):
-    either still carries whitespace a single URL value never does, or
-    carries no ``:`` before its ``@``.
+def _redact_url(value: str) -> str:
+    """If a URL contains userinfo (user[:pass]@host), strip it -- exactly
+    `main`'s own, unmodified redaction of an ordinary string: both
+    ``scheme`` and ``netloc`` (so bare prose with a stray ``://`` or
+    ``@`` never matches) and the ``@`` inside ``netloc`` itself (so a
+    plain email address, or a URL with no userinfo, never matches).
     """
-    cleaned = value.lstrip(_URL_LSTRIP_CHARS)
-    for control in ("\t", "\r", "\n"):
-        cleaned = cleaned.replace(control, "")
-    if any(c.isspace() for c in cleaned):
-        return False
-    if "://" in cleaned:
-        return True
-    at = cleaned.rfind("@")
-    if at == -1:
-        return False
-    return ":" in cleaned[:at]
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if not parts.scheme or not parts.netloc:
+        return value
+    if "@" not in parts.netloc:
+        return value
+    _, _, host = parts.netloc.rpartition("@")
+    redacted_netloc = f"{REDACTED}@{host}"
+    return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
 
 
 def _redact_string(value: str) -> str:
+    """An ordinary string, redacted exactly as `main` redacts it: a JWT
+    or API-key-shaped string wholesale, a URL that carries both
+    ``://`` and ``@`` through :func:`_redact_url`, anything else
+    unchanged. The URL rule in :func:`http_conventions.redact_url`
+    never applies here -- only to a string under a URL key
+    (:func:`_is_url_key`), handled by :func:`redact` itself.
+    """
     if _JWT_RE.match(value):
         return REDACTED
     if _KEYISH_RE.match(value):
         return REDACTED
-    if _looks_like_single_url(value):
-        return http_conventions.redact_request_url_with_marker(value, REDACTED)
+    if "://" in value and "@" in value:
+        return _redact_url(value)
     return value
 
 
 def _is_sensitive_key(key: str) -> bool:
     return bool(_SENSITIVE_KEY_RE.match(key))
+
+
+def _is_url_key(key: str) -> bool:
+    """Whether *key* names a value :func:`http_conventions.redact_url`
+    applies to, regardless of its content.
+    """
+    lower = key.lower()
+    return lower in _URL_KEY_NAMES or lower.endswith(("_url", "_proxy"))
 
 
 def _redact_adapter_env(adapters: Any) -> Any:
@@ -127,8 +135,13 @@ def redact(value: Any) -> Any:
     - Every value of an ``env`` mapping under an ``adapters`` key is redacted
       (``runtime.adapters.<alias>.env``); an ``env`` that is not a mapping is
       replaced whole.
-    - String values are redacted when they look like a JWT, an API key, or a
-      URL with userinfo.
+    - A string value under a URL key (``url``, ``base_url``, ``api_base``,
+      ``endpoint``, ``expo_url``, ``proxy``, any key ending in ``_url`` or
+      ``_proxy``, at any depth) gets the URL rule
+      (:func:`http_conventions.redact_url`), regardless of its shape.
+    - Any other string value is redacted when it looks like a JWT, an API
+      key, or a URL carrying both ``://`` and ``@`` -- exactly `main`'s own
+      redaction of an ordinary string.
     - Lists and nested dicts are walked.
     - Other scalar types pass through unchanged.
 
@@ -141,6 +154,8 @@ def redact(value: Any) -> Any:
                 out[k] = REDACTED
             elif k == "adapters":
                 out[k] = _redact_adapter_env(v)
+            elif isinstance(k, str) and _is_url_key(k) and isinstance(v, str):
+                out[k] = http_conventions.redact_url(v, REDACTED)
             else:
                 out[k] = redact(v)
         return out
@@ -170,6 +185,8 @@ def redact_env_pairs(pairs: list[str] | None) -> list[str] | None:
         key, value = pair.split("=", 1)
         if _is_sensitive_key(key):
             out.append(f"{key}={REDACTED}")
+        elif _is_url_key(key):
+            out.append(f"{key}={http_conventions.redact_url(value, REDACTED)}")
         else:
             # Even non-sensitive keys can carry credential-shaped values
             # (e.g. `-e my_var=sk-abc...`). Apply string-level checks too.

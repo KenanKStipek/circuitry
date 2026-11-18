@@ -78,7 +78,7 @@ def test_redacts_a_credential_like_query_param_with_no_userinfo_at_all() -> None
     leaked its secret before this redactor masked query params too."""
     out = redact({"base_url": "https://api.example.test/search?api_key=hunter2hunter2"})
     assert "hunter2" not in out["base_url"]
-    assert out["base_url"] == "https://api.example.test/search?api_key=%2A%2A%2A"
+    assert out["base_url"] == f"https://api.example.test/search?api_key={REDACTED}"
 
 
 def test_does_not_mangle_an_email_address() -> None:

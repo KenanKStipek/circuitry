@@ -115,19 +115,6 @@ def _urlsplit(url: str) -> urllib.parse.SplitResult:
         return _urlsplit_lenient(url)
 
 
-def _mask_credential_query_params(url: str) -> str:
-    """*url* with the value of any query-string parameter whose key looks
-    like a credential masked, e.g. ``https://api.example.com/search?key=
-    secret`` becomes ``...?key=%2A%2A%2A``."""
-    parsed = _urlsplit(url)
-    if not parsed.query:
-        return url
-    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    masked = [(k, "***" if _CREDENTIAL_QUERY_KEY_RE.search(k) else v) for k, v in pairs]
-    new_query = urllib.parse.urlencode(masked)
-    return urllib.parse.urlunsplit(parsed._replace(query=new_query))
-
-
 def strip_request_url_userinfo(url: str) -> str:
     """*url*'s userinfo removed from its authority -- the LAST ``@``
     inside :func:`urllib.parse.urlsplit`'s own ``netloc``, not a ``/``,
@@ -155,34 +142,108 @@ def strip_request_url_userinfo(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
 
 
-def _redact_url(url: str) -> str:
-    """*url* with userinfo stripped, then any credential-like query
-    parameter masked — the two masks every refusal message that names a
-    request URL (never a proxy value, see :func:`redact_proxy_value`)
-    applies before naming it. Never called directly outside this module
-    (:func:`redact_request_url` is the one public redactor for a request
-    URL); kept for the tests that exercise it in isolation."""
-    return strip_request_url_userinfo(_mask_credential_query_params(url))
+def redact_url(url: str, marker: str) -> str:
+    """*url* with any userinfo and any credential-like query-string
+    value replaced by *marker* -- the one function behind every URL
+    redaction on this engine (issue #819 follow-up). Every other
+    caller that names a request URL or a proxy value in a refusal,
+    warning, event, state or hint calls this with ``marker=""`` (drop
+    the credential, with its ``@``, exactly as `main` always has):
+    :func:`redact_request_url`, :func:`redact_proxy_value`. The
+    effective-settings snapshot redactor (``cli/redaction.py``) calls
+    it with ``marker=REDACTED`` for a value under a URL key, to show a
+    credential was there rather than silently removing all trace of
+    it.
+
+    Nothing else about *url* changes: no percent-decoding, no
+    re-encoding, no case change, no separator normalization -- a
+    credential-free URL (``https://medium.com/@alice/post``, a
+    ``?q=a%20b`` query, an empty ``#``, ``HTTPS://``, non-ASCII text,
+    percent-encoding, ...) comes back byte for byte.
+
+    The rule:
+
+    - **Userinfo in the authority.** The authority is the text right
+      after ``scheme://``, up to the first ``/``, ``?`` or ``#`` (or,
+      with no ``scheme://`` at all, *url* itself). When it contains an
+      ``@``, everything before its last ``@`` is replaced.
+    - **A ``:`` before a later ``@``.** When an ``@`` comes after the
+      authority (in the path, query or fragment) and a ``:`` appears
+      anywhere between the start of the authority and that later
+      ``@``, the whole span up to that ``@`` is replaced instead --
+      this catches a password hidden behind a ``/``
+      (``http://alice:secret/x@host``). A credential-free ``@`` with
+      no such ``:`` (``https://medium.com/@alice/post``, ``?q=a@b``)
+      is left untouched.
+    - **No ``://`` at all.** The same ``:``-before-``@`` cut applies to
+      a schemeless ``user:pass@host...`` value (the same shape a
+      schemeless proxy value carries) -- including one that also
+      contains whitespace or a control character, since every caller
+      here has already committed to treating *url* as a URL or proxy
+      value, never prose.
+    - Either cut replaces the matched span with ``f"{marker}@"`` when
+      *marker* is non-empty, or with nothing at all (dropping the
+      ``@`` too) when it is empty.
+    - **Query.** Every ``&``-separated ``key=value`` pair (raw text,
+      nothing decoded or re-encoded) whose key looks like a credential
+      has its value replaced -- with *marker* when non-empty, or the
+      fixed ``%2A%2A%2A`` (`main`'s own percent-encoded ``***``) when
+      empty, so a value without a marker still fails
+      ``has_redacted_secrets`` for the right reason. A ``?`` that comes
+      after a ``#`` is fragment text, never a query delimiter.
+    """
+    # A scheme boundary is the FIRST ":" in the value, immediately
+    # followed by "//" -- not just the first occurrence of the literal
+    # text "://" anywhere in it. "alice:p://w@host/x" has no scheme of
+    # its own by this rule (its first ":" is followed by "p", not
+    # "//"), so it falls through to the schemeless branch below, same
+    # as a real ``urlsplit`` would (its own first ":" ends a candidate
+    # scheme only when a "//" authority immediately follows it).
+    colon = url.find(":")
+    scheme_end = colon if colon != -1 and url[colon + 1 :].startswith("//") else -1
+    if scheme_end != -1:
+        prefix, rest = url[: scheme_end + 3], url[scheme_end + 3 :]
+    else:
+        prefix, rest = "", url
+
+    userinfo_prefix = f"{marker}@" if marker else ""
+    authority_end = len(rest)
+    for sep in ("/", "?", "#"):
+        idx = rest.find(sep)
+        if idx != -1:
+            authority_end = min(authority_end, idx)
+
+    last_at = rest.rfind("@")
+    if last_at != -1:
+        userinfo_in_authority = scheme_end != -1 and last_at < authority_end
+        if userinfo_in_authority or ":" in rest[:last_at]:
+            rest = userinfo_prefix + rest[last_at + 1 :]
+
+    hash_idx = rest.find("#")
+    body = rest if hash_idx == -1 else rest[:hash_idx]
+    fragment = "" if hash_idx == -1 else rest[hash_idx:]
+    query_idx = body.find("?")
+    if query_idx != -1:
+        query_mask = marker if marker else "%2A%2A%2A"
+        masked_segments = []
+        for segment in body[query_idx + 1 :].split("&"):
+            if "=" in segment:
+                key, _, value = segment.partition("=")
+                if _CREDENTIAL_QUERY_KEY_RE.search(key):
+                    segment = f"{key}={query_mask}"
+            masked_segments.append(segment)
+        body = body[: query_idx + 1] + "&".join(masked_segments)
+
+    return prefix + body + fragment
 
 
 def redact_proxy_value(value: str) -> str:
-    """*value* (a proxy URL or value, normalized or not) with its
-    userinfo removed, for a refusal message. A proxy value has no
-    meaningful path, so -- unlike :func:`_redact_url` -- this never stops
-    at a ``/``, ``?``, ``#`` or whitespace: only the LAST ``@`` in the
-    *whole* value (after its ``scheme://``, when it has one) counts, so
-    a password containing any of those still comes out fully removed
-    (issue #778).
+    """*value* (a proxy URL or value, normalized or not) redacted
+    through :func:`redact_url`, dropping any credential outright (the
+    classic, marker-less form every refusal message that names a proxy
+    value uses).
     """
-    scheme_end = value.find("://")
-    prefix, tail = (
-        (value[: scheme_end + 3], value[scheme_end + 3 :])
-        if scheme_end != -1
-        else ("", value)
-    )
-    if "@" not in tail:
-        return value
-    return prefix + tail.rpartition("@")[2]
+    return redact_url(value, "")
 
 
 def _at_follows_netloc(url: str, netloc: str) -> bool:
@@ -201,76 +262,16 @@ def _at_follows_netloc(url: str, netloc: str) -> bool:
 
 
 def redact_request_url(url: str) -> str:
-    """*url*, redacted for any refusal, warning, event, state, hint or
-    ``host:`` text that names a request URL -- the one function every
-    such caller uses, never :func:`_redact_url` or :func:`redact_proxy_value`
-    directly: the whole value is cut at the LAST ``@`` (never just the
-    authority's own userinfo) when *url*'s parsed ``netloc`` is empty
-    (a userinfo-bearing value with no scheme at all, or one whose
-    scheme has no ``//`` authority of its own even though the literal
-    text ``://`` appears somewhere later in it, e.g. in a query value --
-    neither leaves :func:`urlsplit` any authority for
-    :func:`strip_request_url_userinfo` to find anything in) or
-    :func:`_at_follows_netloc` is true (a password hidden behind a
-    ``/``, ``?`` or ``#`` can still smuggle a second, real host past the
-    parsed authority); :func:`strip_request_url_userinfo` otherwise.
-    Either way, the cut runs *before* any credential-like query
-    parameter is masked: masking first re-encodes a query string's own
-    ``@`` as ``%40``, so a cut that ran afterward would no longer find
-    it (issue #778). Shared by every surface that names a request URL
-    after parsing it: :func:`check_url`, :func:`check_strict_port`,
+    """*url*, redacted through :func:`redact_url` with no marker (the
+    credential dropped outright, with its ``@``) -- the one function
+    every refusal, warning, event, state or hint that names a request
+    URL uses. Shared by every surface that names a request URL after
+    parsing it: :func:`check_url`, :func:`check_strict_port`,
     :func:`curl_support.redact_host_url`,
     :func:`curl_support.curl_failure_message`, and every adapter error
     that names a request URL after I/O.
     """
-    netloc = _urlsplit(url).netloc
-    if not netloc:
-        cut = url.rpartition("@")[2]
-    elif _at_follows_netloc(url, netloc):
-        cut = redact_proxy_value(url)
-    else:
-        cut = strip_request_url_userinfo(url)
-    return _mask_credential_query_params(cut)
-
-
-def redact_request_url_with_marker(url: str, marker: str) -> str:
-    """*url*, cut at the exact same point :func:`redact_request_url` cuts
-    it (issue #819), but with the removed credential replaced by
-    *marker* followed by ``@`` instead of deleted outright -- used by
-    the effective-settings snapshot redactors (``cli/redaction.py``,
-    electricity's ``electricity-redaction``), which want to show a
-    credential was there, not silently remove all trace of it. Unlike
-    :func:`redact_request_url`, this uses the strict
-    :func:`urllib.parse.urlsplit` directly rather than
-    :func:`_urlsplit`'s lenient fallback: a netloc CPython itself
-    refuses to parse (unbalanced IPv6 brackets) is left alone here, the
-    same as it always has been for this redactor, rather than guessed
-    at the way a refusal message needs to always name *something*.
-    Returns *url* unchanged (past :func:`_mask_credential_query_params`)
-    when it has no ``@`` at all -- a value with a credential-like query
-    parameter but no userinfo still gets that masked.
-    """
-    if "@" not in url:
-        return _mask_credential_query_params(url)
-    try:
-        netloc = urllib.parse.urlsplit(url).netloc
-    except ValueError:
-        return url
-    if not netloc:
-        tail = url.rpartition("@")[2]
-        cut = f"{marker}@{tail}"
-    elif _at_follows_netloc(url, netloc):
-        scheme_sep = url.find("://")
-        prefix = url[: scheme_sep + 3] if scheme_sep != -1 else ""
-        tail = url[len(prefix) :].rpartition("@")[2]
-        cut = f"{prefix}{marker}@{tail}"
-    elif "@" in netloc:
-        parsed = urllib.parse.urlsplit(url)
-        new_netloc = f"{marker}@{netloc.rpartition('@')[2]}"
-        cut = urllib.parse.urlunsplit(parsed._replace(netloc=new_netloc))
-    else:
-        return _mask_credential_query_params(url)
-    return _mask_credential_query_params(cut)
+    return redact_url(url, "")
 
 
 #: A ``scheme://...`` URL embedded anywhere inside a larger piece of text

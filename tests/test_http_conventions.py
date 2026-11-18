@@ -7,12 +7,12 @@ from __future__ import annotations
 import pytest
 
 from circuitry.http_conventions import (
-    _redact_url,
     check_proxy_url,
     check_strict_port,
     check_url,
     redact_proxy_value,
     redact_request_url,
+    redact_url,
     resolve_proxy,
     split_proxy_url,
     strip_request_url_userinfo,
@@ -78,7 +78,7 @@ def test_check_strict_port_rejects_junk_after_an_ipv6_literal_with_the_shared_te
 def test_check_strict_port_never_echoes_a_password_disguised_as_a_port(char: str) -> None:
     """``https://user:pa/ss@api.example.com/v1``'s authority ends at the
     `/`, so the parsed netloc is ``user:pa`` -- no userinfo of its own
-    to strip, as far as a plain :func:`_redact_url` is concerned -- yet
+    to strip, as far as a plain authority-only cut is concerned -- yet
     the URL still carries an `@` further along, which means the real
     host (``api.example.com``) and the rest of the password are hidden
     past it. Refused with the shared text, cut to the last ``@`` and the
@@ -159,7 +159,7 @@ def test_check_url_scheme_refusal_never_echoes_a_password_hidden_past_the_author
 ) -> None:
     """Issue #778: the parsed netloc for this is ``user:pa`` (the
     authority ends at ``char``), with no ``@`` of its own -- a plain
-    :func:`_redact_url` leaves the rest of the password (``ss``)
+    authority-only cut leaves the rest of the password (``ss``)
     untouched.
     """
     url = f"ftp://user:pa{char}ss@host/x"
@@ -224,7 +224,7 @@ def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
     char: str,
 ) -> None:
     password = f"pa{char}ss"
-    redacted = _redact_url(f"http://alice:{password}@host:1234/x")
+    redacted = redact_url(f"http://alice:{password}@host:1234/x", "")
     assert redacted == "http://host:1234/x"
     assert "alice" not in redacted
     assert password not in redacted
@@ -254,6 +254,43 @@ def test_redact_request_url_cuts_at_the_last_at_sign_with_no_scheme_at_all() -> 
     """
     assert redact_request_url("alice:pw@host/x") == "host/x"
     assert redact_request_url("alice:pw@localhost:11434") == "localhost:11434"
+
+
+def test_redact_url_leaves_a_credential_free_url_byte_for_byte() -> None:
+    for url in [
+        "https://medium.com/@alice/post",
+        "https://x.test/?q=a@b",
+        "https://host/p?q=a/b",
+        "https://host/p?q=a%20b",
+        "https://host/p?flag",
+        "https://host/p?%7e",
+        "HTTPS://host/p",
+        "https://host/p?",
+        "https://host/p?&",
+        "https://host/path#frag?a=1",
+    ]:
+        assert redact_url(url, "***REDACTED***") == url
+        assert redact_request_url(url) == url
+
+
+def test_redact_url_cuts_a_password_hidden_behind_a_slash_but_not_a_bare_at_sign() -> None:
+    url = "http://alice:longsecret/x@127.0.0.1"
+    assert redact_url(url, "***REDACTED***") == "http://***REDACTED***@127.0.0.1"
+    assert redact_request_url(url) == "http://127.0.0.1"
+
+
+def test_redact_url_cuts_a_schemeless_userinfo_value() -> None:
+    assert redact_url("alice:longsecret@host:1234", "***REDACTED***") == (
+        "***REDACTED***@host:1234"
+    )
+
+
+def test_redact_url_masks_a_credential_query_key_among_other_keys() -> None:
+    url = "https://host/x?foo=1&api_key=sk-test&bar=2"
+    assert redact_url(url, "***REDACTED***") == (
+        "https://host/x?foo=1&api_key=***REDACTED***&bar=2"
+    )
+    assert redact_request_url(url) == "https://host/x?foo=1&api_key=%2A%2A%2A&bar=2"
 
 
 @pytest.mark.parametrize("char", (" ", "\r"))
