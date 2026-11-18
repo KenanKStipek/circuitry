@@ -946,8 +946,7 @@ effects:
 
     text = _cof(tmp_path, "check", str(root), "--skip-preflight")
     assert text.returncode == 0, text.stdout + text.stderr
-    assert "Secrets: x (document), named by" in text.stdout
-    assert str((tmp_path / "child.yml").resolve()) in text.stdout
+    assert "Secrets: x (document; named by child.yml)" in text.stdout
 
 
 def test_check_on_a_root_reports_a_child_named_secret_as_not_defined(tmp_path: Path) -> None:
@@ -1067,6 +1066,55 @@ effects:
     assert report["secret_children"] == {"y": [str((tmp_path / "grandchild.yml").resolve())]}
 
 
+def test_check_gives_a_path_child_the_runs_own_wider_file_confinement(tmp_path: Path) -> None:
+    """A `use: path:` child's `{file: ...}` prompt source is confined to
+    the run's own project boundary (the nearest `circuitry.config.json`/
+    `config.json` at or above it), not just the child's own folder -- the
+    same boundary `UseRuntime._confinement_root_for` gives it when it
+    actually runs. A narrower boundary would make this child fail to
+    compile here and drop its secret from the root's check."""
+    (tmp_path / "circuitry.config.json").write_text("{}", encoding="utf-8")
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "p.md").write_text("Use the API.", encoding="utf-8")
+    flows_dir = tmp_path / "flows"
+    flows_dir.mkdir()
+    _write(
+        flows_dir,
+        "child.yml",
+        """
+prompts:
+  p: {file: ../prompts/p.md}
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: x}}
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+runtime:
+  secrets:
+    x: {env: ROOT_X}
+effects:
+  - type: use
+    name: child
+    path: flows/child.yml
+""",
+    )
+
+    report = validate(root, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == ["x"]
+    assert report["secret_sources"] == {"x": "document"}
+    assert report["secret_children"] == {"x": [str((flows_dir / "child.yml").resolve())]}
+
+
 def test_check_lists_a_secret_named_by_both_the_root_and_a_child_once(tmp_path: Path) -> None:
     """A secret the root names directly, and a `use: path:` child also
     names, is listed once, with both names in the attribution."""
@@ -1109,6 +1157,10 @@ effects:
     assert report["secret_children"] == {
         "z": ["root", str((tmp_path / "child.yml").resolve())]
     }
+
+    text = _cof(tmp_path, "check", str(root), "--skip-preflight")
+    assert text.returncode == 0, text.stdout + text.stderr
+    assert "Secrets: z (document; named by root, child.yml)" in text.stdout
 
 
 def test_check_on_a_child_run_on_its_own_keeps_its_own_view(tmp_path: Path) -> None:
@@ -1174,6 +1226,72 @@ effects:
   - type: use
     name: child
     ref: shared
+""",
+    )
+
+    report = validate(root, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == []
+    assert report["secret_children"] == {}
+
+    result = run(
+        RunRequest(
+            orchestration_path=root,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=_config({"api": {"env": "API"}}),
+            skip_preflight=True,
+            trust_document=True,
+            allow_capabilities=frozenset({"network"}),
+        )
+    )
+    assert not result.ok
+    assert (
+        "names secret 'api': only a document run by path may name a secret"
+        in (result.error or "")
+    )
+
+
+def test_a_legacy_orchestration_childs_secret_is_not_surfaced_when_resolved_through_the_library(
+    tmp_path: Path,
+) -> None:
+    """The deprecated `orchestration:` field tries the filesystem first, then
+    falls back to the library, same as `ref:` -- and a child resolved that
+    way is pinned, so the run treats it as untrusted and refuses a secret it
+    names. The root's check must walk this child the same way: not at all,
+    the same as a `ref:` child, rather than as a trusted one."""
+    library = tmp_path / "lib"
+    library.mkdir()
+    _write(
+        library,
+        "shared.yml",
+        """
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://example.com/"
+      headers: {Authorization: {secret: api}}
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        f"""
+adapter: scripted
+model: none
+runtime:
+  secrets:
+    api: {{env: API}}
+  library:
+    sources: [{{type: folder, name: local, path: {json.dumps(str(library))}}}]
+effects:
+  - type: use
+    name: child
+    orchestration: shared
 """,
     )
 
