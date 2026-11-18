@@ -254,8 +254,8 @@ def build_redaction_cases() -> list[dict]:
         redact_case({"base_url": "alice:hunter2hunter2@host:1234"})
     )  # no :// at all
     cases.append(
-        redact_case({"base_url": "https://alice:443/x@api.example.test/v1"})
-    )  # @ behind the path
+        redact_case({"base_url": "https://alice:longsecret/x@api.example.test/v1"})
+    )  # @ behind the path, the : before it can't be a port
     cases.append(
         redact_case({"base_url": "https://api.example.test/search?api_key=hunter2hunter2"})
     )  # credential-like query key, no userinfo at all
@@ -273,11 +273,24 @@ def build_redaction_cases() -> list[dict]:
             {"base_url": "https://host/x?foo=1&api_key=sk-test&bar=2"}
         )
     )  # a credential query key among other keys, order preserved
+    cases.append(
+        redact_case({"url": "https://host/x?tok%65n=secretvalue123"})
+    )  # the query key is matched decoded; only the raw value text is replaced
+    cases.append(
+        redact_case({"base_url": "https://npmTOKEN123@registry.example.test/@acme/widget"})
+    )  # the authority's own userinfo is cut first, whether or not a later @ follows
+    cases.append(
+        redact_case({"webhook_url": "xoxb-" + "a" * 25})
+    )  # token-shaped under a URL key still redacts whole, as `main` did
+    cases.append(
+        redact_case({"endpoint": "sk-" + "a" * 25})
+    )  # same, with no @ and no ? at all for redact_url to act on
 
     # --- issue #819 follow-up: a credential-free URL under a URL key
     # comes back byte for byte -- no re-encoding, no case change ---
     cases.append(redact_case({"url": "https://medium.com/@alice/post"}))
     cases.append(redact_case({"url": "https://x.test/?q=a@b"}))
+    cases.append(redact_case({"url": "http://localhost:8080/@alice"}))  # the : is a real port
     cases.append(redact_case({"url": "https://host/p?q=a/b"}))
     cases.append(redact_case({"url": "https://host/p?q=a%20b"}))
     cases.append(redact_case({"url": "https://host/p?flag"}))

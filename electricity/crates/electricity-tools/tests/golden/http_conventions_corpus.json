@@ -205,8 +205,16 @@
       "redacted": "http://host:1234/x"
     },
     {
-      "url": "https://alice:443/x@api.example.com/v1?api_key=sk",
+      "url": "https://alice:longsecret/x@api.example.com/v1?api_key=sk",
       "redacted": "https://api.example.com/v1?api_key=%2A%2A%2A"
+    },
+    {
+      "url": "https://alice:443/x@api.example.com/v1?api_key=sk",
+      "redacted": "https://alice:443/x@api.example.com/v1?api_key=%2A%2A%2A"
+    },
+    {
+      "url": "http://localhost:8080/@alice",
+      "redacted": "http://localhost:8080/@alice"
     },
     {
       "url": "alice:pw@host/x",
@@ -227,6 +235,14 @@
     {
       "url": "mytoken@host.example.test/api",
       "redacted": "host.example.test/api"
+    },
+    {
+      "url": "https://npmTOKEN123@registry.example.test/@acme/widget",
+      "redacted": "https://registry.example.test/@acme/widget"
+    },
+    {
+      "url": "https://host/x?tok%65n=secretvalue123",
+      "redacted": "https://host/x?tok%65n=%2A%2A%2A"
     }
   ],
   "proxy_redaction_cases": [
@@ -268,7 +284,7 @@
     },
     {
       "value": "alice:s3cret@proxy:3128 ",
-      "redacted": "alice:s3cret@proxy:3128 "
+      "redacted": "proxy:3128 "
     }
   ],
   "proxy_cases": [

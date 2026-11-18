@@ -152,10 +152,17 @@ def _redaction_cases() -> list[dict[str, Any]]:
         "http://alice:pa\rss@host:1234/x",
         "http://alice:pa:ss@host:1234/x",
         # A credential-like query key behind an `@` that follows the
-        # authority (issue #778): the cut to the last `@` must run
-        # *before* the query is masked, or the mask's own re-encoding of
-        # a literal `@` as `%40` would hide it from the cut.
+        # authority, where the text before the `@` can't be a port
+        # (issue #778): the cut to the last `@` must run *before* the
+        # query is masked, or the mask's own re-encoding of a literal
+        # `@` as `%40` would hide it from the cut.
+        "https://alice:longsecret/x@api.example.com/v1?api_key=sk",
+        # The same shape, but the text before the `@` IS a valid port
+        # (issue #819 follow-up): `alice:443` reads as a real
+        # host:port, so the later `@` is left alone, the same as
+        # `http://localhost:8080/@alice`.
         "https://alice:443/x@api.example.com/v1?api_key=sk",
+        "http://localhost:8080/@alice",
         # A URL with no `scheme://` prefix at all (issue #778): the
         # same shape as a schemeless proxy value, which
         # `redact_proxy_value` already handles -- the whole value is
@@ -173,6 +180,13 @@ def _redaction_cases() -> list[dict[str, Any]]:
         # is already known to be a request URL, not just the
         # `user:pass@host` shape.
         "mytoken@host.example.test/api",
+        # The authority's own userinfo is cut first, whether or not
+        # another `@` also appears later in the value (issue #819
+        # follow-up): a scoped-package-style path here.
+        "https://npmTOKEN123@registry.example.test/@acme/widget",
+        # The query key is matched percent-decoded ("token"); only the
+        # raw value text is replaced (issue #819 follow-up).
+        "https://host/x?tok%65n=secretvalue123",
     ]
     return [{"url": url, "redacted": http_conventions.redact_request_url(url)} for url in urls]
 

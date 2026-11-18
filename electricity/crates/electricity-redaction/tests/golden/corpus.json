@@ -513,7 +513,7 @@
             },
             {
               "t": "str",
-              "v": "https://alice:443/x@api.example.test/v1"
+              "v": "https://alice:longsecret/x@api.example.test/v1"
             }
           ]
         ]
@@ -727,6 +727,134 @@
             },
             {
               "t": "str",
+              "v": "https://host/x?tok%65n=secretvalue123"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://host/x?tok%65n=***REDACTED***"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://npmTOKEN123@registry.example.test/@acme/widget"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "base_url"
+            },
+            {
+              "t": "str",
+              "v": "https://***REDACTED***@registry.example.test/@acme/widget"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "webhook_url"
+            },
+            {
+              "t": "str",
+              "v": "xoxb-aaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "webhook_url"
+            },
+            {
+              "t": "str",
+              "v": "***REDACTED***"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "endpoint"
+            },
+            {
+              "t": "str",
+              "v": "sk-aaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "endpoint"
+            },
+            {
+              "t": "str",
+              "v": "***REDACTED***"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
               "v": "https://medium.com/@alice/post"
             }
           ]
@@ -775,6 +903,38 @@
             {
               "t": "str",
               "v": "https://x.test/?q=a@b"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "http://localhost:8080/@alice"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "http://localhost:8080/@alice"
             }
           ]
         ]
