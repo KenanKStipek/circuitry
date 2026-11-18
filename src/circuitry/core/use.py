@@ -652,6 +652,51 @@ def _clean_yaml_fences(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def resolve_filesystem_use_path(value: str, *, document_dir: Path | None) -> Path | None:
+    """Resolve a `path:`/legacy `orchestration:` use effect's reference
+    against the filesystem only: absolute, cwd-relative, then relative to
+    *document_dir* (the directory of the document carrying the use effect).
+
+    The chain `UseRuntime._resolve_orchestration` tries before any library
+    fallback, for either field -- shared so a static walk of these children
+    (`core.cycle_check`) can't drift from what a run actually does. None
+    when nothing resolves on disk; the caller decides what that means (an
+    outright failure for `path:`, a library fallback for the deprecated
+    `orchestration:` field).
+    """
+    candidate = Path(value)
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    if document_dir is not None:
+        relative = document_dir / value
+        if relative.exists() and relative.is_file():
+            return relative
+    return None
+
+
+def path_not_found_message(name: str, value: str) -> str:
+    """The run's own message when a `use: path:` value resolves nowhere on
+    disk -- shared with `core.cycle_check.check_use_path_children` so the
+    two surfaces can't drift apart (#832).
+    """
+    return (
+        f"Use effect '{name}': path '{value}' not found "
+        "(checked absolute, cwd-relative, and parent-orchestration-relative)."
+    )
+
+
+def orchestration_not_found_message(name: str, value: str) -> str:
+    """The run's own message when the deprecated `use: orchestration:`
+    field resolves neither on disk nor in the library -- shared with
+    `core.cycle_check.check_use_path_children` (#832).
+    """
+    return (
+        f"Use effect '{name}': orchestration '{value}' not found. "
+        "Provide a valid file path or a bundled orchestration name "
+        "(run `cof list` to see available names)."
+    )
+
+
 @dataclass(frozen=True)
 class UseDefinition:
     name: str
@@ -799,43 +844,32 @@ class UseRuntime:
             )
 
         if self.defn.path:
-            candidate = Path(self.defn.path)
-            if candidate.exists() and candidate.is_file():
-                return candidate
-
             parent_dir = self.runtime_config.get("_orchestration_dir")
-            if parent_dir:
-                relative = Path(parent_dir) / self.defn.path
-                if relative.exists() and relative.is_file():
-                    return relative
-
-            raise ValueError(
-                f"Use effect '{self.defn.name}': path '{self.defn.path}' not found "
-                "(checked absolute, cwd-relative, and parent-orchestration-relative)."
+            resolved_path = resolve_filesystem_use_path(
+                self.defn.path,
+                document_dir=Path(parent_dir) if parent_dir else None,
             )
+            if resolved_path is not None:
+                return resolved_path
+
+            raise ValueError(path_not_found_message(self.defn.name, self.defn.path))
 
         # Deprecated `orchestration` field: legacy fallback chain.
         legacy = self.defn.orchestration
         if legacy:
-            candidate = Path(legacy)
-            if candidate.exists() and candidate.is_file():
-                return candidate
-
             parent_dir = self.runtime_config.get("_orchestration_dir")
-            if parent_dir:
-                relative = Path(parent_dir) / legacy
-                if relative.exists() and relative.is_file():
-                    return relative
+            resolved_path = resolve_filesystem_use_path(
+                legacy,
+                document_dir=Path(parent_dir) if parent_dir else None,
+            )
+            if resolved_path is not None:
+                return resolved_path
 
             bundled = self._resolve_library_ref(legacy)
             if bundled is not None:
                 return bundled
 
-            raise ValueError(
-                f"Use effect '{self.defn.name}': orchestration '{legacy}' not found. "
-                "Provide a valid file path or a bundled orchestration name "
-                "(run `cof list` to see available names)."
-            )
+            raise ValueError(orchestration_not_found_message(self.defn.name, legacy))
 
         raise ValueError(
             f"Use effect '{self.defn.name}': no reference field set "
