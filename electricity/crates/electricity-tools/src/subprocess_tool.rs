@@ -468,6 +468,7 @@ const PARSE_EXCERPT_CHARS: usize = 200;
 pub(crate) fn parse_mode(value: Option<&Value>, plugin_name: &str) -> Result<bool, ToolError> {
     match value {
         None | Some(Value::None) => Ok(false),
+        Some(Value::Str(s)) if py_strip(s).is_empty() => Ok(false),
         Some(Value::Str(s)) if py_strip(s).to_lowercase() == "json" => Ok(true),
         Some(other) => Err(value_error(format!(
             "{plugin_name}: params['parse'] must be 'json' (or omitted), got {}.",
@@ -480,24 +481,42 @@ pub(crate) fn parse_mode(value: Option<&Value>, plugin_name: &str) -> Result<boo
 /// result's `value` becomes the parsed JSON of its stdout (which stays
 /// on `stdout`); empty or invalid stdout is a `ValueError` carrying the
 /// exit code and the beginning of stdout. `json.loads`' own message is
-/// reproduced byte for byte by `electricity_json::loads`.
+/// reproduced byte for byte by `electricity_json::loads` -- including a
+/// nesting depth past `electricity_json::MAX_DEPTH`, labeled "not valid
+/// JSON" the same as a syntax error, matching `plugins/_subprocess.py`'s
+/// own catch of Python's distinct `RecursionError` for the same shape
+/// (#576). The failure's own `cause` carries the real (already secret-
+/// scrubbed) stdout/stderr/exit code (`ErrorCause::ParseFailureRawOutput`),
+/// the same raw-output fields a successful run of the same tool already
+/// gets -- `exec/tool.rs`'s own failure block reads them off *cause*,
+/// the same way `core/tool.py` reads `ParseFailure`'s own attributes.
 ///
-/// *scrub*, when given (issue #600), runs on the *whole* stdout before
-/// the excerpt is cut: a host-`env` secret the process prints starting
-/// just before the cut would otherwise leave its first part in the
-/// error, since a whole-value scrub of the excerpt alone can no longer
-/// find the complete value to replace.
+/// *scrub*, when given (issue #600), runs on the *whole* stdout and
+/// stderr before either is attached to the failure or the excerpt is
+/// cut: a host-`env` secret the process prints starting just before the
+/// cut would otherwise leave its first part in the error, since a
+/// whole-value scrub of the excerpt alone can no longer find the
+/// complete value to replace.
 pub(crate) fn parse_json_stdout(
     mut result: ToolResult,
     binary: &str,
     scrub: Option<&dyn Fn(&str) -> String>,
 ) -> Result<ToolResult, ToolError> {
     let stdout = result.stdout.clone().unwrap_or_default();
+    let stderr = result.stderr.clone().unwrap_or_default();
     let exit_code = result.exit_code.unwrap_or(0);
+    let scrubbed_stdout = scrub.map(|f| f(&stdout)).unwrap_or_else(|| stdout.clone());
+    let scrubbed_stderr = scrub.map(|f| f(&stderr)).unwrap_or_else(|| stderr.clone());
     if py_strip(&stdout).is_empty() {
-        return Err(value_error(format!(
-            "{binary} parse: json: stdout is empty (exit {exit_code})."
-        )));
+        return Err(ToolError {
+            py_class: PyExc::ValueError,
+            message: format!("{binary} parse: json: stdout is empty (exit {exit_code})."),
+            cause: ErrorCause::ParseFailureRawOutput {
+                stdout: scrubbed_stdout,
+                stderr: scrubbed_stderr,
+                exit_code,
+            },
+        });
     }
     match loads(&stdout) {
         Ok(parsed) => {
@@ -506,18 +525,25 @@ pub(crate) fn parse_json_stdout(
             Ok(result)
         }
         Err(err) => {
-            let scrubbed = scrub.map(|f| f(&stdout)).unwrap_or_else(|| stdout.clone());
-            let excerpt: String = scrubbed.chars().take(PARSE_EXCERPT_CHARS).collect();
-            let more = if scrubbed.chars().count() > PARSE_EXCERPT_CHARS {
+            let excerpt: String = scrubbed_stdout.chars().take(PARSE_EXCERPT_CHARS).collect();
+            let more = if scrubbed_stdout.chars().count() > PARSE_EXCERPT_CHARS {
                 "..."
             } else {
                 ""
             };
-            Err(value_error(format!(
-                "{binary} parse: json: stdout is not valid JSON (exit {exit_code}): {err}; \
-                 stdout begins {}{more}",
-                Value::Str(excerpt).py_repr()
-            )))
+            Err(ToolError {
+                py_class: PyExc::ValueError,
+                message: format!(
+                    "{binary} parse: json: stdout is not valid JSON (exit {exit_code}): {err}; \
+                     stdout begins {}{more}",
+                    Value::Str(excerpt).py_repr()
+                ),
+                cause: ErrorCause::ParseFailureRawOutput {
+                    stdout: scrubbed_stdout,
+                    stderr: scrubbed_stderr,
+                    exit_code,
+                },
+            })
         }
     }
 }
@@ -665,6 +691,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_mode_treats_an_empty_or_blank_string_as_off_too() {
+        // Issue #576: `parse: ""` is off, like `parse: null`, so a
+        // template that renders empty doesn't fail.
+        assert!(!parse_mode(Some(&Value::from("")), "awk").unwrap());
+        assert!(!parse_mode(Some(&Value::from("   ")), "awk").unwrap());
+    }
+
+    #[test]
     fn parse_mode_rejects_anything_else_naming_the_plugin() {
         let err = parse_mode(Some(&Value::from("yaml")), "awk").unwrap_err();
         assert_eq!(
@@ -724,6 +758,34 @@ mod tests {
         let long = "x".repeat(5000);
         let err = parse_json_stdout(result_with_stdout(&long, 0), "/x", None).unwrap_err();
         assert!(err.message.contains(&format!("'{}'...", "x".repeat(200))));
+    }
+
+    #[test]
+    fn parse_json_stdout_failures_carry_their_own_raw_output() {
+        // Issue #576: a `parse: json` failure still records the process's
+        // own stdout/stderr/exit code, the same raw-output fields a
+        // successful run of the same tool already gets.
+        let mut with_stderr = result_with_stdout("not json\n", 3);
+        with_stderr.stderr = Some("warn\n".to_string());
+        let err = parse_json_stdout(with_stderr, "/x", None).unwrap_err();
+        assert_eq!(
+            err.cause,
+            ErrorCause::ParseFailureRawOutput {
+                stdout: "not json\n".to_string(),
+                stderr: "warn\n".to_string(),
+                exit_code: 3,
+            }
+        );
+
+        let err = parse_json_stdout(result_with_stdout("", 0), "/x", None).unwrap_err();
+        assert_eq!(
+            err.cause,
+            ErrorCause::ParseFailureRawOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 0,
+            }
+        );
     }
 
     #[test]

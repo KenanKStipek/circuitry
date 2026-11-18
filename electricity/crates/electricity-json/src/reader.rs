@@ -101,6 +101,20 @@ pub fn load_json(text: &str) -> Result<Value, ReadError> {
 }
 
 fn parse(text: &str) -> Result<Raw, ReadError> {
+    // `json/__init__.py::loads`'s own pre-check, before any whitespace
+    // skipping or scanning at all: a leading U+FEFF (the whole *text*
+    // starting with it, not merely containing one later) gets this
+    // fixed message instead of whatever the ordinary scanner would say
+    // about it (issue #576) -- `JSONDecodeError("Unexpected UTF-8 BOM
+    // (decode using utf-8-sig)", s, 0)`, position 0 always.
+    if text.starts_with('\u{feff}') {
+        return Err(ReadError::Syntax {
+            message: "Unexpected UTF-8 BOM (decode using utf-8-sig)".to_string(),
+            pos: 0,
+            lineno: 1,
+            colno: 1,
+        });
+    }
     let chars: Vec<char> = text.chars().collect();
     let parser = Parser { chars: &chars };
     let start = parser.skip_ws(0);
@@ -525,5 +539,38 @@ impl Parser<'_> {
                 _ => return Err(self.syntax("Expecting ',' delimiter", idx)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_leading_byte_order_mark_matches_pythons_own_fixed_message() {
+        // Issue #576: `json.loads` checks for a leading U+FEFF before any
+        // scanning at all, so this is `"Unexpected UTF-8 BOM (decode
+        // using utf-8-sig)"` at position 0, never the ordinary scanner's
+        // "Expecting value" -- even when what follows is itself valid
+        // JSON, and for both `loads` and `load_json`.
+        let err = loads("\u{feff}{\"a\": 1}").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"
+        );
+        let err = load_json("\u{feff}").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"
+        );
+    }
+
+    #[test]
+    fn a_byte_order_mark_not_at_the_very_start_is_an_ordinary_syntax_error() {
+        // `str.startswith` of the BOM character is false once anything precedes it,
+        // so this reaches the ordinary scanner instead of the fixed BOM
+        // message.
+        let err = loads(" \u{feff}{}").unwrap_err();
+        assert!(err.to_string().starts_with("Expecting value: "));
     }
 }

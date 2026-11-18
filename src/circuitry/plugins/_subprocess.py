@@ -33,16 +33,37 @@ from .base import ToolResult, _as_bool
 _PARSE_EXCERPT_CHARS = 200
 
 
+class ParseFailure(ValueError):
+    """``parse: json`` on empty or invalid stdout -- carries the process's
+    own raw stdout/stderr/exit code (already secret-scrubbed), so a failed
+    effect still records them the way a successful run of the same tool
+    would (#576). ``core.tool`` reads them off an instance of this
+    class, specifically -- a plain nonzero-exit failure carries no such
+    attributes and still records them as null."""
+
+    def __init__(self, message: str, *, stdout: str, stderr: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
+
+
 def parse_mode(params: dict[str, Any], *, plugin_name: str) -> bool:
     """Read the optional ``parse`` param shared by ``shell`` and every
     :class:`GenericSubprocessTool`: ``True`` for ``parse: json``, ``False``
-    when it's absent or null. Anything else is rejected before the process
-    runs, so a typo never costs a side effect."""
+    when it's absent, null, or an empty (or whitespace-only) string --
+    the same as no ``parse`` at all, so a template that renders empty
+    doesn't fail. Anything else is rejected before the process runs, so a
+    typo never costs a side effect."""
     mode = params.get("parse")
     if mode is None:
         return False
-    if isinstance(mode, str) and mode.strip().lower() == "json":
-        return True
+    if isinstance(mode, str):
+        stripped = mode.strip()
+        if not stripped:
+            return False
+        if stripped.lower() == "json":
+            return True
     raise ValueError(
         f"{plugin_name}: params['parse'] must be 'json' (or omitted), got {mode!r}."
     )
@@ -53,30 +74,46 @@ def _parse_json_stdout(
     *,
     binary: str,
     returncode: int,
+    stderr: str,
     scrub: Callable[[str], str] | None = None,
 ) -> Any:
     """``json.loads`` of a process's stdout for ``parse: json``, failing with
     the exit code and the beginning of stdout on empty or invalid output.
+    The raised :class:`ParseFailure` carries the real stdout/stderr/exit
+    code too, so the failed effect still records them, the same raw-output
+    fields a non-zero exit already does.
 
-    *scrub*, when given, runs on the *whole* stdout before the excerpt is cut
-    (#600): a host-``env`` secret the process prints starting just before
-    the cut would otherwise leave its first part in the error, since a
-    whole-value scrub of the excerpt alone can no longer find the complete
-    value to replace.
+    *scrub*, when given, runs on the *whole* stdout and stderr before either
+    is attached to the failure or the excerpt is cut (#600): a host-``env``
+    secret the process prints starting just before the cut would otherwise
+    leave its first part in the error, since a whole-value scrub of the
+    excerpt alone can no longer find the complete value to replace.
+
+    Deeply nested stdout raises Python's own ``RecursionError``, a
+    different exception from ``json.JSONDecodeError`` -- caught here too,
+    so it never escapes uncaught, and is reported as the same ordinary
+    'not valid JSON' parse failure electricity's own fixed-depth error is.
     """
+    scrubbed_stdout = scrub(stdout) if scrub is not None else stdout
+    scrubbed_stderr = scrub(stderr) if scrub is not None else stderr
     if not stdout.strip():
-        raise ValueError(
-            f"{binary} parse: json: stdout is empty (exit {returncode})."
+        raise ParseFailure(
+            f"{binary} parse: json: stdout is empty (exit {returncode}).",
+            stdout=scrubbed_stdout,
+            stderr=scrubbed_stderr,
+            exit_code=returncode,
         )
     try:
         return json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        scrubbed = scrub(stdout) if scrub is not None else stdout
-        excerpt = scrubbed[:_PARSE_EXCERPT_CHARS]
-        more = "..." if len(scrubbed) > _PARSE_EXCERPT_CHARS else ""
-        raise ValueError(
+    except (json.JSONDecodeError, RecursionError) as exc:
+        excerpt = scrubbed_stdout[:_PARSE_EXCERPT_CHARS]
+        more = "..." if len(scrubbed_stdout) > _PARSE_EXCERPT_CHARS else ""
+        raise ParseFailure(
             f"{binary} parse: json: stdout is not valid JSON (exit {returncode}): "
-            f"{exc}; stdout begins {excerpt!r}{more}"
+            f"{exc}; stdout begins {excerpt!r}{more}",
+            stdout=scrubbed_stdout,
+            stderr=scrubbed_stderr,
+            exit_code=returncode,
         ) from exc
 
 
@@ -294,7 +331,11 @@ def run_binary(
     value: Any = stdout
     if parse_json:
         value = _parse_json_stdout(
-            stdout, binary=binary, returncode=returncode, scrub=scrub_secrets
+            stdout,
+            binary=binary,
+            returncode=returncode,
+            stderr=stderr,
+            scrub=scrub_secrets,
         )
 
     return ToolResult(

@@ -1,0 +1,14 @@
+name: c-from-as-json-nan-dict-key
+interface:
+  inputs:
+    seed:
+      type: object
+      default:
+        .nan: 1
+effects:
+  - type: tool
+    name: show
+    provider: json
+    params:
+      mode: stringify
+      input: {from: input.seed, as: json}

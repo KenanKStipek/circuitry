@@ -958,7 +958,8 @@ time.
   `prime.session.meta` didn't resolve. A value JSON can't carry (`NaN`,
   bytes, ...) fails the effect with `Tool effect '<name>' param '<path>':
   '{from: ..., as: json}' did not serialize to JSON: ...`. `json` is the only
-  `as` value: `cof check` rejects any other.
+  `as` value: `cof check` rejects any other. A bare `as: null` is the same as
+  omitting `as` entirely — the leaf still passes the value by reference, typed.
 - Only a mapping with the key `from` (optionally plus `default` and `as`) is a
   reference. Any other mapping — including one with other keys mixed in — is
   passed through literally, same as today. To pass a *literal* one-key
@@ -1065,11 +1066,16 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   `{from: prime.<name>.value.ok}` or CEL expression reads real types. The raw
   stdout stays on `meta.stdout`, unless
   [`runtime.state.parsed_stdout: drop`](#recording-parsed-stdout-runtimestateparsed_stdout)
-  keeps it out of state. Empty or invalid stdout fails the effect, with `meta.stdout` null,
-  naming the exit code and quoting the first 200 characters of stdout; with
-  `allow_nonzero: true` a non-zero exit's stdout is parsed the same way and
-  `meta.exit_code` keeps the code. Any other `parse` value fails before the
-  process runs.
+  keeps it out of state. Empty or invalid stdout fails the effect, naming the exit code and
+  quoting the first 200 characters of stdout; `meta.stdout`, `meta.stderr` and `meta.exit_code`
+  still record the real values, also under `on_error: continue` — the same fields a *successful*
+  run of the same tool always records. (A non-zero exit without `allow_nonzero` has no such
+  values to record either way: it fails before a result exists, and `meta.stdout`/`stderr`/
+  `exit_code` stay null.) Deeply nested stdout fails the same way, never as
+  an uncaught recursion error. With `allow_nonzero: true` a non-zero exit's stdout is parsed
+  the same way and `meta.exit_code` keeps the code. `parse: ""` is the same as omitting it
+  (off) — a template that renders empty doesn't fail the effect. Any other `parse` value fails
+  before the process runs.
 - **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
   (`ok: false`) on a 4xx/5xx response by default, with the status recorded
   on **`meta.status_code`**. The failure message (`meta.error`, and
@@ -1529,10 +1535,10 @@ runtime:
     parsed_stdout: drop
 ```
 
-`value` is the same either way. A failed parse already records no stdout
-(`meta.stdout` is `null`, and the error quotes the first 200 characters), so
-`drop` leaves failures unchanged, and a step without `parse: json` keeps its
-stdout under both values. A document that reads a parsed step's
+`value` is the same either way. A failed parse records the real raw stdout on `meta.stdout`
+(the error also quotes its first 200 characters) rather than a parsed value, so there is
+nothing for `drop` to apply to: a failure is recorded the same way under either setting, and
+a step without `parse: json` keeps its stdout under both values. A document that reads a parsed step's
 `meta.stdout` should keep `full`. Like `record_children` and
 [`prompt_sent`](#recording-the-prompt-text-runtimestateprompt_sent), the key
 sits under `runtime.state`, so it applies however the document arrives
@@ -1715,7 +1721,7 @@ child a value as it is (an array, an object, a number, a boolean) write `{from: 
 - `{from: <path>, as: json}` passes the value as compact JSON text instead (keys in their stored
   order), for a child that wants a string. A path that resolves to nothing still passes `null`.
   A value JSON can't carry fails the `use` naming the input. `json` is the only `as` value;
-  `cof check` rejects any other.
+  `cof check` rejects any other. A bare `as: null` is the same as omitting `as` entirely.
 - Only a mapping with the key `from` (optionally plus `as`) is a reference. Any other mapping is a
   literal value.
 

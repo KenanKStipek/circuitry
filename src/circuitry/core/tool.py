@@ -23,7 +23,7 @@ from ..cli.redaction import redact
 from ..generated_doc import dispatch_errors
 from ..output import console as _console
 from ..output import live_region as _live_region
-from ..plugins._subprocess import GenericSubprocessTool
+from ..plugins._subprocess import GenericSubprocessTool, ParseFailure
 from ..plugins.agent import AgentPlugin
 from ..plugins.base import ToolResult
 from ..plugins.cel import CelPlugin
@@ -904,6 +904,12 @@ class ToolRuntime:
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
             result: ToolResult | None = None
             failure: Exception | None = None
+            # A raised failure that carries its own raw output, e.g.
+            # `plugins/_subprocess.py::ParseFailure` on `parse: json`
+            # (#576) -- read off the exception right when it's caught,
+            # before a secret-scrub below can replace it with a plain
+            # `RuntimeError` that carries no such attributes.
+            parse_raw_output: tuple[str, str, int] | None = None
             retryable = False
             timeout_unresolved = False
             prompt_file_unread = False
@@ -1202,6 +1208,8 @@ class ToolRuntime:
 
             except Exception as e:
                 failure = e
+                if isinstance(e, ParseFailure):
+                    parse_raw_output = (e.stdout, e.stderr, e.exit_code)
                 retryable = (
                     not timeout_unresolved
                     and not prompt_file_unread
@@ -1231,6 +1239,11 @@ class ToolRuntime:
 
             if failure is not None:
                 meta["error"] = str(failure)
+                # A raised failure that carries its own raw output (#576)
+                # -- a non-zero exit without `allow_nonzero` loses it the
+                # same way raising always has; `parse: json` no longer does.
+                if parse_raw_output is not None:
+                    meta["stdout"], meta["stderr"], meta["exit_code"] = parse_raw_output
                 meta["completed_at"] = _now_iso()
                 # This attempt is no longer running (#636).
                 meta.pop("live", None)

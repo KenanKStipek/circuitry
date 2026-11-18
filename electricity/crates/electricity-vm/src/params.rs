@@ -137,7 +137,12 @@ fn contains_non_finite_float(value: &Value) -> bool {
     match value {
         Value::Float(f) => !f.is_finite(),
         Value::List(items) => items.iter().any(contains_non_finite_float),
-        Value::Dict(dict) => dict.values().any(contains_non_finite_float),
+        // Issue #576: a dict's own keys, not just its values -- Python's
+        // `json.dumps(..., allow_nan=False)` rejects a `NaN`/infinite
+        // float key the same way it rejects one as a value.
+        Value::Dict(dict) => dict
+            .iter()
+            .any(|(k, v)| contains_non_finite_float(k) || contains_non_finite_float(v)),
         _ => false,
     }
 }
@@ -748,6 +753,11 @@ mod tests {
 
     #[test]
     fn an_as_json_reference_to_an_unserializable_value_names_the_path() {
+        // Issue #576: a `NaN`/infinite float dict *key*, not just a
+        // value, fails the same way `json.dumps(..., allow_nan=False)`
+        // fails on one in cof.
+        let mut nan_key_dict = Dict::new();
+        nan_key_dict.insert(Value::Float(f64::NAN), Value::from(1i64));
         for (value, reason) in [
             (
                 Value::Float(f64::NAN),
@@ -755,6 +765,10 @@ mod tests {
             ),
             (
                 Value::List(vec![Value::Float(f64::INFINITY)]),
+                "Out of range float values are not JSON compliant",
+            ),
+            (
+                Value::Dict(nan_key_dict),
                 "Out of range float values are not JSON compliant",
             ),
             (

@@ -495,12 +495,20 @@ def _move_into_place(temp: Path, target: _SaveTarget) -> None:
 def _replace_exclusively(temp: Path, path: Path) -> None:
     """Move *temp* to *path* only if nothing is there: an empty placeholder
     created with ``O_EXCL`` (``FileExistsError`` otherwise), then replaced;
-    the placeholder is removed again if the replace fails."""
+    the placeholder is removed again if the replace fails. Between the
+    placeholder's creation and the replace, another process could put its
+    own file at *path*: the replace then overwrites it, or a failed
+    replace's cleanup removes it -- a window the ``os.link`` path above
+    never has. It needs a concurrent writer at this exact path within
+    microseconds, on a filesystem without hard links."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     os.close(os.open(path, flags, 0o666))
     try:
         os.replace(temp, path)
-    except OSError:
+    except BaseException:
+        # Not just OSError (#608): a KeyboardInterrupt or another
+        # BaseException between the placeholder and the replace must
+        # still clean it up rather than leave an empty file at *path*.
         with contextlib.suppress(OSError):
             os.unlink(path)
         raise

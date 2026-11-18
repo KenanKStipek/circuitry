@@ -202,11 +202,14 @@ def test_a_failed_parse_is_recorded_the_same_under_drop_and_full(
         assert result.ok is False
         metas[setting] = result.state["prime"]["report"]["meta"]
     for meta in metas.values():
-        assert meta["stdout"] is None
+        # A failed parse records the real raw output (#576) -- there is
+        # no parsed value to drop, so `drop` and `full` still agree.
+        assert meta["stdout"] == stdout
         assert "stdout_chars" not in meta
         assert "stdout_sha256" not in meta
         assert "parse: json: stdout is" in meta["error"]
     assert metas["drop"]["error"] == metas["full"]["error"]
+    assert metas["drop"]["stdout"] == metas["full"]["stdout"]
 
 
 def test_resume_works_on_a_state_written_with_drop(
