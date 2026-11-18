@@ -921,11 +921,29 @@ def _do_validate(
         if result.get("secrets"):
             sources = result["secret_sources"]
             children = result.get("secret_children") or {}
+            # Each child's own name sits apart from the secrets list with a
+            # semicolon, not the list's own comma, so "named by root,
+            # child.yml" can't be misread as another secret; a child inside
+            # the root's own folder prints relative to it (the full path
+            # stays in --json's secret_children).
+            root_dir = orchestration.resolve().parent
             parts = []
             for name in result["secrets"]:
                 namers = children.get(name)
-                suffix = f", named by {', '.join(namers)}" if namers else ""
-                parts.append(f"{name} ({sources[name]}){suffix}")
+                if namers:
+                    displayed = []
+                    for namer in namers:
+                        if namer == "root":
+                            displayed.append(namer)
+                            continue
+                        try:
+                            displayed.append(str(Path(namer).relative_to(root_dir)))
+                        except ValueError:
+                            displayed.append(namer)
+                    suffix = f"; named by {', '.join(displayed)}"
+                else:
+                    suffix = ""
+                parts.append(f"{name} ({sources[name]}{suffix})")
             console.print(f"[bold]Secrets:[/bold] {escape(', '.join(parts))}")
             if any(sources[name] == "not defined" for name in result["secrets"]):
                 console.print(

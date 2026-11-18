@@ -1593,9 +1593,16 @@ def _use_path_child_secrets(
     secret the same way `compile_orchestration` always has, and a child that
     fails to compile for any other reason is skipped, same tolerance
     `iter_use_path_children` gives an unresolvable reference: the real run
-    reports it.
+    reports it. The `{file: ...}` confinement root is the run's own --
+    `default_project_root(parent_dir)`, the nearest
+    `circuitry.config.json`/`config.json` at or above the child -- not the
+    child's own directory, since a `path:` child routinely shares a prompt
+    file with the rest of its project (`UseRuntime._confinement_root_for`,
+    never pinned here: `iter_use_path_children` only ever returns a
+    filesystem-resolved child).
     """
     from ..core.cycle_check import iter_use_path_children
+    from ..core.prompt_files import default_project_root
 
     by_name: dict[str, list[str]] = {}
     for label, child_orch, parent_dir in iter_use_path_children(
@@ -1606,7 +1613,9 @@ def _use_path_child_secrets(
                 orch=child_orch,
                 root_name="prime",
                 document_dir=parent_dir,
-                confinement_root=parent_dir,
+                confinement_root=(
+                    default_project_root(parent_dir) if parent_dir is not None else parent_dir
+                ),
                 trusted=trusted,
             )
         except Exception:
