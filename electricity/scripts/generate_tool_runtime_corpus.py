@@ -280,6 +280,9 @@ def build_redaction_cases() -> list[dict]:
         redact_case({"base_url": "https://npmTOKEN123@registry.example.test/@acme/widget"})
     )  # the authority's own userinfo is cut first, whether or not a later @ follows
     cases.append(
+        redact_case({"url": "http://localhost:8080/@alice"})
+    )  # a : before a later @ is cut even when it could be a port
+    cases.append(
         redact_case({"webhook_url": "xoxb-" + "a" * 25})
     )  # token-shaped under a URL key still redacts whole, as `main` did
     cases.append(
@@ -290,7 +293,6 @@ def build_redaction_cases() -> list[dict]:
     # comes back byte for byte -- no re-encoding, no case change ---
     cases.append(redact_case({"url": "https://medium.com/@alice/post"}))
     cases.append(redact_case({"url": "https://x.test/?q=a@b"}))
-    cases.append(redact_case({"url": "http://localhost:8080/@alice"}))  # the : is a real port
     cases.append(redact_case({"url": "https://host/p?q=a/b"}))
     cases.append(redact_case({"url": "https://host/p?q=a%20b"}))
     cases.append(redact_case({"url": "https://host/p?flag"}))

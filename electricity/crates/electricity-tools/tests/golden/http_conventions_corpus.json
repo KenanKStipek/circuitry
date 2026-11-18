@@ -210,11 +210,15 @@
     },
     {
       "url": "https://alice:443/x@api.example.com/v1?api_key=sk",
-      "redacted": "https://alice:443/x@api.example.com/v1?api_key=%2A%2A%2A"
+      "redacted": "https://api.example.com/v1?api_key=%2A%2A%2A"
     },
     {
       "url": "http://localhost:8080/@alice",
-      "redacted": "http://localhost:8080/@alice"
+      "redacted": "http://alice"
+    },
+    {
+      "url": "http://user:12/34@host",
+      "redacted": "http://host"
     },
     {
       "url": "alice:pw@host/x",

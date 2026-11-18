@@ -152,17 +152,19 @@ def _redaction_cases() -> list[dict[str, Any]]:
         "http://alice:pa\rss@host:1234/x",
         "http://alice:pa:ss@host:1234/x",
         # A credential-like query key behind an `@` that follows the
-        # authority, where the text before the `@` can't be a port
-        # (issue #778): the cut to the last `@` must run *before* the
-        # query is masked, or the mask's own re-encoding of a literal
-        # `@` as `%40` would hide it from the cut.
+        # authority (issue #778): the cut to the last `@` must run
+        # *before* the query is masked, or the mask's own re-encoding
+        # of a literal `@` as `%40` would hide it from the cut.
         "https://alice:longsecret/x@api.example.com/v1?api_key=sk",
         # The same shape, but the text before the `@` IS a valid port
-        # (issue #819 follow-up): `alice:443` reads as a real
-        # host:port, so the later `@` is left alone, the same as
-        # `http://localhost:8080/@alice`.
+        # (issue #819 follow-up): a port exception was tried and
+        # withdrawn -- `http://user:12/34@host` (a password containing
+        # a `/` whose first part happens to be all digits) must still
+        # be cut in full, so a port-shaped `:` suffix is never
+        # special-cased, and `http://localhost:8080/@alice` is cut too.
         "https://alice:443/x@api.example.com/v1?api_key=sk",
         "http://localhost:8080/@alice",
+        "http://user:12/34@host",
         # A URL with no `scheme://` prefix at all (issue #778): the
         # same shape as a schemeless proxy value, which
         # `redact_proxy_value` already handles -- the whole value is

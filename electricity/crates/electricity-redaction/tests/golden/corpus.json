@@ -787,6 +787,38 @@
           [
             {
               "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "http://localhost:8080/@alice"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "http://***REDACTED***@alice"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
               "v": "webhook_url"
             },
             {
@@ -903,38 +935,6 @@
             {
               "t": "str",
               "v": "https://x.test/?q=a@b"
-            }
-          ]
-        ]
-      }
-    },
-    {
-      "input": {
-        "t": "dict",
-        "v": [
-          [
-            {
-              "t": "str",
-              "v": "url"
-            },
-            {
-              "t": "str",
-              "v": "http://localhost:8080/@alice"
-            }
-          ]
-        ]
-      },
-      "output": {
-        "t": "dict",
-        "v": [
-          [
-            {
-              "t": "str",
-              "v": "url"
-            },
-            {
-              "t": "str",
-              "v": "http://localhost:8080/@alice"
             }
           ]
         ]
