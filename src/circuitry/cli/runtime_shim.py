@@ -1818,26 +1818,6 @@ def validate(
         merged_runtime = _merge_runtime(
             (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
         )
-
-        # A `use: path:`/legacy `orchestration:` child that fails to
-        # resolve, parse, validate or compile fails the root's own check
-        # (#832) -- the real run would fail reaching it too. `merged_runtime`,
-        # not the config's own alone, so a legacy `orchestration:` child this
-        # document's own `runtime.library.sources` falls back for resolves
-        # here exactly as the run's own registry resolves it.
-        child_check_errors = _use_path_child_check_errors(
-            orch,
-            orchestration_path=orchestration_path,
-            trusted=trusted,
-            runtime=merged_runtime,
-        )
-        if child_check_errors:
-            return {
-                "ok": False,
-                "errors": child_check_errors,
-                "warnings": lint_warnings,
-            }
-
         from ..core.lint import splitting_merge_warnings
 
         lint_warnings += splitting_merge_warnings(orch, merged_runtime)
@@ -1908,6 +1888,30 @@ def validate(
             return {
                 "ok": False,
                 "errors": [f"Cycle: {' → '.join(cycle)}"],
+                "warnings": lint_warnings,
+            }
+
+        # A `use: path:`/legacy `orchestration:` child that fails to
+        # resolve, parse, validate or compile fails the root's own check
+        # (#832) -- the real run would fail reaching it too. Checked after
+        # the cycle above: a document can hide a cycle behind a child with
+        # a duplicate YAML key (`core.cycle_check.load_orch`'s own
+        # docstring), and that cycle is the more fundamental problem,
+        # reported first even though the same child also fails this check.
+        # `merged_runtime`, not the config's own alone, so a legacy
+        # `orchestration:` child this document's own `runtime.library.sources`
+        # falls back for resolves here exactly as the run's own registry
+        # resolves it.
+        child_check_errors = _use_path_child_check_errors(
+            orch,
+            orchestration_path=orchestration_path,
+            trusted=trusted,
+            runtime=merged_runtime,
+        )
+        if child_check_errors:
+            return {
+                "ok": False,
+                "errors": child_check_errors,
                 "warnings": lint_warnings,
             }
 
