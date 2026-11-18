@@ -1358,6 +1358,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         args.out_dir.is_none(),
         &history,
         engine.name(),
+        None,
     );
     ExitCode::from(code)
 }
@@ -1370,8 +1371,11 @@ fn do_run(args: RunArgs) -> ExitCode {
 /// live-state write, computes the run's own summary line exactly
 /// once (never mid-run), and prints the exit code and (for the
 /// default run directory only) where its files ended up. Returns the
-/// engine's own exit code, the same number every path through here
-/// has always used to build its `ExitCode` from.
+/// engine's own exit code (issue #828: `received_signal` overrides
+/// it, through `exit_code_with_signal_priority`, with a real signal
+/// osi itself received and forwarded; `None` from both plain-mode
+/// callers, which never race a terminal check against the forwarded
+/// signal the way the TUI loop can).
 #[allow(clippy::too_many_arguments)]
 fn finish_run(
     out: &mut impl Write,
@@ -1389,6 +1393,7 @@ fn finish_run(
     print_run_dir: bool,
     history: &history_io::HistoryHandle,
     engine_name: &str,
+    received_signal: Option<ForwardSignal>,
 ) -> u8 {
     let exit_status = child.wait().unwrap_or(exit_status);
 
@@ -1456,13 +1461,14 @@ fn finish_run(
     if let Some(line) = summary {
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
-    let _ = writeln!(out, "exit {}", exit_code(exit_status));
+    let code = exit_code_with_signal_priority(received_signal, exit_code(exit_status) as u8);
+    let _ = writeln!(out, "exit {code}");
 
     if print_run_dir {
         let _ = writeln!(out, "run directory: {}", run_dir.display());
     }
 
-    exit_code(exit_status) as u8
+    code
 }
 
 /// How often the TUI redraws at most (DESIGN.md §6.3: "Redraws are
@@ -2232,6 +2238,10 @@ fn run_tui(
     let mut app = App::new(false);
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
+    // The first real signal osi itself receives this run, forwarded
+    // or not -- set once, at the top of the tick that first saw it,
+    // and never overwritten. See `exit_code_with_signal_priority`.
+    let mut received_signal: Option<ForwardSignal> = None;
 
     // Issue #535: the colour mode is detected once at startup, never
     // per redraw, and is shared by every theme choice for this run --
@@ -2305,6 +2315,7 @@ fn run_tui(
                 print_run_dir,
                 history,
                 &engine_name,
+                None,
             );
             return ExitCode::from(code);
         }
@@ -2420,6 +2431,13 @@ fn run_tui(
     'tui: loop {
         if let Some(watcher) = signals.as_mut() {
             for sig in watcher.pending() {
+                // Issue #828: remembered once, from the first real
+                // signal this run ever sees -- a terminal lost later
+                // in this same tick also forwards a synthetic SIGHUP
+                // (`cancel_for_lost_terminal` below), and that must
+                // never retroactively change which signal this run's
+                // own exit code reports.
+                received_signal.get_or_insert(sig);
                 if exit_status.is_none() {
                     cancel_once(
                         &child,
@@ -3024,6 +3042,7 @@ fn run_tui(
         print_run_dir,
         history,
         &engine_name,
+        received_signal,
     );
     // Design: `spawn_event_reader`'s own
     // background thread may still be stuck forever inside crossterm
@@ -4491,6 +4510,22 @@ fn forward_signal_exit_code(signal: ForwardSignal) -> u8 {
         ForwardSignal::Term => 143,
         ForwardSignal::Hup => 129,
     }
+}
+
+/// A signal osi itself actually received decides this run's exit
+/// code ahead of `fallback` -- the engine's own exit status in
+/// `run_tui`'s case, a watched run's recorded ending in `watch_exit_
+/// code`'s (issue #828). A terminal lost in the very same tick as a
+/// delivered signal also forwards a second, synthetic SIGHUP to the
+/// engine (`cancel_for_lost_terminal`); if the engine happens to die
+/// from *that* one instead of the real signal forwarded moments
+/// earlier, trusting `fallback` alone would report the terminal's
+/// own code (129) for what was actually the user's Ctrl-C (130) or a
+/// forwarded SIGTERM (143). A lost terminal with no signal ever
+/// delivered has no `received_signal` to prefer, so `fallback` still
+/// decides, unchanged.
+fn exit_code_with_signal_priority(received_signal: Option<ForwardSignal>, fallback: u8) -> u8 {
+    received_signal.map_or(fallback, forward_signal_exit_code)
 }
 
 /// A cheap check for whether the empty Select's own Recent Runs
@@ -6098,9 +6133,7 @@ fn watch_exit_code(
     model: &RunModel,
     last_state: &Option<serde_json::Value>,
 ) -> u8 {
-    if let Some(sig) = local_signal {
-        forward_signal_exit_code(sig)
-    } else if let Some(signal) = model.run_end_signal() {
+    let without_a_local_signal = if let Some(signal) = model.run_end_signal() {
         exit_code_for_signal_name(signal).unwrap_or(1) as u8
     } else {
         match last_state {
@@ -6118,7 +6151,8 @@ fn watch_exit_code(
                 1
             }
         }
-    }
+    };
+    exit_code_with_signal_priority(local_signal, without_a_local_signal)
 }
 
 /// Prints a clap parse error to the right stream and returns its exit
@@ -7091,6 +7125,60 @@ mod tests {
             code = pending_signal_exit_code(&mut signals);
         }
         assert_eq!(code, Some(130));
+    }
+
+    // Issue #828: a terminal lost in the very same tick as a
+    // delivered signal also makes `run_tui`'s loop forward a second,
+    // synthetic SIGHUP to the engine (`cancel_for_lost_terminal`) --
+    // on `origin/main`, before this fix, the run's own exit code came
+    // from whichever of the two signals the engine happened to die
+    // from, not from the one osi itself actually received, so this
+    // exact case could (and once did, see the issue) report 129
+    // instead of 130. `exit_code_with_signal_priority` is the
+    // decision both `run_tui`'s `finish_run` call and `watch_exit_
+    // code` make it through, so it's testable with no terminal, no
+    // engine and no real signal at all.
+    #[test]
+    fn a_delivered_sigint_wins_over_a_terminal_lost_the_same_tick() {
+        // The terminal-lost fallback, standing in for whatever the
+        // engine's own exit status (or, in `watch_exit_code`'s case,
+        // the watched run's recorded ending) would otherwise give
+        // once a second, synthetic SIGHUP also raced the real signal
+        // in the same tick.
+        let terminal_lost_fallback = forward_signal_exit_code(ForwardSignal::Hup);
+        assert_eq!(terminal_lost_fallback, 129);
+        assert_eq!(
+            exit_code_with_signal_priority(Some(ForwardSignal::Int), terminal_lost_fallback),
+            130
+        );
+    }
+
+    #[test]
+    fn a_delivered_sigterm_wins_over_a_terminal_lost_the_same_tick() {
+        let terminal_lost_fallback = forward_signal_exit_code(ForwardSignal::Hup);
+        assert_eq!(
+            exit_code_with_signal_priority(Some(ForwardSignal::Term), terminal_lost_fallback),
+            143
+        );
+    }
+
+    #[test]
+    fn a_delivered_sighup_wins_over_a_terminal_lost_the_same_tick() {
+        // Both the real signal and the terminal-loss fallback are
+        // SIGHUP's own 129 here, but for different reasons -- osi
+        // itself was sent a real SIGHUP, not merely one it invented
+        // for a lost terminal with nothing actually delivered.
+        let terminal_lost_fallback = forward_signal_exit_code(ForwardSignal::Hup);
+        assert_eq!(
+            exit_code_with_signal_priority(Some(ForwardSignal::Hup), terminal_lost_fallback),
+            129
+        );
+    }
+
+    #[test]
+    fn a_lost_terminal_with_no_signal_pending_still_exits_as_it_does_today() {
+        assert_eq!(exit_code_with_signal_priority(None, 129), 129);
+        assert_eq!(exit_code_with_signal_priority(None, 0), 0);
     }
 
     #[test]
