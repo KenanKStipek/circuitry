@@ -277,6 +277,156 @@ def iter_use_path_children(
     return out
 
 
+def _use_path_effects(orch: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every `use` effect anywhere in *orch* naming a `path:`/legacy
+    `orchestration:` child -- never a `ref:` or `inline:` one, each its own
+    document (a library entry, or generated at run time) rather than a
+    child of this one.
+    """
+    out: list[dict[str, Any]] = []
+    effects = orch.get("effects") or orch.get("steps") or []
+    for effect in [*_walk_effects(effects), *_walk_effects(orch.get("finally"))]:
+        if (effect.get("type") or "").strip().lower() != "use":
+            continue
+        ref = effect.get("ref")
+        inline = effect.get("inline")
+        if isinstance(ref, str) and ref.strip():
+            continue
+        if isinstance(inline, str) and inline.strip():
+            continue
+        path_field = effect.get("path")
+        legacy = effect.get("orchestration")
+        if (isinstance(path_field, str) and path_field.strip()) or (
+            isinstance(legacy, str) and legacy.strip()
+        ):
+            out.append(effect)
+    return out
+
+
+def check_use_path_children(
+    root_orch: dict[str, Any],
+    *,
+    root_path: Path | None = None,
+    trusted: bool = False,
+    runtime: dict[str, Any] | None = None,
+) -> list[tuple[str, str]]:
+    """Every `use: path:`/legacy `orchestration:` child of *root_orch*,
+    recursively, compiled the way a run of the root would compile it -- the
+    same resolution chain (`core.use.resolve_filesystem_use_path`), the
+    same structural check a file named directly gets
+    (`core.document_check.structural_errors`), and the same project
+    boundary and trust `core.compiler.compile_orchestration` enforces for a
+    run's own child -- as a list of ``(label, message)`` failures, in
+    discovery order. Empty when every reachable child resolves, parses,
+    validates and compiles; `cof check` fails the root on anything in this
+    list, the same way the run itself would fail on reaching that child.
+
+    Unlike :func:`iter_use_path_children` (#611's secrets walk, tolerant of
+    an unreachable child so a child the walk can't resolve never fails the
+    root's own check on its own), a failure here is this function's whole
+    point (#832): resolving, parsing, validating and compiling a child are
+    exactly what the real run does before running it, so skipping any of
+    them silently would let `cof check` pass a root whose run fails. A
+    legacy `orchestration:` child the filesystem can't resolve is still
+    followed through the library, same as the run's own fallback, but
+    checked limited (``trusted=False``) rather than inheriting the root's,
+    since it is then someone else's document the moment it falls back
+    (`core.use.UseRuntime.execute`'s own `child_trusted` check) -- reported
+    the same way the run reports it rather than skipped silently for being
+    library-resolved.
+    """
+    from ..cli.orchestration_loader import load_orchestration_file
+    from .compiler import compile_orchestration
+    from .document_check import structural_errors
+    from .library_ref import LibraryRefError, build_registry, resolve_ref
+    from .prompt_files import default_project_root
+    from .use import resolve_filesystem_use_path
+
+    registry = build_registry(runtime)
+    seen: set[str] = {str(root_path.resolve())} if root_path is not None else set()
+    failures: list[tuple[str, str]] = []
+
+    def visit(orch: dict[str, Any], document_dir: Path | None, doc_trusted: bool) -> None:
+        for effect in _use_path_effects(orch):
+            name = effect.get("name") or "use"
+            path_field = effect.get("path")
+            if isinstance(path_field, str) and path_field.strip():
+                is_path = True
+                value = path_field.strip()
+            else:
+                is_path = False
+                value = str(effect.get("orchestration")).strip()
+
+            resolved = resolve_filesystem_use_path(value, document_dir=document_dir)
+            child_trusted = doc_trusted
+            if resolved is None and not is_path:
+                try:
+                    lib = resolve_ref(value, registry=registry)
+                except LibraryRefError as exc:
+                    failures.append((value, f"Use effect '{name}': {exc}"))
+                    continue
+                if lib is not None:
+                    resolved = lib.path.resolve()
+                    child_trusted = False
+
+            if resolved is None:
+                message = (
+                    f"Use effect '{name}': path '{value}' not found "
+                    "(checked absolute, cwd-relative, and parent-orchestration-relative)."
+                    if is_path
+                    else (
+                        f"Use effect '{name}': orchestration '{value}' not found. "
+                        "Provide a valid file path or a bundled orchestration name "
+                        "(run `cof list` to see available names)."
+                    )
+                )
+                failures.append((value, message))
+                continue
+
+            resolved = resolved.resolve()
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            try:
+                child_orch = load_orchestration_file(resolved)
+            except Exception as exc:
+                failures.append((key, str(exc)))
+                continue
+            if not isinstance(child_orch, dict):
+                continue
+
+            if bool(effect.get("validate", True)):
+                schema_errors = structural_errors(child_orch)
+                if schema_errors:
+                    failures.append(
+                        (
+                            key,
+                            f"Orchestration {resolved} validation failed:\n"
+                            + "\n".join(f"  - {e}" for e in schema_errors),
+                        )
+                    )
+                    continue
+
+            try:
+                compile_orchestration(
+                    orch=child_orch,
+                    root_name="prime",
+                    document_dir=resolved.parent,
+                    confinement_root=default_project_root(resolved.parent),
+                    trusted=child_trusted,
+                )
+            except Exception as exc:
+                failures.append((key, str(exc)))
+                continue
+
+            visit(child_orch, resolved.parent, child_trusted)
+
+    visit(root_orch, root_path.parent if root_path is not None else None, trusted)
+    return failures
+
+
 def detect_cycles(
     root_orch: dict[str, Any],
     *,
