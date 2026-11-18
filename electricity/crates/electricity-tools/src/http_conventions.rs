@@ -16,9 +16,12 @@
 /// value, normalized or not) redacted through
 /// [`electricity_redaction::redact_url`], dropping any credential
 /// outright (the classic, marker-less form every refusal message that
-/// names a proxy value uses).
+/// names a proxy value uses). A proxy value has no path of its own
+/// worth keeping, so the whole authority is the credential: unlike
+/// [`redact_request_url`], a later `@` is cut even with no `:` before
+/// it (`http://abc/def@proxy:3128` is cut to `http://proxy:3128`).
 pub fn redact_proxy_value(value: &str) -> String {
-    electricity_redaction::redact_url(value, "")
+    electricity_redaction::redact_url(value, "", false)
 }
 
 /// `http_conventions._proxy_authority` -- the authority text of
@@ -180,7 +183,7 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
 /// `curl_text::redact_host_url`, `curl_text::curl_failure_message`,
 /// and every adapter error that names a request URL after I/O.
 pub fn redact_request_url(url: &str) -> String {
-    electricity_redaction::redact_url(url, "")
+    electricity_redaction::redact_url(url, "", true)
 }
 
 /// The one whitespace set [`embedded_url_len`]'s own boundary uses, on
@@ -189,7 +192,7 @@ pub fn redact_request_url(url: &str) -> String {
 /// these Python's own `\s`/`str.isspace` already matches, spelled out
 /// explicitly rather than through `char::is_whitespace`, which is
 /// false for U+001C-U+001F and would otherwise let the two engines end
-/// an embedded URL at different points (issue #819 follow-up).
+/// an embedded URL at different points.
 fn is_embedded_url_boundary_whitespace(c: char) -> bool {
     matches!(c, '\u{09}'..='\u{0d}' | '\u{20}' | '\u{1c}'..='\u{1f}')
 }
@@ -348,15 +351,13 @@ mod tests {
 
     #[test]
     fn scrub_embedded_urls_ends_a_url_at_a_unit_separator() {
-        // issue #819/#827 follow-up: U+001F is whitespace to Python's
-        // own `\s` (what cof's `_EMBEDDED_URL_RE` uses) but not to
-        // Rust's `char::is_whitespace` -- the explicit ASCII set both
-        // engines now share must end the URL there too. Unlike the
-        // password-before-the-separator shape (which the authority
-        // cut alone would also happen to fix), this text is
-        // credential-free, so cutting at the LAST `@` instead of
-        // stopping at U+001F first would still change it -- a leak
-        // this test must fail without the explicit whitespace set.
+        // U+001F ends an embedded URL on both engines
+        // (`_EMBEDDED_URL_BOUNDARY`, not `char::is_whitespace`, which
+        // is false for it). Unlike the password-before-the-separator
+        // shape (which the authority cut alone would also happen to
+        // fix), this text is credential-free, so cutting at the LAST
+        // `@` instead of stopping at U+001F first would still change
+        // it.
         let text = "bad url http://h/a\u{1f}b:c@d";
         assert_eq!(scrub_embedded_urls(text), text);
     }
@@ -516,8 +517,7 @@ mod tests {
         // userinfo. cof's `check_url` names `alice` for both, and the
         // same whole message (issue #778). The query's own `next` value
         // is left exactly as written, never re-encoded -- only a
-        // credential-like query key is ever touched (issue #819
-        // follow-up).
+        // credential-like query key is ever touched.
         for (cut, url, named_url) in [
             ("alice:p", "alice:p://w@host/x", "host/x"),
             (
