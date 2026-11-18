@@ -88,14 +88,15 @@ def resolve_reference(
     `ref:` goes through the library registry (cross-source, cache paths
     included); `path:` keeps its filesystem-first chain with a library lookup
     as the final fallback, unless *allow_library_fallback* is false — the
-    chain the run's own `path:` field uses, which never consults the
-    library (`core.use.UseRuntime._resolve_orchestration`; only the legacy
-    `orchestration:` field falls back to it, and doing so there makes the
-    run treat the child as untrusted). An unfetched remote source resolves
-    to None here — a missing cache is preflight's error to raise, not a
-    cycle.
+    chain the run's own `path:` field uses (`core.use.resolve_filesystem_use_path`,
+    shared here so this walk can't drift from it; only the legacy
+    `orchestration:` field falls back to the library, and doing so there
+    makes the run treat the child as untrusted). An unfetched remote source
+    resolves to None here — a missing cache is preflight's error to raise,
+    not a cycle.
     """
     from .library_ref import LibraryRefError, build_registry, resolve_ref
+    from .use import resolve_filesystem_use_path
 
     if registry is None:
         registry = build_registry(runtime)
@@ -111,14 +112,9 @@ def resolve_reference(
         return library_lookup(value)
 
     # path / legacy orchestration: try filesystem then the library as fallback
-    candidate = Path(value)
-    if candidate.exists() and candidate.is_file():
-        return candidate.resolve()
-
-    if parent_dir is not None:
-        relative = parent_dir / value
-        if relative.exists() and relative.is_file():
-            return relative.resolve()
+    resolved_on_disk = resolve_filesystem_use_path(value, document_dir=parent_dir)
+    if resolved_on_disk is not None:
+        return resolved_on_disk.resolve()
 
     if not allow_library_fallback:
         return None
@@ -309,46 +305,92 @@ def check_use_path_children(
     root_path: Path | None = None,
     trusted: bool = False,
     runtime: dict[str, Any] | None = None,
-) -> list[tuple[str, str]]:
+    known_groups: frozenset[str] = frozenset(),
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Every `use: path:`/legacy `orchestration:` child of *root_orch*,
-    recursively, compiled the way a run of the root would compile it -- the
-    same resolution chain (`core.use.resolve_filesystem_use_path`), the
-    same structural check a file named directly gets
-    (`core.document_check.structural_errors`), and the same project
-    boundary and trust `core.compiler.compile_orchestration` enforces for a
-    run's own child -- as a list of ``(label, message)`` failures, in
-    discovery order. Empty when every reachable child resolves, parses,
-    validates and compiles; `cof check` fails the root on anything in this
-    list, the same way the run itself would fail on reaching that child.
+    recursively, compiled the way a run of the root would compile it --
+    the same resolution chain (`core.use.resolve_filesystem_use_path`),
+    the same structural check a file named directly gets
+    (`core.document_check.structural_errors`), the same project boundary
+    and trust `core.compiler.compile_orchestration` enforces for a run's
+    own child, and the same ambient `runtime.concurrency_groups` table
+    (`core.compiler.unknown_concurrency_group_errors`) -- as
+    ``(failures, warnings)``, each a list of ``(label, message)`` pairs,
+    in discovery order. Both empty when every reachable child resolves,
+    parses, validates and compiles; `cof check` fails the root on
+    anything in *failures*, the same way the run itself would fail on
+    reaching that child. A failure whose own `use` effect sets
+    `on_error: skip`/`continue` lands in *warnings* instead -- the run
+    swallows it there too (`UseRuntime.execute`'s own `on_error` branch),
+    so it shouldn't fail a check the run itself would pass; `on_error`
+    outside the matching 'fail' default is read directly off that one
+    effect, never an ancestor's.
 
-    Unlike :func:`iter_use_path_children` (#611's secrets walk, tolerant of
-    an unreachable child so a child the walk can't resolve never fails the
-    root's own check on its own), a failure here is this function's whole
-    point (#832): resolving, parsing, validating and compiling a child are
-    exactly what the real run does before running it, so skipping any of
-    them silently would let `cof check` pass a root whose run fails. A
-    legacy `orchestration:` child the filesystem can't resolve is still
-    followed through the library, same as the run's own fallback, but
-    checked limited (``trusted=False``) rather than inheriting the root's,
-    since it is then someone else's document the moment it falls back
+    Unlike :func:`iter_use_path_children` (#611's secrets walk, tolerant
+    of an unreachable child so a child the walk can't resolve never fails
+    the root's own check on its own): that walk resolves through
+    :func:`resolve_reference` rather than calling
+    `resolve_filesystem_use_path` directly, swallows every load/compile
+    error as "no secrets to report" rather than naming it, never applies
+    `validate: false`/a schema check of its own, and always compiles with
+    the root's own trust even for a legacy `orchestration:` child that
+    falls back to the library -- this function's own, stricter walk is
+    the one to extend if a future caller needs the two to fully agree.
+    A failure here is this function's whole point (#832): resolving,
+    parsing, validating and compiling a child are exactly what the real
+    run does before running it, so skipping any of them silently would
+    let `cof check` pass a root whose run fails. A legacy
+    `orchestration:` child the filesystem can't resolve is still followed
+    through the library, same as the run's own fallback, but checked
+    limited (``trusted=False``) rather than inheriting the root's, since
+    it is then someone else's document the moment it falls back
     (`core.use.UseRuntime.execute`'s own `child_trusted` check) -- reported
-    the same way the run reports it rather than skipped silently for being
-    library-resolved.
+    the same way the run reports it rather than skipped silently for
+    being library-resolved, and confined, when pinned, to that source's
+    own cached tree (``lib.cache_path``) rather than the project
+    containing the cache -- the same boundary
+    `UseRuntime._confinement_root_for` gives a remote-pinned child.
+
+    The library registry (only ever needed for that legacy fallback) is
+    built lazily, on the first child that actually needs it -- building
+    it up front would make a document with a malformed
+    `runtime.library.sources` of its own fail this check even when
+    nothing in it ever reaches the library (#345's own tolerance, which
+    this walk must keep).
     """
+    from ..cli.library_sources import LibrarySourceError
     from ..cli.orchestration_loader import load_orchestration_file
-    from .compiler import compile_orchestration
+    from .compiler import compile_orchestration, unknown_concurrency_group_errors
     from .document_check import structural_errors
     from .library_ref import LibraryRefError, build_registry, resolve_ref
     from .prompt_files import default_project_root
-    from .use import resolve_filesystem_use_path
+    from .use import (
+        orchestration_not_found_message,
+        path_not_found_message,
+        resolve_filesystem_use_path,
+    )
 
-    registry = build_registry(runtime)
     seen: set[str] = {str(root_path.resolve())} if root_path is not None else set()
     failures: list[tuple[str, str]] = []
+    warnings: list[tuple[str, str]] = []
+    registry_box: list[LibraryRegistry] = []
 
-    def visit(orch: dict[str, Any], document_dir: Path | None, doc_trusted: bool) -> None:
+    def get_registry() -> LibraryRegistry:
+        if not registry_box:
+            registry_box.append(build_registry(runtime))
+        return registry_box[0]
+
+    def visit(
+        orch: dict[str, Any],
+        document_dir: Path | None,
+        doc_trusted: bool,
+        document_label: str | None,
+    ) -> None:
         for effect in _use_path_effects(orch):
             name = effect.get("name") or "use"
+            on_error = str(effect.get("on_error") or "fail").strip().lower()
+            outcome = warnings if on_error in ("skip", "continue") else failures
+
             path_field = effect.get("path")
             if isinstance(path_field, str) and path_field.strip():
                 is_path = True
@@ -359,30 +401,38 @@ def check_use_path_children(
 
             resolved = resolve_filesystem_use_path(value, document_dir=document_dir)
             child_trusted = doc_trusted
+            confinement_override: Path | None = None
             if resolved is None and not is_path:
                 try:
-                    lib = resolve_ref(value, registry=registry)
-                except LibraryRefError as exc:
-                    failures.append((value, f"Use effect '{name}': {exc}"))
+                    lib = resolve_ref(value, registry=get_registry())
+                except (LibraryRefError, LibrarySourceError) as exc:
+                    outcome.append(
+                        (document_label or value, f"Use effect '{name}': {exc}")
+                    )
                     continue
                 if lib is not None:
-                    resolved = lib.path.resolve()
+                    resolved = lib.path
                     child_trusted = False
+                    if lib.cache_path:
+                        confinement_override = Path(lib.cache_path)
 
             if resolved is None:
                 message = (
-                    f"Use effect '{name}': path '{value}' not found "
-                    "(checked absolute, cwd-relative, and parent-orchestration-relative)."
+                    path_not_found_message(name, value)
                     if is_path
-                    else (
-                        f"Use effect '{name}': orchestration '{value}' not found. "
-                        "Provide a valid file path or a bundled orchestration name "
-                        "(run `cof list` to see available names)."
-                    )
+                    else orchestration_not_found_message(name, value)
                 )
-                failures.append((value, message))
+                outcome.append((document_label or value, message))
                 continue
 
+            # Normalized once here, same as the run's own `identity`
+            # (`UseRuntime.execute`'s `str(resolved_path.resolve())`) --
+            # every later use of *resolved*, including the text embedded
+            # in a validation-failure message below, is this same
+            # normalized path, not the possibly cwd-relative or
+            # `..`-containing one `resolve_filesystem_use_path` returned,
+            # so the embedded text stays the same regardless of the
+            # caller's own cwd.
             resolved = resolved.resolve()
             key = str(resolved)
             if key in seen:
@@ -392,7 +442,7 @@ def check_use_path_children(
             try:
                 child_orch = load_orchestration_file(resolved)
             except Exception as exc:
-                failures.append((key, str(exc)))
+                outcome.append((key, str(exc)))
                 continue
             if not isinstance(child_orch, dict):
                 continue
@@ -400,7 +450,7 @@ def check_use_path_children(
             if bool(effect.get("validate", True)):
                 schema_errors = structural_errors(child_orch)
                 if schema_errors:
-                    failures.append(
+                    outcome.append(
                         (
                             key,
                             f"Orchestration {resolved} validation failed:\n"
@@ -409,23 +459,43 @@ def check_use_path_children(
                     )
                     continue
 
+            child_document_dir = resolved.parent
             try:
-                compile_orchestration(
+                child_def = compile_orchestration(
                     orch=child_orch,
                     root_name="prime",
-                    document_dir=resolved.parent,
-                    confinement_root=default_project_root(resolved.parent),
+                    document_dir=child_document_dir,
+                    confinement_root=(
+                        confinement_override
+                        or default_project_root(child_document_dir)
+                    ),
                     trusted=child_trusted,
                 )
             except Exception as exc:
-                failures.append((key, str(exc)))
+                outcome.append((key, str(exc)))
                 continue
 
-            visit(child_orch, resolved.parent, child_trusted)
+            if known_groups:
+                group_errors = unknown_concurrency_group_errors(child_def, known_groups)
+                if group_errors:
+                    outcome.append(
+                        (
+                            key,
+                            f"Orchestration {resolved} validation failed:\n"
+                            + "\n".join(f"  - {e}" for e in group_errors),
+                        )
+                    )
+                    continue
 
-    visit(root_orch, root_path.parent if root_path is not None else None, trusted)
-    return failures
+            visit(child_orch, child_document_dir, child_trusted, key)
 
+    visit(
+        root_orch,
+        root_path.parent if root_path is not None else None,
+        trusted,
+        str(root_path.resolve()) if root_path is not None else None,
+    )
+    return failures, warnings
 
 def detect_cycles(
     root_orch: dict[str, Any],
