@@ -1,0 +1,7 @@
+{
+  "spec_case": "orchestration-reference.md 'Params by reference' (issue #576)",
+  "description": "A `{from: <path>, as: json}` reference whose resolved value is a dict with a NaN (or infinite) float key fails to serialize, the same as one used as a value -- `json.dumps(..., allow_nan=False)` rejects a non-finite key too.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

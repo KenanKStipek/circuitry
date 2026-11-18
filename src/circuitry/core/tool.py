@@ -904,6 +904,12 @@ class ToolRuntime:
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
             result: ToolResult | None = None
             failure: Exception | None = None
+            # A raised failure that carries its own raw output, e.g.
+            # `plugins/_subprocess.py::ParseFailure` on `parse: json`
+            # (#576) -- read off the exception right when it's caught,
+            # before a secret-scrub below can replace it with a plain
+            # `RuntimeError` that carries no such attributes.
+            parse_raw_output: tuple[str, str, int] | None = None
             retryable = False
             timeout_unresolved = False
             prompt_file_unread = False
@@ -1202,6 +1208,13 @@ class ToolRuntime:
 
             except Exception as e:
                 failure = e
+                stdout_attr = getattr(e, "stdout", None)
+                if stdout_attr is not None:
+                    parse_raw_output = (
+                        stdout_attr,
+                        getattr(e, "stderr", None),
+                        getattr(e, "exit_code", None),
+                    )
                 retryable = (
                     not timeout_unresolved
                     and not prompt_file_unread
@@ -1231,6 +1244,11 @@ class ToolRuntime:
 
             if failure is not None:
                 meta["error"] = str(failure)
+                # A raised failure that carries its own raw output (#576)
+                # -- a non-zero exit without `allow_nonzero` loses it the
+                # same way raising always has; `parse: json` no longer does.
+                if parse_raw_output is not None:
+                    meta["stdout"], meta["stderr"], meta["exit_code"] = parse_raw_output
                 meta["completed_at"] = _now_iso()
                 # This attempt is no longer running (#636).
                 meta.pop("live", None)

@@ -168,6 +168,10 @@ def test_without_as_the_value_is_still_passed_typed(monkeypatch: pytest.MonkeyPa
     ("value", "reason"),
     [
         (float("nan"), "Out of range float values"),
+        # Issue #576: a NaN/infinite float dict *key*, not just a value,
+        # fails the same way (electricity's own `contains_non_finite_
+        # float` used to check dict values only).
+        ({float("nan"): 1}, "Out of range float values"),
         (b"bytes", "not JSON serializable"),
         ({"k": {1, 2}}, "not JSON serializable"),
     ],
