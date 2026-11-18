@@ -189,8 +189,48 @@ def _redaction_cases() -> list[dict[str, Any]]:
         # The query key is matched percent-decoded ("token"); only the
         # raw value text is replaced (issue #819 follow-up).
         "https://host/x?tok%65n=secretvalue123",
+        # The query key is matched percent-decoded even when the
+        # decode is lossy, like `urllib.parse.unquote`'s own default
+        # (issue #827 follow-up): an invalid trailing byte decodes to
+        # U+FFFD, and the result still contains "token".
+        "https://h/?tok%65n%ff=secretvalue456",
+        # Python's `re.IGNORECASE` folds the Kelvin sign (U+212A) to
+        # "k", matching "key" against a decoded key of "Key"
+        # (issue #827 follow-up).
+        "https://h/?%E2%84%AAey=secretvaluekelvin",
+        # The ":" search for a later "@" runs from the start of the
+        # ORIGINAL authority, userinfo included, not just the host
+        # (issue #827 follow-up): a password containing an "@" of its
+        # own ("alice:p@ss") must still be found, or its own tail
+        # (past the authority's own cut) survives uncut.
+        "http://alice:p@ss/word@proxy:3128",
+        "http://alice:p@ss?word@proxy:3128",
+        "http://alice:p@ss#word@proxy:3128",
+        # The over-redaction this causes when the authority already
+        # has its own userinfo is accepted -- it matches `main`'s own
+        # request-URL behaviour (issue #827 follow-up correction).
+        "http://u:p@host/@alice",
     ]
     return [{"url": url, "redacted": http_conventions.redact_request_url(url)} for url in urls]
+
+
+def _scrub_cases() -> list[dict[str, Any]]:
+    """`scrub_embedded_urls` (issue #819/#827 follow-up): every
+    `scheme://...` URL found anywhere inside a larger piece of text,
+    redacted in place.
+    """
+    texts = [
+        # U+001F ends an embedded URL (Python's own `\s`, what
+        # `_EMBEDDED_URL_RE` uses, matches it; Rust's own
+        # `char::is_whitespace` does not) -- before the authority cut
+        # ever runs, never because of it, so the `:c@d` past it is
+        # never even recognized as part of a URL, let alone cut for a
+        # credential.
+        "bad url http://h/a\x1fb:c@d",
+        "cannot connect to ws://alice:hiddencredentialvalue@host:8000/rpc (ConnectionRefusedError)",
+        "no url here at all",
+    ]
+    return [{"text": text, "scrubbed": http_conventions.scrub_embedded_urls(text)} for text in texts]
 
 
 def _proxy_redaction_cases() -> list[dict[str, Any]]:
@@ -329,6 +369,7 @@ def _proxy_cases() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------
 
 
+
 def _retry_after_cases() -> list[dict[str, Any]]:
     now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     values = [
@@ -380,6 +421,7 @@ def build_corpus() -> dict[str, Any]:
         "scheme_detection_cases": _scheme_detection_cases(),
         "strict_port_cases": _strict_port_cases(),
         "redaction_cases": _redaction_cases(),
+        "scrub_cases": _scrub_cases(),
         "proxy_redaction_cases": _proxy_redaction_cases(),
         "proxy_cases": _proxy_cases(),
         "retry_after_cases": _retry_after_cases(),

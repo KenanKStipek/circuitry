@@ -755,6 +755,70 @@
           [
             {
               "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://h/?tok%65n%ff=secretvalue456"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://h/?tok%65n%ff=***REDACTED***"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://h/?%E2%84%AAey=secretvaluekelvin"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "https://h/?%E2%84%AAey=***REDACTED***"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
               "v": "base_url"
             },
             {
@@ -807,6 +871,38 @@
             {
               "t": "str",
               "v": "http://***REDACTED***@alice"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "http://alice:p@ss/word@proxy:3128"
+            }
+          ]
+        ]
+      },
+      "output": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "url"
+            },
+            {
+              "t": "str",
+              "v": "http://***REDACTED***@proxy:3128"
             }
           ]
         ]

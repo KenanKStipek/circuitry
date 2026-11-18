@@ -255,7 +255,7 @@ def build_redaction_cases() -> list[dict]:
     )  # no :// at all
     cases.append(
         redact_case({"base_url": "https://alice:longsecret/x@api.example.test/v1"})
-    )  # @ behind the path, the : before it can't be a port
+    )  # @ behind the path, a port exception for this was tried and withdrawn
     cases.append(
         redact_case({"base_url": "https://api.example.test/search?api_key=hunter2hunter2"})
     )  # credential-like query key, no userinfo at all
@@ -277,11 +277,20 @@ def build_redaction_cases() -> list[dict]:
         redact_case({"url": "https://host/x?tok%65n=secretvalue123"})
     )  # the query key is matched decoded; only the raw value text is replaced
     cases.append(
+        redact_case({"url": "https://h/?tok%65n%ff=secretvalue456"})
+    )  # the key is still matched decoded even when the decode is lossy (issue #827 follow-up)
+    cases.append(
+        redact_case({"url": "https://h/?%E2%84%AAey=secretvaluekelvin"})
+    )  # re.IGNORECASE folds the Kelvin sign (U+212A) to "k" (issue #827 follow-up)
+    cases.append(
         redact_case({"base_url": "https://npmTOKEN123@registry.example.test/@acme/widget"})
     )  # the authority's own userinfo is cut first, whether or not a later @ follows
     cases.append(
         redact_case({"url": "http://localhost:8080/@alice"})
     )  # a : before a later @ is cut even when it could be a port
+    cases.append(
+        redact_case({"url": 'http://alice:p@ss/word@proxy:3128'})
+    )  # the : search for a later @ starts at the original authority's own start, userinfo included
     cases.append(
         redact_case({"webhook_url": "xoxb-" + "a" * 25})
     )  # token-shaped under a URL key still redacts whole, as `main` did

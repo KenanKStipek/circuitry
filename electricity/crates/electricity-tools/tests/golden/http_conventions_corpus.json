@@ -247,6 +247,44 @@
     {
       "url": "https://host/x?tok%65n=secretvalue123",
       "redacted": "https://host/x?tok%65n=%2A%2A%2A"
+    },
+    {
+      "url": "https://h/?tok%65n%ff=secretvalue456",
+      "redacted": "https://h/?tok%65n%ff=%2A%2A%2A"
+    },
+    {
+      "url": "https://h/?%E2%84%AAey=secretvaluekelvin",
+      "redacted": "https://h/?%E2%84%AAey=%2A%2A%2A"
+    },
+    {
+      "url": "http://alice:p@ss/word@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "url": "http://alice:p@ss?word@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "url": "http://alice:p@ss#word@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "url": "http://u:p@host/@alice",
+      "redacted": "http://alice"
+    }
+  ],
+  "scrub_cases": [
+    {
+      "text": "bad url http://h/a\u001fb:c@d",
+      "scrubbed": "bad url http://h/a\u001fb:c@d"
+    },
+    {
+      "text": "cannot connect to ws://alice:hiddencredentialvalue@host:8000/rpc (ConnectionRefusedError)",
+      "scrubbed": "cannot connect to ws://host:8000/rpc (ConnectionRefusedError)"
+    },
+    {
+      "text": "no url here at all",
+      "scrubbed": "no url here at all"
     }
   ],
   "proxy_redaction_cases": [
