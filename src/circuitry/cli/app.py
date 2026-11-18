@@ -920,8 +920,18 @@ def _do_validate(
         console.print("[green]Valid[/green]")
         if result.get("secrets"):
             sources = result["secret_sources"]
-            listed = ", ".join(f"{name} ({sources[name]})" for name in result["secrets"])
-            console.print(f"[bold]Secrets:[/bold] {escape(listed)}")
+            children = result.get("secret_children") or {}
+            parts = []
+            for name in result["secrets"]:
+                namers = children.get(name)
+                suffix = f", named by {', '.join(namers)}" if namers else ""
+                parts.append(f"{name} ({sources[name]}){suffix}")
+            console.print(f"[bold]Secrets:[/bold] {escape(', '.join(parts))}")
+            if any(sources[name] == "not defined" for name in result["secrets"]):
+                console.print(
+                    "Hint: a secret not defined here may still be defined by a "
+                    "parent that runs this document as a use: path: child."
+                )
     else:
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):
