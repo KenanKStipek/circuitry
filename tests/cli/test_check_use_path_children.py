@@ -487,3 +487,311 @@ effects:
     assert len(report["errors"]) == 1
     error = report["errors"][0]
     assert "resolves outside the project" in error
+
+
+def _run_exit_code(tmp_path: Path, root: Path) -> int:
+    """``cof run``'s own exit code for *root*, the same way the existing
+    CLI tests invoke it -- the outcome `cof check` must agree with."""
+    return _cof(tmp_path, "run", str(root), "--skip-preflight").returncode
+
+
+def _write_boundary_violation_child(tmp_path: Path) -> None:
+    """``children/child.yml``, a `{file: ...}` prompt source that escapes
+    its own project boundary -- a failure that fails a run exactly the way
+    it fails this check's own compile of it, shared by every absorbing-
+    ancestor test below."""
+    _write(tmp_path, "prompts/p.txt", "hello\n")
+    _write(
+        tmp_path,
+        "children/child.yml",
+        """
+effects:
+  - type: prompt
+    name: p
+    template: {file: ../prompts/p.txt}
+""",
+    )
+
+
+def test_check_warns_when_a_root_use_continue_absorbs_a_middle_documents_own_use_failure(
+    tmp_path: Path,
+) -> None:
+    """A root `use` with `on_error: continue` over a middle document whose
+    own `use` of a broken child has no `on_error` of its own: the run
+    still exits 0 (the root's `on_error: continue` absorbs the failure the
+    middle document's `use` does not), and `cof check` must agree."""
+    _write_boundary_violation_child(tmp_path)
+    _write(
+        tmp_path,
+        "middle.yml",
+        """
+effects:
+  - type: use
+    name: child
+    path: children/child.yml
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: mid
+    path: middle.yml
+    on_error: continue
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) == 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is True, report["errors"]
+    assert report["errors"] == []
+    assert len(report["warnings"]) == 1
+    assert report["warnings"][0].startswith("children/child.yml: ")
+
+    text = _cof(tmp_path, "check", str(root))
+    assert text.returncode == 0, text.stdout + text.stderr
+
+
+def test_check_warns_when_a_loop_on_error_continue_absorbs_its_bodys_use_failure(
+    tmp_path: Path,
+) -> None:
+    """A `use` with no `on_error` of its own in the `body` of a `loop` with
+    `on_error: continue`: the run still exits 0, and `cof check` must
+    agree."""
+    _write_boundary_violation_child(tmp_path)
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+interface:
+  inputs:
+    xs:
+      type: array
+      default: [1, 2]
+effects:
+  - type: loop
+    name: l
+    on_error: continue
+    each:
+      in: input.xs
+      as: x
+    body:
+      - type: use
+        name: child
+        path: children/child.yml
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) == 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is True, report["errors"]
+    assert report["errors"] == []
+    assert len(report["warnings"]) == 1
+    assert report["warnings"][0].startswith("children/child.yml: ")
+
+    text = _cof(tmp_path, "check", str(root))
+    assert text.returncode == 0, text.stdout + text.stderr
+
+
+def test_check_warns_when_a_loop_on_error_break_absorbs_its_bodys_use_failure(
+    tmp_path: Path,
+) -> None:
+    """Same as `on_error: continue` above, but the loop's own `on_error`
+    is `break`: the run still exits 0, and `cof check` must agree."""
+    _write_boundary_violation_child(tmp_path)
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+interface:
+  inputs:
+    xs:
+      type: array
+      default: [1, 2]
+effects:
+  - type: loop
+    name: l
+    on_error: break
+    each:
+      in: input.xs
+      as: x
+    body:
+      - type: use
+        name: child
+        path: children/child.yml
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) == 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is True, report["errors"]
+    assert report["errors"] == []
+    assert len(report["warnings"]) == 1
+    assert report["warnings"][0].startswith("children/child.yml: ")
+
+    text = _cof(tmp_path, "check", str(root))
+    assert text.returncode == 0, text.stdout + text.stderr
+
+
+def test_check_warns_when_a_dynamic_on_error_continue_absorbs_its_own_use_failure(
+    tmp_path: Path,
+) -> None:
+    """A `use` with no `on_error` of its own inside a `dynamic` with
+    `on_error: continue`: the run still exits 0, and `cof check` must
+    agree."""
+    _write_boundary_violation_child(tmp_path)
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: dynamic
+    name: d
+    on_error: continue
+    effects:
+      - type: use
+        name: child
+        path: children/child.yml
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) == 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is True, report["errors"]
+    assert report["errors"] == []
+    assert len(report["warnings"]) == 1
+    assert report["warnings"][0].startswith("children/child.yml: ")
+
+    text = _cof(tmp_path, "check", str(root))
+    assert text.returncode == 0, text.stdout + text.stderr
+
+
+def test_check_still_fails_when_an_if_on_error_continue_wraps_the_taken_branchs_use_failure(
+    tmp_path: Path,
+) -> None:
+    """A `use` with no `on_error` of its own in the taken branch of an `if`
+    with `on_error: continue`: an `if`'s own `on_error` only ever covers a
+    failed condition, never the branch it takes, so the run still exits
+    nonzero -- and `cof check` must still fail, naming the child, rather
+    than treat the `if`'s `on_error: continue` as absorbing it."""
+    _write_boundary_violation_child(tmp_path)
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: if
+    name: cond
+    if:
+      mode: cel
+      expr: "true"
+    on_error: continue
+    then:
+      - type: use
+        name: child
+        path: children/child.yml
+    else: []
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) != 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is False
+    assert len(report["errors"]) == 1
+    assert report["errors"][0].startswith("children/child.yml: ")
+
+    text = _cof(tmp_path, "check", str(root))
+    assert text.returncode == 1
+    assert "children/child.yml: " in text.stdout
+
+
+def test_check_warns_when_an_outer_use_on_error_continue_absorbs_an_inner_use_on_error_fail(
+    tmp_path: Path,
+) -> None:
+    """An inner `use` with its own, explicit `on_error: fail`, nested
+    under an outer `use` with `on_error: continue`: the outer `use`'s own
+    `try`/`except` is wide enough to absorb the inner one's failure
+    regardless -- a warning, not a failure, matching the run."""
+    _write_boundary_violation_child(tmp_path)
+    _write(
+        tmp_path,
+        "middle.yml",
+        """
+effects:
+  - type: use
+    name: child
+    path: children/child.yml
+    on_error: fail
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: mid
+    path: middle.yml
+    on_error: continue
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) == 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is True, report["errors"]
+    assert report["errors"] == []
+    assert len(report["warnings"]) == 1
+    assert report["warnings"][0].startswith("children/child.yml: ")
+
+    payload = json.loads(_cof(tmp_path, "check", str(root), "--json").stdout)
+    assert payload["ok"] is True
+    assert payload["errors"] == []
+    assert payload["warnings"] == report["warnings"]
+
+
+def test_check_fails_a_two_level_use_path_chain_where_nothing_absorbs(
+    tmp_path: Path,
+) -> None:
+    """A two-level `use: path:` chain where neither `use` sets an
+    absorbing `on_error`: the run still exits nonzero, and `cof check`
+    still fails, naming the grandchild."""
+    _write_boundary_violation_child(tmp_path)
+    _write(
+        tmp_path,
+        "middle.yml",
+        """
+effects:
+  - type: use
+    name: child
+    path: children/child.yml
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: mid
+    path: middle.yml
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) != 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is False
+    assert len(report["errors"]) == 1
+    assert report["errors"][0].startswith("children/child.yml: ")
+
+    payload = json.loads(_cof(tmp_path, "check", str(root), "--json").stdout)
+    assert payload["ok"] is False
+    assert payload["errors"] == report["errors"]
