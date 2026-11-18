@@ -1576,6 +1576,55 @@ def _record_library_pins(
     state.setdefault("runtime", {})[STATE_KEY] = pins
 
 
+def _use_path_child_secrets(
+    orch: dict[str, Any],
+    *,
+    orchestration_path: Path,
+    trusted: bool,
+    runtime: dict[str, Any] | None,
+) -> dict[str, list[str]]:
+    """Every secret a `use: path:` child of *orch* names anywhere in its own
+    tree, recursively (#611), by name: the resolved path of every child that
+    names it, in discovery order.
+
+    Each child is compiled exactly as its own run would compile it --
+    ``trusted`` the same as the root's own, since a `path:` child inherits
+    the root's trust -- so an untrusted root's limited child still refuses a
+    secret the same way `compile_orchestration` always has, and a child that
+    fails to compile for any other reason is skipped, same tolerance
+    `iter_use_path_children` gives an unresolvable reference: the real run
+    reports it. The `{file: ...}` confinement root is the run's own --
+    `default_project_root(parent_dir)`, the nearest
+    `circuitry.config.json`/`config.json` at or above the child -- not the
+    child's own directory, since a `path:` child routinely shares a prompt
+    file with the rest of its project (`UseRuntime._confinement_root_for`,
+    never pinned here: `iter_use_path_children` only ever returns a
+    filesystem-resolved child).
+    """
+    from ..core.cycle_check import iter_use_path_children
+    from ..core.prompt_files import default_project_root
+
+    by_name: dict[str, list[str]] = {}
+    for label, child_orch, parent_dir in iter_use_path_children(
+        orch, root_path=orchestration_path, runtime=runtime
+    ):
+        try:
+            child_def = compile_orchestration(
+                orch=child_orch,
+                root_name="prime",
+                document_dir=parent_dir,
+                confinement_root=(
+                    default_project_root(parent_dir) if parent_dir is not None else parent_dir
+                ),
+                trusted=trusted,
+            )
+        except Exception:
+            continue
+        for name in sorted(collect_named_secrets(child_def)):
+            by_name.setdefault(name, []).append(label)
+    return by_name
+
+
 def validate(
     orchestration_path: Path,
     *,
@@ -1684,6 +1733,12 @@ def validate(
         from .library_sources import confinement_root_for_document
 
         _document_dir = orchestration_path.resolve().parent
+        # Same merge `run()` applies (document `runtime:` key by key over
+        # config, trusted document keeps its whole block) — just enough to
+        # know the run-wide cap/named groups `cof check` would actually run
+        # with, without resolving model/adapter/profile too (#274). Also a
+        # `use: path:` child's own trust (#611): it inherits the root's.
+        trusted = trust_document or (config is not None and config.trust_orchestration_runtime)
         root_def = compile_orchestration(
             orch=orch,
             root_name="prime",
@@ -1694,23 +1749,34 @@ def validate(
                 library_registry=library_registry,
                 is_cache_path=document_is_cache_path,
             ),
-            trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
+            trusted=trusted,
         )
         # The secrets the document names (#598), for `cof check` to list;
         # compiling already refused them in a limited document.
-        named_secrets = sorted(
+        root_named_secrets = sorted(
             collect_named_secrets(root_def)
             | {
                 value["secret"]
                 for _path, value in runtime_env_secret_paths(orch.get("runtime"))
             }
         )
+        # The same secrets its `use: path:` children name, recursively, as
+        # far as the compiler resolves them (#611) -- a `ref:`/`inline:`
+        # child is always limited, so it never resolves the root's own
+        # secrets and is never walked here; refusing one that names a
+        # secret anyway stays the actual run's job, unchanged by this.
+        child_secret_labels = _use_path_child_secrets(
+            orch,
+            orchestration_path=orchestration_path,
+            trusted=trusted,
+            runtime=config.runtime if config is not None else None,
+        )
+        named_secrets = sorted({*root_named_secrets, *child_secret_labels})
+        secret_children = {
+            name: [*(["root"] if name in root_named_secrets else []), *labels]
+            for name, labels in child_secret_labels.items()
+        }
 
-        # Same merge `run()` applies (document `runtime:` key by key over
-        # config, trusted document keeps its whole block) — just enough to
-        # know the run-wide cap/named groups `cof check` would actually run
-        # with, without resolving model/adapter/profile too (#274).
-        trusted = trust_document or (config is not None and config.trust_orchestration_runtime)
         orch_runtime_raw = orch.get("runtime")
         orch_runtime = orch_runtime_raw if isinstance(orch_runtime_raw, dict) else {}
         accepted_orch_runtime = _split_orchestration_runtime(
@@ -1826,6 +1892,7 @@ def validate(
             "warnings": lint_warnings,
             "secrets": named_secrets,
             "secret_sources": secret_sources,
+            "secret_children": secret_children,
         }
     except Exception as e:
         return {"ok": False, "errors": [str(e)], "warnings": lint_warnings}
