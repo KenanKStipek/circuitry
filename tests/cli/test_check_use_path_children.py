@@ -795,3 +795,202 @@ effects:
     payload = json.loads(_cof(tmp_path, "check", str(root), "--json").stdout)
     assert payload["ok"] is False
     assert payload["errors"] == report["errors"]
+
+
+def test_check_fails_when_the_same_child_is_also_reached_without_the_tolerance(
+    tmp_path: Path,
+) -> None:
+    """The same broken child, reached once through a `use` with
+    `on_error: continue` and once through a sibling `use` with no
+    `on_error` of its own: the run fails at the second, strict reference
+    (each `use` resolves and compiles its own child independently, so the
+    first reference succeeding at being tolerated never excuses the
+    second) -- `cof check` must fail too, and the failure is reported
+    once, as an error, never also as a warning."""
+    _write(
+        tmp_path,
+        "children/child.yml",
+        """
+effects:
+  - type: prompt
+    name: p
+    not_a_real_field: true
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: a
+    path: children/child.yml
+    on_error: continue
+  - type: use
+    name: b
+    path: children/child.yml
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) != 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is False
+    assert len(report["errors"]) == 1
+    assert report["errors"][0].startswith("children/child.yml: ")
+    assert report["warnings"] == []
+
+    payload = json.loads(_cof(tmp_path, "check", str(root), "--json").stdout)
+    assert payload["ok"] is False
+    assert payload["errors"] == report["errors"]
+    assert payload["warnings"] == []
+
+
+def test_check_fails_when_a_strict_reference_to_an_already_tolerated_child_comes_first(
+    tmp_path: Path,
+) -> None:
+    """The same pair of sibling `use` effects as above, with the strict
+    one listed first and the tolerant one second: the outcome does not
+    depend on which one the walk reaches first -- still an error, never
+    also a warning."""
+    _write(
+        tmp_path,
+        "children/child.yml",
+        """
+effects:
+  - type: prompt
+    name: p
+    not_a_real_field: true
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: a
+    path: children/child.yml
+  - type: use
+    name: b
+    path: children/child.yml
+    on_error: continue
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) != 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is False
+    assert len(report["errors"]) == 1
+    assert report["errors"][0].startswith("children/child.yml: ")
+    assert report["warnings"] == []
+
+    payload = json.loads(_cof(tmp_path, "check", str(root), "--json").stdout)
+    assert payload["ok"] is False
+    assert payload["errors"] == report["errors"]
+    assert payload["warnings"] == []
+
+
+def test_check_fails_when_a_child_already_tolerated_through_a_middle_document_is_also_reached_directly(
+    tmp_path: Path,
+) -> None:
+    """The same broken child, reached first through a middle document's
+    own `use` (inheriting the outer `use`'s `on_error: continue`), then
+    again directly from the root with no `on_error`: the run fails at the
+    second, direct reference, and `cof check` must agree."""
+    _write(
+        tmp_path,
+        "children/child.yml",
+        """
+effects:
+  - type: prompt
+    name: p
+    not_a_real_field: true
+""",
+    )
+    _write(
+        tmp_path,
+        "middle.yml",
+        """
+effects:
+  - type: use
+    name: inner
+    path: children/child.yml
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: a
+    path: middle.yml
+    on_error: continue
+  - type: use
+    name: b
+    path: children/child.yml
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) != 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is False
+    assert len(report["errors"]) == 1
+    assert report["errors"][0].startswith("children/child.yml: ")
+    assert report["warnings"] == []
+
+    payload = json.loads(_cof(tmp_path, "check", str(root), "--json").stdout)
+    assert payload["ok"] is False
+    assert payload["errors"] == report["errors"]
+    assert payload["warnings"] == []
+
+
+def test_check_fails_when_the_same_child_is_also_reached_with_validation_turned_back_on(
+    tmp_path: Path,
+) -> None:
+    """The same broken child, reached first with `validate: false` under
+    an `on_error: continue` `use` (so only the compiler's own error would
+    apply, tolerated), then again with the schema check back on and no
+    `on_error`: the run fails at the second, strict reference's own
+    schema check, and `cof check` must agree."""
+    _write(
+        tmp_path,
+        "children/child.yml",
+        """
+effects:
+  - type: prompt
+    name: p
+    not_a_real_field: true
+""",
+    )
+    root = _write(
+        tmp_path,
+        "root.yml",
+        """
+effects:
+  - type: use
+    name: a
+    path: children/child.yml
+    on_error: continue
+    validate: false
+  - type: use
+    name: b
+    path: children/child.yml
+""",
+    )
+
+    assert _run_exit_code(tmp_path, root) != 0
+
+    report = validate(root, trust_document=True)
+    assert report["ok"] is False
+    assert len(report["errors"]) == 1
+    error = report["errors"][0]
+    assert error.startswith("children/child.yml: ")
+    assert "'template' is a required property" in error
+
+    payload = json.loads(_cof(tmp_path, "check", str(root), "--json").stdout)
+    assert payload["ok"] is False
+    assert payload["errors"] == report["errors"]
