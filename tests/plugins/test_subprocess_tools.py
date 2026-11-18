@@ -826,6 +826,26 @@ def test_web_search_user_pass_base_url_masked_in_error(
         )
     assert "canarypw" not in str(exc.value)
 
+def test_web_search_raw_url_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#819: `raw['url']` must never carry a configured base_url's
+    userinfo, same as the error path above."""
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/curl" if n == "curl" else None)
+    password = "pw_value_pw_value"
+
+    def fake_run(*a: Any, **k: Any) -> FakeProc:
+        return FakeProc(returncode=0, stdout=_json.dumps({"AbstractText": "x"}))
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
+    r = WebSearchPlugin().execute(
+        params={
+            "query": "yaml",
+            "base_url": f"https://user:{password}@example.test/search",
+        }
+    )
+    assert password not in r.raw["url"]
+    assert "user" not in r.raw["url"]
+
+
 
 # ---------------------------------------------------------------------------
 # weather — wttr.in via curl

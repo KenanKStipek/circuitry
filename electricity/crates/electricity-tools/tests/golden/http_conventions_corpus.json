@@ -205,8 +205,20 @@
       "redacted": "http://host:1234/x"
     },
     {
+      "url": "https://alice:longsecret/x@api.example.com/v1?api_key=sk",
+      "redacted": "https://api.example.com/v1?api_key=%2A%2A%2A"
+    },
+    {
       "url": "https://alice:443/x@api.example.com/v1?api_key=sk",
       "redacted": "https://api.example.com/v1?api_key=%2A%2A%2A"
+    },
+    {
+      "url": "http://localhost:8080/@alice",
+      "redacted": "http://alice"
+    },
+    {
+      "url": "http://user:12/34@host",
+      "redacted": "http://host"
     },
     {
       "url": "alice:pw@host/x",
@@ -218,11 +230,65 @@
     },
     {
       "url": "alice:pw@host/x?next=http://y",
-      "redacted": "host/x?next=http%3A%2F%2Fy"
+      "redacted": "host/x?next=http://y"
     },
     {
       "url": "alice:p://w@host/x",
       "redacted": "host/x"
+    },
+    {
+      "url": "mytoken@host.example.test/api",
+      "redacted": "host.example.test/api"
+    },
+    {
+      "url": "https://npmTOKEN123@registry.example.test/@acme/widget",
+      "redacted": "https://registry.example.test/@acme/widget"
+    },
+    {
+      "url": "https://host/x?tok%65n=secretvalue123",
+      "redacted": "https://host/x?tok%65n=%2A%2A%2A"
+    },
+    {
+      "url": "https://h/?tok%65n%ff=secretvalue456",
+      "redacted": "https://h/?tok%65n%ff=%2A%2A%2A"
+    },
+    {
+      "url": "https://h/?%E2%84%AAey=secretvaluekelvin",
+      "redacted": "https://h/?%E2%84%AAey=%2A%2A%2A"
+    },
+    {
+      "url": "http://alice:p@ss/word@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "url": "http://alice:p@ss?word@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "url": "http://alice:p@ss#word@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "url": "http://u:p@host/@alice",
+      "redacted": "http://alice"
+    },
+    {
+      "url": "https://host/a+b?q=c+d",
+      "redacted": "https://host/a+b?q=c+d"
+    }
+  ],
+  "scrub_cases": [
+    {
+      "text": "bad url http://h/a\u001fb:c@d",
+      "scrubbed": "bad url http://h/a\u001fb:c@d"
+    },
+    {
+      "text": "cannot connect to ws://alice:hiddencredentialvalue@host:8000/rpc (ConnectionRefusedError)",
+      "scrubbed": "cannot connect to ws://host:8000/rpc (ConnectionRefusedError)"
+    },
+    {
+      "text": "no url here at all",
+      "scrubbed": "no url here at all"
     }
   ],
   "proxy_redaction_cases": [
@@ -265,6 +331,26 @@
     {
       "value": "alice:s3cret@proxy:3128 ",
       "redacted": "proxy:3128 "
+    },
+    {
+      "value": "http://abc/def@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://abc/def@proxy:3128?q=1",
+      "redacted": "http://proxy:3128?q=1"
+    },
+    {
+      "value": "http://abc/def@proxy:3128#frag",
+      "redacted": "http://proxy:3128#frag"
+    },
+    {
+      "value": "socks5://abc/def@proxy:1080",
+      "redacted": "socks5://proxy:1080"
+    },
+    {
+      "value": "abc/def@proxy:3128",
+      "redacted": "proxy:3128"
     }
   ],
   "proxy_cases": [

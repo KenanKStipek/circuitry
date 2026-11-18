@@ -1,0 +1,10 @@
+{
+  "runtime": {
+    "adapters": {
+      "cyberdiner": {
+        "expo_url": "expo.example.test",
+        "token": "ck_test_mock_token"
+      }
+    }
+  }
+}

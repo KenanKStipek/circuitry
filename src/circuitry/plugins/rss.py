@@ -25,6 +25,7 @@ error.
 
 from __future__ import annotations
 
+import http.client
 import importlib.util
 import urllib.error
 import urllib.request
@@ -32,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from .. import http_conventions
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -64,14 +66,38 @@ class RssPlugin:
 
         response_headers: dict[str, str] | None = None
         if urlparse(stripped).scheme in ("http", "https"):
-            req = urllib.request.Request(stripped, headers={"User-Agent": _DEFAULT_UA})
+            # Checked, then its userinfo stripped, before urllib ever
+            # sees it (issue #819): `check_url` refuses a malformed
+            # port with Circuitry's own redacted text, so `http.client`
+            # never gets a chance to raise its own credential-bearing
+            # `InvalidURL("nonnumeric port: 'longsecret'")` for a
+            # userinfo with a colon but no port
+            # (`http://alice:longsecret/x@127.0.0.1`), which
+            # `scrub_embedded_urls` can't find (that exception text has
+            # no `scheme://` of its own).
+            try:
+                http_conventions.check_url(stripped)
+            except ValueError as exc:
+                raise RuntimeError(f"rss: {exc}") from exc
+            req = urllib.request.Request(
+                http_conventions.strip_request_url_userinfo(stripped),
+                headers={"User-Agent": _DEFAULT_UA},
+            )
             try:
                 with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                     source: Any = resp.read()
                     response_headers = dict(resp.headers)
                     response_headers["content-location"] = resp.geturl()
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                raise RuntimeError(f"rss: failed to fetch {stripped!r}: {exc}") from exc
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                OSError,
+                http.client.HTTPException,
+            ) as exc:
+                raise RuntimeError(
+                    f"rss: failed to fetch {http_conventions.redact_request_url(stripped)!r}: "
+                    f"{http_conventions.scrub_embedded_urls(str(exc))}"
+                ) from exc
         else:
             source = stripped
 
@@ -97,7 +123,7 @@ class RssPlugin:
         return ToolResult(
             value=entries,
             raw={
-                "url": url,
+                "url": http_conventions.redact_request_url(url),
                 "feed_title": getattr(feed.feed, "title", ""),
                 "bozo": bozo,
                 "count": len(entries),

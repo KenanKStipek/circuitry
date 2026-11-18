@@ -1,0 +1,14 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §7 case 22 (the redaction blanket, run against the http tool's own params.url instead of a body-embedded URL)",
+  "description": "The http tool's own `params['url']` (not a value nested in a header or body) carries userinfo, from a URL built entirely inside the document so the credential never flows through the templated `input` state: `meta.raw['url']` shows a userinfo-stripped form in both engines -- the recorded request the mock server actually received still carries a plain, userinfo-free host, since neither engine ever turns URL userinfo into an outgoing credential (issue #819).",
+  "engines": [
+    "python",
+    "electricity"
+  ],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": [
+    "-e",
+    "host=127.0.0.1:__MOCK_HTTP_PORT__"
+  ]
+}

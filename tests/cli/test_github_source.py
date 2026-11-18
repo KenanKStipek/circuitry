@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import socket
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -548,6 +549,70 @@ def test_refresh_offline_is_an_actionable_error(
     with pytest.raises(LibraryFetchError) as excinfo:
         _source(tmp_path).refresh()
     assert "could not reach" in str(excinfo.value)
+
+
+def test_refresh_offline_never_names_a_password_in_a_custom_api_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#819: `_get_json`'s `could not reach {url}` named `api_base` +
+    the endpoint raw -- a custom `api_base` carrying a password must
+    never reach that message."""
+    password = "pw_value_pw_value"
+    _fail_urlopen(monkeypatch)
+    with pytest.raises(LibraryFetchError) as excinfo:
+        _source(
+            tmp_path, api_base=f"https://alice:{password}@git.example.test/api/v3"
+        ).refresh()
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "git.example.test" in str(excinfo.value)
+
+
+def _closed_port() -> int:
+    """A port known to be closed on 127.0.0.1 -- never the scheme's own
+    default (``:80``/``:443``), which another process on the machine
+    running this test could really be listening on."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def test_refresh_against_a_real_closed_port_never_leaks_the_password_via_invalidurl(
+    tmp_path: Path,
+) -> None:
+    """#819: a userinfo with no port reaches `http.client`'s own
+    host/port split unstripped and raises its own credential-bearing
+    `InvalidURL("nonnumeric port: ...")`, which is neither a `URLError`
+    nor an `OSError` and would otherwise escape `_get_json`'s own
+    redaction entirely -- unlike the mocked test above, this drives the
+    real `urllib.request` code path against a closed port on 127.0.0.1,
+    with `urlopen` never mocked, so it would catch a regression the
+    mock can't.
+    """
+    password = "pw_value_pw_value"
+    with pytest.raises(LibraryFetchError) as excinfo:
+        _source(
+            tmp_path, api_base=f"https://alice:{password}@127.0.0.1:{_closed_port()}"
+        ).refresh()
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
+def test_refresh_against_a_closed_port_with_a_hidden_slash_credential(
+    tmp_path: Path,
+) -> None:
+    """#818/#819: `check_url` runs before the `Request` is ever built, so
+    a password hidden behind a `/` is refused with Circuitry's own
+    redacted text, never urllib's own credential-bearing exception.
+    """
+    password = "longsecret"
+    with pytest.raises(LibraryFetchError) as excinfo:
+        _source(
+            tmp_path,
+            api_base=f"http://alice:{password}/x@127.0.0.1:{_closed_port()}",
+        ).refresh()
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
 
 
 def test_unfetched_source_is_empty_and_carries_a_notice(

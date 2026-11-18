@@ -35,6 +35,7 @@ convention set by `plugins/http.py` (no `requests` dependency).
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import shutil
@@ -45,6 +46,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .. import http_conventions
 from .library_sources import (
     FOLDER_SUFFIXES,
     Entry,
@@ -328,7 +330,21 @@ class GitHubSource:
 
     def _get_json(self, endpoint: str) -> Any:
         url = f"{self.api_base}{endpoint}"
-        req = urllib.request.Request(url, method="GET")
+        # Checked, then its userinfo stripped, before urllib ever sees
+        # it (issue #819): `check_url` refuses a malformed port with
+        # Circuitry's own redacted text, so `http.client` never gets a
+        # chance to raise its own credential-bearing `InvalidURL(
+        # "nonnumeric port: 'longsecret'")` for a userinfo with a colon
+        # but no port (`http://alice:longsecret/x@127.0.0.1`), which
+        # `scrub_embedded_urls` can't find (that exception text has no
+        # `scheme://` of its own).
+        try:
+            http_conventions.check_url(url)
+        except ValueError as exc:
+            raise LibraryFetchError(f"Library source {self.name!r}: {exc}") from exc
+        req = urllib.request.Request(
+            http_conventions.strip_request_url_userinfo(url), method="GET"
+        )
         for key, value in self._headers().items():
             req.add_header(key, value)
 
@@ -339,16 +355,29 @@ class GitHubSource:
             raise self._http_error(exc, url) from exc
         except urllib.error.URLError as exc:
             raise LibraryFetchError(
-                f"Library source {self.name!r}: could not reach {url} ({exc.reason}). "
+                f"Library source {self.name!r}: could not reach "
+                f"{http_conventions.redact_request_url(url)} ({exc.reason}). "
                 "The cache is still usable offline; only `cof library refresh` "
                 "needs the network."
+            ) from exc
+        except http.client.HTTPException as exc:
+            # Neither a URLError nor an OSError (InvalidURL's own base
+            # class): userinfo stripping above should keep this from
+            # ever firing on a credential, but a surprising port/host
+            # shape could still raise one, so its own text is scrubbed
+            # too, defensively (issue #819).
+            raise LibraryFetchError(
+                f"Library source {self.name!r}: could not reach "
+                f"{http_conventions.redact_request_url(url)} "
+                f"({http_conventions.scrub_embedded_urls(str(exc))})."
             ) from exc
 
         try:
             return json.loads(body) if body else None
         except json.JSONDecodeError as exc:
             raise LibraryFetchError(
-                f"Library source {self.name!r}: {url} returned a non-JSON response."
+                f"Library source {self.name!r}: "
+                f"{http_conventions.redact_request_url(url)} returned a non-JSON response."
             ) from exc
 
     def _http_error(self, exc: urllib.error.HTTPError, url: str) -> LibraryFetchError:
@@ -389,7 +418,10 @@ class GitHubSource:
                 + self._token_hint(invalid=False)
             )
 
-        return LibraryFetchError(f"{prefix}GET {url} failed with HTTP {status}: {exc.reason}")
+        return LibraryFetchError(
+            f"{prefix}GET {http_conventions.redact_request_url(url)} "
+            f"failed with HTTP {status}: {exc.reason}"
+        )
 
     def _token_hint(self, *, invalid: bool) -> str:
         if not self.token_env:

@@ -164,6 +164,95 @@ def test_last_replay_aborts_when_redacted_secret_present(
     assert "redacted secrets" in result.output
 
 
+def test_last_replay_aborts_when_the_marker_is_embedded_in_a_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A URL-shaped value keeps its scheme/host around the cut
+    (``url=http://***REDACTED***@host``), not a bare ``=***REDACTED***``
+    suffix -- --last must still refuse to replay it."""
+    last_run_path = _redirect_global_config(monkeypatch, tmp_path)
+    orch_path = _write_noop(tmp_path)
+
+    last_run_path.write_text(
+        json.dumps(
+            {
+                "orchestration": str(orch_path),
+                "config": None,
+                "state": None,
+                "out": None,
+                "pretty": False,
+                "print_state": False,
+                "dry_run": True,
+                "json_out": False,
+                "quiet": True,
+                "verbose": False,
+                "live_state": None,
+                "env_vars": ["name=World", f"url=http://{REDACTED}@host"],
+                "tail": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["run", "--last"])
+    assert result.exit_code == 1
+    assert "redacted secrets" in result.output
+
+
+def test_last_replay_aborts_when_the_marker_is_in_a_url_query_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stashed `-e url=...?token=...` keeps its scheme/host, with only
+    the credential-like query value masked -- --last must still refuse
+    to replay it."""
+    last_run_path = _redirect_global_config(monkeypatch, tmp_path)
+    orch_path = _write_noop(tmp_path)
+
+    last_run_path.write_text(
+        json.dumps(
+            {
+                "orchestration": str(orch_path),
+                "config": None,
+                "state": None,
+                "out": None,
+                "pretty": False,
+                "print_state": False,
+                "dry_run": True,
+                "json_out": False,
+                "quiet": True,
+                "verbose": False,
+                "live_state": None,
+                "env_vars": ["name=World", f"url=https://h/?token={REDACTED}"],
+                "tail": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["run", "--last"])
+    assert result.exit_code == 1
+    assert "redacted secrets" in result.output
+
+
+def test_redact_env_pairs_masks_a_credential_query_value_under_a_url_key() -> None:
+    redacted = redact_env_pairs(["url=https://h/?token=abc"])
+    assert redacted == [f"url=https://h/?token={REDACTED}"]
+
+
+def test_redact_env_pairs_applies_the_token_shape_check_before_the_url_rule() -> None:
+    """The ordinary-string rule (the JWT/key-shape patterns)
+    applies before the URL rule, so a token-shaped value under a URL
+    key still redacts wholesale, not byte for byte.
+    """
+    key = "xoxb-" + "a" * 20
+    redacted = redact_env_pairs([f"webhook_url={key}"])
+    assert redacted == [f"webhook_url={REDACTED}"]
+
+
 def test_redact_env_pairs_helper_round_trips() -> None:
     pairs = [
         "name=World",

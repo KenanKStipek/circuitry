@@ -382,6 +382,24 @@ mod tests {
     }
 
     #[test]
+    fn resolve_proxy_checked_never_leaks_a_colonless_credential_hidden_behind_a_slash() {
+        for suffix in ["", "?q=1", "#frag"] {
+            let e = env(&[("http_proxy", &format!("http://abc/def@proxy:3128{suffix}"))]);
+            let err = resolve_proxy_checked("http", "example.com", &e).unwrap_err();
+            assert!(!err.contains("abc"), "suffix {suffix:?}: {err}");
+            assert!(!err.contains("def"), "suffix {suffix:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn resolve_proxy_checked_never_leaks_a_colonless_credential_in_an_unsupported_scheme() {
+        let e = env(&[("http_proxy", "socks5://abc/def@proxy:1080")]);
+        let err = resolve_proxy_checked("http", "example.com", &e).unwrap_err();
+        assert!(!err.contains("abc"), "{err}");
+        assert!(!err.contains("def"), "{err}");
+    }
+
+    #[test]
     fn resolve_proxy_checked_rejects_an_invalid_proxy_port() {
         let e = env(&[("http_proxy", "http://host:99999")]);
         assert!(resolve_proxy_checked("http", "example.com", &e).is_err());

@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import importlib.util
 import json as _json
+import socket
 import sys
 import types
+import urllib.error
 from typing import Any, ClassVar
 
 import pytest
@@ -508,6 +510,123 @@ def test_rss_local_path_skips_network_fetch(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured["source"] == "/tmp/feed.xml"
 
 
+def test_rss_fetch_failure_never_names_a_password_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: the rss tool's fetch error named its URL raw."""
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+
+    password = "pw_value_pw_value"
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        raise urllib.error.URLError("Name or service not known")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        RssPlugin().execute(
+            params={"url": f"https://alice:{password}@feed.example.test/rss"}
+        )
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "feed.example.test" in str(excinfo.value)
+
+
+def test_rss_raw_url_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#819: `raw['url']` must never carry a configured feed URL's
+    userinfo."""
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+    password = "pw_value_pw_value"
+
+    class FakeResponse:
+        headers: ClassVar[dict[str, str]] = {}
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"<rss></rss>"
+
+        def geturl(self) -> str:
+            return "https://feed.example.test/rss"
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=0: FakeResponse())
+
+    r = RssPlugin().execute(
+        params={"url": f"https://alice:{password}@feed.example.test/rss"}
+    )
+    assert password not in r.raw["url"]
+    assert "alice" not in r.raw["url"]
+
+
+def test_rss_fetch_against_a_real_closed_port_never_leaks_the_password_via_invalidurl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: a userinfo with no port reaches `http.client`'s own
+    host/port split unstripped and raises its own credential-bearing
+    `InvalidURL("nonnumeric port: ...")` -- unlike the mocked test
+    above, this drives the real `urllib.request` code path against a
+    closed port on 127.0.0.1, with `urlopen` never mocked, so it would
+    catch a regression the mock can't.
+    """
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+    password = "pw_value_pw_value"
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed_port = int(sock.getsockname()[1])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        RssPlugin().execute(
+            params={"url": f"http://alice:{password}@127.0.0.1:{closed_port}"},
+            timeout_seconds=2,
+        )
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
+def test_rss_fetch_against_a_closed_port_with_a_hidden_slash_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#818/#819: `check_url` runs before the `Request` is ever built, so
+    a password hidden behind a `/` is refused with Circuitry's own
+    redacted text, never urllib's own credential-bearing exception.
+    """
+    fake_mod = types.ModuleType("feedparser")
+    fake_mod.parse = lambda *a, **k: types.SimpleNamespace(
+        bozo=False, feed=types.SimpleNamespace(title=""), entries=[]
+    )
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+    password = "longsecret"
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed_port = int(sock.getsockname()[1])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        RssPlugin().execute(
+            params={"url": f"http://alice:{password}/x@127.0.0.1:{closed_port}"},
+            timeout_seconds=2,
+        )
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+
+
 def test_webhook_posts_json_with_mocked_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -550,6 +669,32 @@ def test_webhook_posts_json_with_mocked_requests(
     assert captured["method"] == "POST"
     assert captured["json"] == {"a": 1}
     assert captured["headers"] == {"X-Token": "y"}
+
+
+def test_webhook_raw_url_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#819: `raw['url']` must never carry a configured webhook URL's
+    userinfo."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.text = "ok"
+            self.headers = {"Content-Type": "text/plain"}
+
+    fake_mod.request = lambda **kwargs: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    password = "pw_value_pw_value"
+    r = WebhookPlugin().execute(
+        params={"url": f"https://alice:{password}@hooks.example.test/x"}
+    )
+    assert password not in r.raw["url"]
+    assert "alice" not in r.raw["url"]
 
 
 def test_webhook_5xx_retry_then_succeed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -665,6 +810,34 @@ def test_webhook_fail_on_error_false_keeps_ok_true_on_4xx(
     assert r.raw["status"] == 404
 
 
+def test_webhook_connection_failure_scrubs_a_url_in_the_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: requests' own exception text commonly echoes the full
+    request URL (e.g. a redirect target), userinfo included."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    password = "pw_value_pw_value"
+
+    def fake_request(**kwargs: Any) -> Any:
+        raise fake_exc_mod.RequestException(
+            f"Connection refused: ws://alice:{password}@callback.example.test/hook"
+        )
+
+    fake_mod.request = fake_request
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        WebhookPlugin().execute(params={"url": "https://x.test"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "ws://callback.example.test/hook" in str(excinfo.value)
+
+
 def test_web_fetch_html_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_mod = types.ModuleType("requests")
     fake_exc_mod = types.ModuleType("requests.exceptions")
@@ -714,6 +887,58 @@ def test_web_fetch_4xx_sets_ok_false_by_default(
         params={"url": "https://x.test", "mode": "html", "fail_on_error": "False"}
     )
     assert r2.ok is True
+
+
+def test_web_fetch_raw_url_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#819: `raw['url']` must never carry a configured URL's userinfo."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class FakeResponse:
+        status_code = 200
+        text = "hello"
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/html"}
+
+    fake_mod.get = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    password = "pw_value_pw_value"
+    r = WebFetchPlugin().execute(
+        params={"url": f"https://alice:{password}@x.example.test", "mode": "html"}
+    )
+    assert password not in r.raw["url"]
+    assert "alice" not in r.raw["url"]
+
+
+def test_web_fetch_connection_failure_scrubs_a_url_in_the_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#819: requests' own exception text commonly echoes the full
+    request URL (e.g. a redirect target), userinfo included."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    password = "pw_value_pw_value"
+
+    def fake_get(*a: Any, **k: Any) -> Any:
+        raise fake_exc_mod.RequestException(
+            f"Connection refused: ws://alice:{password}@callback.example.test/hook"
+        )
+
+    fake_mod.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        WebFetchPlugin().execute(params={"url": "https://x.test"})
+    assert password not in str(excinfo.value)
+    assert "alice" not in str(excinfo.value)
+    assert "ws://callback.example.test/hook" in str(excinfo.value)
 
 
 def test_web_fetch_4xx_stderr_includes_reason_but_not_a_canary_secret(

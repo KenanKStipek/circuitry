@@ -97,10 +97,17 @@ def _adapter_target(adapter: Any, model: str) -> str:
     """Return a human-readable 'adapter · model @ host' string."""
     from urllib.parse import urlparse
 
+    from .. import http_conventions
+
     adapter_name = getattr(adapter, "name", "unknown")
     base_url = getattr(adapter, "base_url", None) or getattr(adapter, "api_base", None)
     if base_url:
-        host = urlparse(str(base_url)).hostname or str(base_url)
+        # A `base_url` with no parseable hostname (no scheme, userinfo
+        # hidden behind the path, ...) falls back to naming the whole
+        # value redacted, never raw (issue #819).
+        host = urlparse(str(base_url)).hostname or http_conventions.redact_request_url(
+            str(base_url)
+        )
         return f"{adapter_name} · {model} @ {host}"
     return f"{adapter_name} · {model}"
 

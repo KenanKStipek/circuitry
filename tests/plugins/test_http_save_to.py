@@ -386,6 +386,26 @@ def test_a_connection_lost_mid_body_fails_and_leaves_no_file(
     assert _files(work) == ["doc.yml"]
 
 
+def test_a_connection_lost_mid_body_never_leaks_url_userinfo(
+    work: Path, servers: ServerPair
+) -> None:
+    """``_save_body``'s own error text names the request URL, with any
+    userinfo stripped (#818/#819): no piece of a password reaches the
+    effect's ``meta.error``."""
+    servers.routes["/image.png"] = Route(body=PNG, content_length=len(PNG) + 1000)
+    url = f"http://alice:{TOKEN}@127.0.0.1:{servers.http_port}/image.png"
+    doc = _doc(work, f'      url: "{url}"\n      save_to: image.png')
+
+    result = _run(doc)
+
+    assert not result.ok
+    error = result.state["prime"]["download"]["meta"]["error"]
+    dumped = json.dumps(result.state)
+    for piece in (TOKEN, TOKEN[:4], TOKEN[-4:], "alice"):
+        assert piece not in error
+        assert piece not in dumped
+
+
 def test_a_404_writes_nothing(work: Path, servers: ServerPair) -> None:
     """Acceptance 7: the effect fails with today's text excerpt; with
     fail_on_error: false it succeeds, with nothing written and the status

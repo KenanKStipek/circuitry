@@ -6,149 +6,22 @@
 //! this is never third-party text -- it is Circuitry's own, compared
 //! exactly.
 
-/// `curl_support.py::_CREDENTIAL_QUERY_KEY_RE` -- a case-insensitive
-/// *search* (not a full match) for any of these words anywhere in a
-/// query key.
-fn looks_like_credential_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    ["key", "token", "secret", "auth", "password", "pwd"]
-        .iter()
-        .any(|needle| lower.contains(needle))
-}
+// `http_conventions.py::redact_url` -- one copy of the URL
+// redaction rule, in `electricity-redaction` (the lower crate this
+// one already depends on for `http_error_excerpt`'s own `redact()`
+// call), used through `electricity_redaction::redact_url` below
+// rather than reimplemented here a second time.
 
-/// `urllib.parse.parse_qsl(keep_blank_values=True)` -- `&`-separated
-/// `name=value` pairs (a bare `name` with no `=` keeps an empty
-/// value), each percent-decoded with `+` read as a space (the
-/// `application/x-www-form-urlencoded` convention `parse_qsl` uses by
-/// default, `plus` left `True`).
-fn parse_qsl(query: &str) -> Vec<(String, String)> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| match pair.split_once('=') {
-            Some((k, v)) => (percent_decode_plus(k), percent_decode_plus(v)),
-            None => (percent_decode_plus(pair), String::new()),
-        })
-        .collect()
-}
-
-fn percent_decode_plus(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                    Some(byte) => {
-                        out.push(byte);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            other => {
-                out.push(other);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// `http_conventions.py::_mask_credential_query_params` -- masks the
-/// value of any query-string key matching [`looks_like_credential_key`],
-/// then re-encodes the **whole** query with
-/// [`electricity_value::pycompat::urlencode`] even when nothing
-/// matched (so `%2A%2A%2A` for the mask, a space becomes `+`, exactly
-/// mirrors `urllib.parse.urlencode`'s own default `quote_plus`
-/// encoding).
-fn mask_credential_query_params(url: &str) -> String {
-    let Some(query_start) = url.find('?') else {
-        return url.to_string();
-    };
-    let (before_query, rest) = url.split_at(query_start);
-    let query_and_fragment = &rest[1..];
-    let (query, fragment) = match query_and_fragment.find('#') {
-        Some(idx) => (&query_and_fragment[..idx], Some(&query_and_fragment[idx..])),
-        None => (query_and_fragment, None),
-    };
-    let pairs = parse_qsl(query);
-    let masked: Vec<(String, electricity_value::Value)> = pairs
-        .into_iter()
-        .map(|(k, v)| {
-            let value = if looks_like_credential_key(&k) {
-                "***".to_string()
-            } else {
-                v
-            };
-            (k, electricity_value::Value::Str(value))
-        })
-        .collect();
-    let new_query = electricity_value::pycompat::urlencode(&masked, false).unwrap_or_default();
-    let mut result = format!("{before_query}?{new_query}");
-    if let Some(fragment) = fragment {
-        result.push_str(fragment);
-    }
-    result
-}
-
-/// `http_conventions.strip_request_url_userinfo` -- the LAST `@`
-/// inside [`crate::http::http_url::urlsplit`]'s own `netloc`, not a
-/// `/`, `?`, `#` or whitespace boundary: this always receives one
-/// whole URL, never prose with one embedded somewhere, so building the
-/// redaction from the parsed authority directly -- instead of a regex-
-/// style heuristic -- means a password containing any ASCII control
-/// character or whitespace (none of which end `urlsplit`'s own
-/// `netloc` the way `/` does) still comes out fully removed (issue
-/// #778).
-fn strip_request_url_userinfo(url: &str) -> String {
-    let parsed = crate::http::http_url::urlsplit(url, "");
-    let Some(at) = parsed.netloc.rfind('@') else {
-        return url.to_string();
-    };
-    let netloc = parsed.netloc[at + 1..].to_string();
-    crate::http::http_url::urlunsplit(&crate::http::http_url::Split { netloc, ..parsed })
-}
-
-/// `http_conventions._redact_url` -- the two masks every refusal
-/// message that names a request URL (never a proxy value, see
-/// [`redact_proxy_value`]) applies before naming it: userinfo
-/// stripped, then any credential-like query parameter masked. Never
-/// called directly outside this module ([`redact_request_url`] is the
-/// one public redactor for a request URL); kept for the test that
-/// exercises it in isolation.
-#[cfg(test)]
-fn redact_url(url: &str) -> String {
-    strip_request_url_userinfo(&mask_credential_query_params(url))
-}
-
-/// `http_conventions.redact_proxy_value` -- a proxy value has no
-/// meaningful path, so (unlike [`redact_request_url`]) this never stops at a
-/// `/`, `?`, `#` or whitespace boundary: only the LAST `@` in the
-/// *whole* value (after its `scheme://`, when it has one) counts, so a
-/// password containing any of those still comes out fully removed
-/// (issue #778).
+/// `http_conventions.redact_proxy_value` -- *value* (a proxy URL or
+/// value, normalized or not) redacted through
+/// [`electricity_redaction::redact_url`], dropping any credential
+/// outright (the classic, marker-less form every refusal message that
+/// names a proxy value uses). A proxy value has no path of its own
+/// worth keeping, so the whole authority is the credential: unlike
+/// [`redact_request_url`], a later `@` is cut even with no `:` before
+/// it (`http://abc/def@proxy:3128` is cut to `http://proxy:3128`).
 pub fn redact_proxy_value(value: &str) -> String {
-    let (prefix, tail) = match value.find("://") {
-        Some(idx) => (&value[..idx + 3], &value[idx + 3..]),
-        None => ("", value),
-    };
-    match tail.rfind('@') {
-        Some(at) => format!("{prefix}{}", &tail[at + 1..]),
-        None => value.to_string(),
-    }
+    electricity_redaction::redact_url(value, "", false)
 }
 
 /// `http_conventions._proxy_authority` -- the authority text of
@@ -302,39 +175,90 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
     ))
 }
 
-/// *url*, redacted for any refusal, warning, event, state, hint or
-/// `host:` text that names a request URL -- the one function every
-/// such caller uses, never `redact_url` (the private test helper) or
-/// [`redact_proxy_value`] directly: the whole value is cut at the
-/// LAST `@` (never just the authority's own userinfo) when *url*'s
-/// parsed `netloc` is empty (a userinfo-bearing value with no scheme
-/// at all, or one whose scheme has no `//` authority of its own even
-/// though the literal text `://` appears somewhere later in it, e.g.
-/// in a query value -- neither leaves [`crate::http::http_url::urlsplit`]
-/// any authority for [`strip_request_url_userinfo`] to find anything
-/// in) or [`at_follows_netloc`] is true (a password hidden behind a
-/// `/`, `?` or `#` can still smuggle a second, real host past the
-/// parsed authority); [`strip_request_url_userinfo`] otherwise. Either
-/// way, the cut runs *before* any credential-like query parameter is
-/// masked: masking first re-encodes a query string's own `@` as
-/// `%40`, so a cut that ran afterward would no longer find it (issue
-/// #778). Shared by every surface that names a request URL after
-/// parsing it: [`check_scheme`], [`strict_port`],
+/// *url*, redacted through [`electricity_redaction::redact_url`] with
+/// no marker (the credential dropped outright, with its `@`) -- the
+/// one function every refusal, warning, event, state or hint that
+/// names a request URL uses. Shared by every surface that names a
+/// request URL after parsing it: [`check_scheme`], [`strict_port`],
 /// `curl_text::redact_host_url`, `curl_text::curl_failure_message`,
 /// and every adapter error that names a request URL after I/O.
 pub fn redact_request_url(url: &str) -> String {
-    let netloc = crate::http::http_url::urlsplit(url, "").netloc;
-    let cut = if netloc.is_empty() {
-        match url.rsplit_once('@') {
-            Some((_, after)) => after.to_string(),
-            None => url.to_string(),
+    electricity_redaction::redact_url(url, "", true)
+}
+
+/// The one whitespace set [`embedded_url_len`]'s own boundary uses, on
+/// both engines: ASCII 9-13 (tab, LF, VT, FF, CR), 32 (space), and
+/// U+001C-U+001F (file/group/record/unit separator) -- every one of
+/// these Python's own `\s`/`str.isspace` already matches, spelled out
+/// explicitly rather than through `char::is_whitespace`, which is
+/// false for U+001C-U+001F and would otherwise let the two engines end
+/// an embedded URL at different points.
+fn is_embedded_url_boundary_whitespace(c: char) -> bool {
+    matches!(c, '\u{09}'..='\u{0d}' | '\u{20}' | '\u{1c}'..='\u{1f}')
+}
+
+/// The length, in bytes from the start of *s*, of a `scheme://...` URL
+/// anchored at `s`'s own start -- bounded at
+/// [`is_embedded_url_boundary_whitespace`] or a quote/bracket
+/// character, never a comma or period a sentence might put right
+/// after it (issue #819's own `http_conventions.py::
+/// _EMBEDDED_URL_RE`, hand-matched rather than pulling in a regex
+/// dependency this crate doesn't otherwise need for one scan).
+/// `None` when `s` doesn't start with a scheme (an ASCII letter, then
+/// zero or more scheme characters, then `://`) followed by at least
+/// one more character.
+fn embedded_url_len(s: &str) -> Option<usize> {
+    let mut chars = s.char_indices();
+    let (_, first) = chars.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut scheme_end = first.len_utf8();
+    for (idx, c) in chars.by_ref() {
+        if c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.') {
+            scheme_end = idx + c.len_utf8();
+            continue;
         }
-    } else if at_follows_netloc(url, &netloc) {
-        redact_proxy_value(url)
-    } else {
-        strip_request_url_userinfo(url)
-    };
-    mask_credential_query_params(&cut)
+        break;
+    }
+    if !s[scheme_end..].starts_with("://") {
+        return None;
+    }
+    let body_start = scheme_end + 3;
+    let mut end = body_start;
+    for (idx, c) in s[body_start..].char_indices() {
+        if is_embedded_url_boundary_whitespace(c) || matches!(c, '"' | '\'' | '(' | ')' | '<' | '>')
+        {
+            break;
+        }
+        end = body_start + idx + c.len_utf8();
+    }
+    (end > body_start).then_some(end)
+}
+
+/// `http_conventions.py::scrub_embedded_urls` -- every `scheme://...`
+/// URL found anywhere inside *text* redacted through
+/// [`redact_request_url`] (issue #819), for a surface with no single,
+/// well-formed URL value of its own to redact: a curl-backed adapter's
+/// response-body excerpt, which may echo back a URL (including its
+/// userinfo) Circuitry itself never named raw.
+pub fn scrub_embedded_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        match embedded_url_len(rest) {
+            Some(len) => {
+                out.push_str(&redact_request_url(&rest[..len]));
+                rest = &rest[len..];
+            }
+            None => {
+                let ch = rest.chars().next().expect("rest is non-empty");
+                out.push(ch);
+                rest = &rest[ch.len_utf8()..];
+            }
+        }
+    }
+    out
 }
 
 /// Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
@@ -409,6 +333,42 @@ fn scheme_name(scheme: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrub_embedded_urls_redacts_a_url_found_inside_prose() {
+        let password = "pw_value_pw_value";
+        let text = format!(
+            "cannot connect to ws://alice:{password}@host:8000/rpc (ConnectionRefusedError)"
+        );
+        let scrubbed = scrub_embedded_urls(&text);
+        assert!(!scrubbed.contains(password));
+        assert!(!scrubbed.contains("alice"));
+        assert_eq!(
+            scrubbed,
+            "cannot connect to ws://host:8000/rpc (ConnectionRefusedError)"
+        );
+    }
+
+    #[test]
+    fn scrub_embedded_urls_ends_a_url_at_a_unit_separator() {
+        // U+001F ends an embedded URL on both engines
+        // (`_EMBEDDED_URL_BOUNDARY`, not `char::is_whitespace`, which
+        // is false for it). Unlike the password-before-the-separator
+        // shape (which the authority cut alone would also happen to
+        // fix), this text is credential-free, so cutting at the LAST
+        // `@` instead of stopping at U+001F first would still change
+        // it.
+        let text = "bad url http://h/a\u{1f}b:c@d";
+        assert_eq!(scrub_embedded_urls(text), text);
+    }
+
+    #[test]
+    fn scrub_embedded_urls_leaves_text_with_no_url_unchanged() {
+        assert_eq!(
+            scrub_embedded_urls("no url here at all"),
+            "no url here at all"
+        );
+    }
 
     #[test]
     fn strict_port_accepts_an_absent_or_empty_port() {
@@ -555,13 +515,15 @@ mod tests {
         // `electricity-adapters::transport` cuts its scheme at the first
         // literal `://`; for these values that text runs into the
         // userinfo. cof's `check_url` names `alice` for both, and the
-        // same whole message (issue #778).
+        // same whole message (issue #778). The query's own `next` value
+        // is left exactly as written, never re-encoded -- only a
+        // credential-like query key is ever touched.
         for (cut, url, named_url) in [
             ("alice:p", "alice:p://w@host/x", "host/x"),
             (
                 "alice:pw@host/x?next=http",
                 "alice:pw@host/x?next=http://y",
-                "host/x?next=http%3A%2F%2Fy",
+                "host/x?next=http://y",
             ),
         ] {
             let err = check_scheme(cut, url, &["http", "https"]).unwrap_err();
@@ -582,27 +544,23 @@ mod tests {
     }
 
     #[test]
-    fn mask_credential_query_params_masks_a_matching_key_only() {
+    fn redact_url_masks_a_matching_query_key_only() {
         assert_eq!(
-            mask_credential_query_params("https://host/x?api_key=sk-test&q=widgets"),
+            redact_request_url("https://host/x?api_key=sk-test&q=widgets"),
             "https://host/x?api_key=%2A%2A%2A&q=widgets"
         );
     }
 
     #[test]
-    fn mask_credential_query_params_leaves_a_url_with_no_query_unchanged() {
-        assert_eq!(
-            mask_credential_query_params("https://host/x"),
-            "https://host/x"
-        );
+    fn redact_url_leaves_a_url_with_no_query_unchanged() {
+        assert_eq!(redact_request_url("https://host/x"), "https://host/x");
     }
 
     #[test]
     fn redact_url_strips_userinfo_and_masks_a_credential_query_param() {
-        assert_eq!(
-            redact_url("https://user:s3cr3t@host/x?api_key=sk-test"),
-            "https://host/x?api_key=%2A%2A%2A"
-        );
+        let password = "pw_value_pw_value";
+        let url = format!("https://user:{password}@host/x?api_key=sk-test");
+        assert_eq!(redact_request_url(&url), "https://host/x?api_key=%2A%2A%2A");
     }
 
     #[test]

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import http_conventions
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
 
@@ -75,7 +76,15 @@ class ScreenshotPlugin:
                 context = browser.new_context(**ctx_kwargs)
                 page = context.new_page()
                 page.set_default_timeout(int(timeout_seconds) * 1000)
-                page.goto(url.strip())
+                try:
+                    page.goto(url.strip())
+                except Exception as exc:
+                    # Playwright's own navigation error names the URL,
+                    # userinfo included (issue #819).
+                    raise RuntimeError(
+                        f"screenshot: navigation failed: "
+                        f"{http_conventions.scrub_embedded_urls(str(exc))}"
+                    ) from exc
                 if isinstance(wait_for, str) and wait_for:
                     page.wait_for_selector(wait_for)
                 page.screenshot(path=str(out_path), full_page=full_page)
@@ -84,7 +93,7 @@ class ScreenshotPlugin:
 
         return ToolResult(
             value=str(out_path),
-            raw={"url": url, "full_page": full_page},
+            raw={"url": http_conventions.redact_request_url(url), "full_page": full_page},
             stdout=None, stderr=None, exit_code=None,
         )
 

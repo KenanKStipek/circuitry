@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import socket
+from typing import Any
 from unittest.mock import patch
 
 from circuitry.cli.detect import (
@@ -62,7 +64,83 @@ def test_detect_ollama_failure() -> None:
     assert "refused" in status.detail
 
 
+def test_detect_ollama_keeps_the_raw_url_separate_from_the_redacted_detail() -> None:
+    """#819: `cof setup` reads the raw URL back from `.url`, never from
+    `.detail`, which is redacted for display."""
+    password = "pw_value_pw_value"
+    base_url = f"http://alice:{password}@localhost:11434"
+    mock_data = {"models": []}
+
+    with patch("circuitry.cli.detect._curl_json_get", return_value=mock_data):
+        status = detect_ollama(base_url)
+
+    assert status.available is True
+    assert status.url == base_url
+    assert password not in status.detail
+    assert "alice" not in status.detail
+
+
+def test_detect_ollama_scrubs_a_url_from_urllibs_own_exception_text() -> None:
+    """#819: urllib's own exception text (e.g. InvalidURL) may echo the
+    configured URL back, userinfo included."""
+    password = "pw_value_pw_value"
+    base_url = f"http://alice:{password}@localhost:11434"
+
+    def _raise(url: str, timeout: int = 5) -> Any:
+        raise ValueError(f"nonnumeric port: '{url}'")
+
+    with patch("circuitry.cli.detect._curl_json_get", side_effect=_raise):
+        status = detect_ollama(base_url)
+
+    assert status.available is False
+    assert password not in status.detail
+    assert "alice" not in status.detail
+
+
+def _closed_port() -> int:
+    """A port known to be closed on 127.0.0.1 -- never the scheme's own
+    default (``:80``/``:443``), which another process on the machine
+    running this test could really be listening on."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def test_detect_ollama_scrubs_the_real_invalidurl_text_with_no_mocking() -> None:
+    """#819: a userinfo with no port reaches `http.client`'s own
+    host/port split unstripped and raises its own credential-bearing
+    `InvalidURL("nonnumeric port: ...")` -- unlike the mocked test
+    above, this drives the real `urllib.request` code path against a
+    closed port on 127.0.0.1, with no `_curl_json_get` mock at all, so
+    it would catch a regression the mock can't.
+    """
+    password = "pw_value_pw_value"
+    base_url = f"http://alice:{password}@127.0.0.1:{_closed_port()}"
+
+    status = detect_ollama(base_url)
+
+    assert status.available is False
+    assert password not in status.detail
+    assert "alice" not in status.detail
+
+
 # --- OpenAI ---
+
+
+def test_detect_ollama_against_a_real_closed_port_with_a_hidden_slash_credential() -> None:
+    """#818/#819: `check_url` runs before the `Request` is ever built, so
+    `http://alice:longsecret/x@127.0.0.1:<port>` -- a password hidden
+    behind a `/` -- is refused with Circuitry's own redacted text, never
+    urllib's own credential-bearing exception.
+    """
+    password = "longsecret"
+    base_url = f"http://alice:{password}/x@127.0.0.1:{_closed_port()}"
+
+    status = detect_ollama(base_url)
+
+    assert status.available is False
+    assert password not in status.detail
+    assert "alice" not in status.detail
 
 
 def test_detect_openai_with_key() -> None:

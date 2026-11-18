@@ -89,6 +89,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+from .. import http_conventions
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
 
@@ -250,6 +251,14 @@ class McpPlugin:
             raise RuntimeError(
                 f"MCP {operation} on server {server_name!r} timed out "
                 f"after {timeout_seconds}s."
+            ) from exc
+        except Exception as exc:
+            # The MCP SDK's own transport exception text (an http/sse
+            # connection failure, say) may echo the server's configured
+            # URL back, userinfo included (issue #819).
+            raise RuntimeError(
+                f"MCP {operation} on server {server_name!r} failed: "
+                f"{http_conventions.scrub_embedded_urls(str(exc))}"
             ) from exc
 
         if outcome["kind"] == "list":

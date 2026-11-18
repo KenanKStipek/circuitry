@@ -15,7 +15,17 @@ import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from .. import http_conventions
+
 REDACTED = "***REDACTED***"
+
+#: Keys whose string VALUE gets the URL redaction rule
+#: (:func:`http_conventions.redact_url`), regardless of its shape --
+#: Circuitry's own literal names, plus any key ending in ``_url`` or
+#: ``_proxy`` (which already covers the proxy environment variables:
+#: ``http_proxy``, ``https_proxy``, ``all_proxy``, ``no_proxy``, either
+#: case). Matched case-insensitively.
+_URL_KEY_NAMES = frozenset({"url", "base_url", "api_base", "endpoint", "expo_url", "proxy"})
 
 # Keys whose VALUES should be redacted regardless of content.
 # Match is case-insensitive against the final segment of dotted/snake/kebab keys.
@@ -48,7 +58,12 @@ _KEYISH_RE = re.compile(
 
 
 def _redact_url(value: str) -> str:
-    """If a URL contains userinfo (user[:pass]@host), strip it."""
+    """If a URL contains userinfo (user[:pass]@host), strip it -- the
+    redaction of an ordinary string: both
+    ``scheme`` and ``netloc`` (so bare prose with a stray ``://`` or
+    ``@`` never matches) and the ``@`` inside ``netloc`` itself (so a
+    plain email address, or a URL with no userinfo, never matches).
+    """
     try:
         parts = urlsplit(value)
     except ValueError:
@@ -57,25 +72,47 @@ def _redact_url(value: str) -> str:
         return value
     if "@" not in parts.netloc:
         return value
-    # netloc looks like "user:pass@host:port" — keep only host:port
     _, _, host = parts.netloc.rpartition("@")
     redacted_netloc = f"{REDACTED}@{host}"
     return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
 
 
+def _is_token_shaped(value: str) -> bool:
+    """Whether *value* is a JWT or API-key-shaped string -- the
+    ordinary-string rule, applied first even to a string under a
+    URL key (:func:`_is_url_key`): a token-shaped value redacts
+    wholesale regardless of the key it's under -- a URL key's own value
+    is never sent *only* through
+    :func:`http_conventions.redact_url`.
+    """
+    return bool(_JWT_RE.match(value) or _KEYISH_RE.match(value))
+
+
 def _redact_string(value: str) -> str:
-    if _JWT_RE.match(value):
-        return REDACTED
-    if _KEYISH_RE.match(value):
+    """An ordinary string's redaction: a JWT
+    or API-key-shaped string wholesale, a URL that carries both
+    ``://`` and ``@`` through :func:`_redact_url`, anything else
+    unchanged. The URL rule in :func:`http_conventions.redact_url`
+    never applies here -- only to a string under a URL key
+    (:func:`_is_url_key`), handled by :func:`redact` itself.
+    """
+    if _is_token_shaped(value):
         return REDACTED
     if "://" in value and "@" in value:
-        # Treat as URL with possible userinfo.
         return _redact_url(value)
     return value
 
 
 def _is_sensitive_key(key: str) -> bool:
     return bool(_SENSITIVE_KEY_RE.match(key))
+
+
+def _is_url_key(key: str) -> bool:
+    """Whether *key* names a value :func:`http_conventions.redact_url`
+    applies to, regardless of its content.
+    """
+    lower = key.lower()
+    return lower in _URL_KEY_NAMES or lower.endswith(("_url", "_proxy"))
 
 
 def _redact_adapter_env(adapters: Any) -> Any:
@@ -107,8 +144,13 @@ def redact(value: Any) -> Any:
     - Every value of an ``env`` mapping under an ``adapters`` key is redacted
       (``runtime.adapters.<alias>.env``); an ``env`` that is not a mapping is
       replaced whole.
-    - String values are redacted when they look like a JWT, an API key, or a
-      URL with userinfo.
+    - A string value under a URL key (``url``, ``base_url``, ``api_base``,
+      ``endpoint``, ``expo_url``, ``proxy``, any key ending in ``_url`` or
+      ``_proxy``, at any depth) gets the URL rule
+      (:func:`http_conventions.redact_url`), regardless of its shape.
+    - Any other string value is redacted when it looks like a JWT, an API
+      key, or a URL carrying both ``://`` and ``@`` -- the
+      redaction of an ordinary string.
     - Lists and nested dicts are walked.
     - Other scalar types pass through unchanged.
 
@@ -121,6 +163,8 @@ def redact(value: Any) -> Any:
                 out[k] = REDACTED
             elif k == "adapters":
                 out[k] = _redact_adapter_env(v)
+            elif isinstance(k, str) and _is_url_key(k) and isinstance(v, str):
+                out[k] = REDACTED if _is_token_shaped(v) else http_conventions.redact_url(v, REDACTED)
             else:
                 out[k] = redact(v)
         return out
@@ -150,6 +194,9 @@ def redact_env_pairs(pairs: list[str] | None) -> list[str] | None:
         key, value = pair.split("=", 1)
         if _is_sensitive_key(key):
             out.append(f"{key}={REDACTED}")
+        elif _is_url_key(key):
+            masked = REDACTED if _is_token_shaped(value) else http_conventions.redact_url(value, REDACTED)
+            out.append(f"{key}={masked}")
         else:
             # Even non-sensitive keys can carry credential-shaped values
             # (e.g. `-e my_var=sk-abc...`). Apply string-level checks too.

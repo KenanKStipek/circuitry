@@ -36,6 +36,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from .. import http_conventions
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool, http_error_excerpt
 
@@ -102,11 +103,16 @@ class WebhookPlugin:
                 if attempt < retries:
                     time.sleep(min(30.0, 2.0 ** attempt))
                     continue
-                raise RuntimeError(f"webhook request failed: {exc}") from exc
+                # requests' own exception text commonly echoes the full
+                # request URL, userinfo included (issue #819).
+                raise RuntimeError(
+                    f"webhook request failed: {http_conventions.scrub_embedded_urls(str(exc))}"
+                ) from exc
 
         if last_status is None:
             raise RuntimeError(
-                f"webhook request failed after {retries + 1} attempts: {last_error}"
+                f"webhook request failed after {retries + 1} attempts: "
+                f"{http_conventions.scrub_embedded_urls(str(last_error))}"
             )
 
         is_json = "json" in (last_headers.get("content-type") or "")
@@ -126,7 +132,7 @@ class WebhookPlugin:
         return ToolResult(
             value=value,
             raw={
-                "url": url,
+                "url": http_conventions.redact_request_url(url),
                 "status": last_status,
                 "headers": last_headers,
                 "body": last_text,

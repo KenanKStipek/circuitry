@@ -1,0 +1,13 @@
+name: c-http-raw-url-userinfo-redacted
+interface:
+  inputs:
+    host:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: result
+    provider: http
+    params:
+      url: "http://alice:pw_value_pw_value@{{input.host}}/secret"
+      method: GET

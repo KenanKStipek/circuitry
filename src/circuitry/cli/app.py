@@ -1333,8 +1333,13 @@ def run_cmd(
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
+        # The marker isn't always the whole value: a URL-shaped value keeps
+        # its scheme/host around the cut (`url=http://***REDACTED***@host`),
+        # so this checks for the marker anywhere past the first `=`, not
+        # just an exact `=***REDACTED***` suffix (matching `LastRun.
+        # has_redacted_secrets`, which this raw-dict check predates).
         if env_vars and any(
-            isinstance(pair, str) and pair.endswith(f"={REDACTED}") for pair in env_vars
+            isinstance(pair, str) and REDACTED in pair.partition("=")[2] for pair in env_vars
         ):
             console.print(
                 "[red]Error:[/red] previous run included redacted secrets in -e values."

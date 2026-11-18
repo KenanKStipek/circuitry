@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from .. import http_conventions
 from ..curl_support import redact_host_url
 from ..preflight import CheckResult
 from ..surrealdb_sdk import (
@@ -152,6 +153,16 @@ def _is_connection_error(exc: BaseException) -> bool:
             "handshake",
         )
     )
+
+
+def _scrub_exc(exc: BaseException) -> str:
+    """``str(exc)``, with any embedded URL's userinfo removed (issue
+    #819) -- the SDK's own exception text can echo the configured
+    ``url`` back (a connection-refused message naming the address it
+    tried, say), and every place here that interpolates ``({exc})``
+    into a failure message goes through this first.
+    """
+    return http_conventions.scrub_embedded_urls(str(exc))
 
 
 def _jsonable(value: Any) -> Any:
@@ -281,24 +292,24 @@ def _authenticate(
         if _is_connection_error(exc):
             raise RuntimeError(_unreachable(url, exc)) from exc
         raise RuntimeError(
-            f"surrealdb: authentication rejected by {redact_host_url(url)} ({exc}). Check "
-            "SURREAL_TOKEN, or SURREAL_USER / SURREAL_PASS, and that the user "
-            "has access to the configured namespace and database."
+            f"surrealdb: authentication rejected by {redact_host_url(url)} "
+            f"({_scrub_exc(exc)}). Check SURREAL_TOKEN, or SURREAL_USER / SURREAL_PASS, "
+            "and that the user has access to the configured namespace and database."
         ) from exc
 
 
 def _unreachable(url: str, exc: BaseException) -> str:
     return (
-        f"surrealdb: cannot connect to {redact_host_url(url)} ({exc}). Is the server running "
-        "and is runtime.plugins.surrealdb.url correct? Start one locally with: "
-        "surreal start --user root --pass root"
+        f"surrealdb: cannot connect to {redact_host_url(url)} ({_scrub_exc(exc)}). "
+        "Is the server running and is runtime.plugins.surrealdb.url correct? "
+        "Start one locally with: surreal start --user root --pass root"
     )
 
 
 def _timed_out(url: str, exc: BaseException) -> str:
     return (
-        f"surrealdb: {redact_host_url(url)} timed out ({exc}). The request may still be "
-        "running on the server; a slow query may need more time than this "
+        f"surrealdb: {redact_host_url(url)} timed out ({_scrub_exc(exc)}). The request may "
+        "still be running on the server; a slow query may need more time than this "
         "client allows."
     )
 
@@ -359,7 +370,7 @@ class SurrealDBPlugin:
             if _is_connection_error(exc):
                 raise RuntimeError(_unreachable(self.url, exc)) from exc
             raise RuntimeError(
-                f"surrealdb: could not open {redact_host_url(self.url)} ({exc})."
+                f"surrealdb: could not open {redact_host_url(self.url)} ({_scrub_exc(exc)})."
             ) from exc
 
         try:
@@ -368,7 +379,7 @@ class SurrealDBPlugin:
                 db.use(namespace, database)
             except Exception as exc:
                 raise RuntimeError(
-                    f"surrealdb: USE {namespace} {database} failed ({exc}). "
+                    f"surrealdb: USE {namespace} {database} failed ({_scrub_exc(exc)}). "
                     "Check the namespace / database names and the user's grants."
                 ) from exc
 
@@ -379,7 +390,7 @@ class SurrealDBPlugin:
                     raise RuntimeError(_timed_out(self.url, exc)) from exc
                 if _is_connection_error(exc):
                     raise RuntimeError(_unreachable(self.url, exc)) from exc
-                raise RuntimeError(f"surrealdb {mode} failed: {exc}") from exc
+                raise RuntimeError(f"surrealdb {mode} failed: {_scrub_exc(exc)}") from exc
         finally:
             close = getattr(db, "close", None)
             if callable(close):
@@ -392,7 +403,7 @@ class SurrealDBPlugin:
             value=_jsonable(response),
             raw={
                 "mode": mode,
-                "url": self.url,
+                "url": redact_host_url(self.url),
                 "namespace": namespace,
                 "database": database,
             },

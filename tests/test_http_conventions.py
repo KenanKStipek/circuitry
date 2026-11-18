@@ -7,13 +7,14 @@ from __future__ import annotations
 import pytest
 
 from circuitry.http_conventions import (
-    _redact_url,
     check_proxy_url,
     check_strict_port,
     check_url,
     redact_proxy_value,
     redact_request_url,
+    redact_url,
     resolve_proxy,
+    scrub_embedded_urls,
     split_proxy_url,
     strip_request_url_userinfo,
 )
@@ -78,7 +79,7 @@ def test_check_strict_port_rejects_junk_after_an_ipv6_literal_with_the_shared_te
 def test_check_strict_port_never_echoes_a_password_disguised_as_a_port(char: str) -> None:
     """``https://user:pa/ss@api.example.com/v1``'s authority ends at the
     `/`, so the parsed netloc is ``user:pa`` -- no userinfo of its own
-    to strip, as far as a plain :func:`_redact_url` is concerned -- yet
+    to strip, as far as a plain authority-only cut is concerned -- yet
     the URL still carries an `@` further along, which means the real
     host (``api.example.com``) and the rest of the password are hidden
     past it. Refused with the shared text, cut to the last ``@`` and the
@@ -159,7 +160,7 @@ def test_check_url_scheme_refusal_never_echoes_a_password_hidden_past_the_author
 ) -> None:
     """Issue #778: the parsed netloc for this is ``user:pa`` (the
     authority ends at ``char``), with no ``@`` of its own -- a plain
-    :func:`_redact_url` leaves the rest of the password (``ss``)
+    authority-only cut leaves the rest of the password (``ss``)
     untouched.
     """
     url = f"ftp://user:pa{char}ss@host/x"
@@ -224,7 +225,7 @@ def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
     char: str,
 ) -> None:
     password = f"pa{char}ss"
-    redacted = _redact_url(f"http://alice:{password}@host:1234/x")
+    redacted = redact_url(f"http://alice:{password}@host:1234/x", "")
     assert redacted == "http://host:1234/x"
     assert "alice" not in redacted
     assert password not in redacted
@@ -232,17 +233,42 @@ def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
 
 def test_redact_request_url_masks_a_credential_query_param_behind_a_hidden_at_sign() -> None:
     """Issue #778: once the authority's own boundary hides a second
-    ``@`` (so the whole value is cut at the LAST one, through
-    :func:`redact_proxy_value`, rather than just the authority's own
-    userinfo), the query string still carries its own credential-like
-    key and must still be masked -- the cut runs first, since masking
-    first would re-encode the query string's own ``@`` as ``%40`` and
-    the cut would no longer find it.
+    ``@`` behind a ``:`` (so the whole value is cut at the LAST one,
+    rather than just the authority's own userinfo), the query string
+    still carries its own credential-like key and must still be
+    masked -- the authority cut runs first, on the value's original
+    text, so it still finds the query string's own ``@`` at its
+    original position.
     """
-    redacted = redact_request_url("https://alice:443/x@api.example.com/v1?api_key=sk")
+    redacted = redact_request_url("https://alice:longsecret/x@api.example.com/v1?api_key=sk")
     assert redacted == "https://api.example.com/v1?api_key=%2A%2A%2A"
     assert "alice" not in redacted
     assert "sk" not in redacted
+
+
+def test_redact_request_url_cuts_even_when_the_colon_before_a_later_at_sign_could_be_a_port() -> (
+    None
+):
+    """``http://user:12/34@host`` (a password containing a ``/`` whose
+    first part happens to be all digits) must still be cut in full, so
+    a port-shaped ``:`` suffix (``alice:443``) is never special-cased.
+    The query's own credential-like key is still masked either way.
+    """
+    redacted = redact_request_url("https://alice:443/x@api.example.com/v1?api_key=sk")
+    assert redacted == "https://api.example.com/v1?api_key=%2A%2A%2A"
+    assert redact_request_url("http://user:12/34@host") == "http://host"
+
+
+def test_redact_request_url_cuts_authority_userinfo_even_with_a_later_at_sign() -> None:
+    """The authority's own userinfo is cut first, whether or not
+    another ``@`` also appears later in the value (a
+    scoped-package-style path here).
+    """
+    url = "https://npmTOKEN123@registry.example.test/@acme/widget"
+    assert redact_url(url, "***REDACTED***") == (
+        "https://***REDACTED***@registry.example.test/@acme/widget"
+    )
+    assert redact_request_url(url) == "https://registry.example.test/@acme/widget"
 
 
 def test_redact_request_url_cuts_at_the_last_at_sign_with_no_scheme_at_all() -> None:
@@ -254,6 +280,115 @@ def test_redact_request_url_cuts_at_the_last_at_sign_with_no_scheme_at_all() -> 
     """
     assert redact_request_url("alice:pw@host/x") == "host/x"
     assert redact_request_url("alice:pw@localhost:11434") == "localhost:11434"
+
+
+def test_redact_url_leaves_a_credential_free_url_byte_for_byte() -> None:
+    for url in [
+        "https://medium.com/@alice/post",
+        "https://x.test/?q=a@b",
+        "https://host/p?q=a/b",
+        "https://host/p?q=a%20b",
+        "https://host/p?flag",
+        "https://host/p?%7e",
+        "HTTPS://host/p",
+        "https://host/p?",
+        "https://host/p?&",
+        "https://host/path#frag?a=1",
+    ]:
+        assert redact_url(url, "***REDACTED***") == url
+        assert redact_request_url(url) == url
+
+
+def test_redact_url_cuts_a_password_hidden_behind_a_slash_but_not_a_bare_at_sign() -> None:
+    url = "http://alice:longsecret/x@127.0.0.1"
+    assert redact_url(url, "***REDACTED***") == "http://***REDACTED***@127.0.0.1"
+    assert redact_request_url(url) == "http://127.0.0.1"
+
+
+def test_redact_url_cuts_a_colon_before_a_later_at_sign_even_when_it_could_be_a_port() -> None:
+    """A port-shaped ``:`` suffix is never special-cased, so a
+    scoped-path-style ``/@alice`` is cut too.
+    """
+    url = "http://localhost:8080/@alice"
+    assert redact_url(url, "***REDACTED***") == "http://***REDACTED***@alice"
+    assert redact_request_url(url) == "http://alice"
+
+
+def test_redact_url_masks_a_query_key_matched_in_its_decoded_form() -> None:
+    """The key is matched percent-decoded (``token``), but only the
+    value's raw text is replaced."""
+    url = "https://host/x?tok%65n=abcd1234"
+    assert redact_url(url, "***REDACTED***") == "https://host/x?tok%65n=***REDACTED***"
+
+
+def test_redact_url_cuts_a_schemeless_userinfo_value() -> None:
+    assert redact_url("alice:longsecret@host:1234", "***REDACTED***") == (
+        "***REDACTED***@host:1234"
+    )
+
+
+def test_redact_url_cuts_a_schemeless_token_with_no_colon_at_all() -> None:
+    """A bare token@host with no `:` is still a credential once *url* is
+    already known to be a URL/proxy value -- only whitespace, never the
+    `:` shape, gates the schemeless cut."""
+    url = "mytoken@host.example.test/api"
+    assert redact_url(url, "***REDACTED***") == "***REDACTED***@host.example.test/api"
+    assert redact_url(url, "") == "host.example.test/api"
+
+
+def test_redact_url_cuts_a_schemeless_value_even_with_trailing_whitespace() -> None:
+    """Every caller already knows *url* is a URL -- whitespace is
+    never an exception to the schemeless cut."""
+    assert redact_url("alice:s3cret@proxy:3128 ", "") == "proxy:3128 "
+
+
+def test_redact_url_masks_a_credential_query_key_among_other_keys() -> None:
+    url = "https://host/x?foo=1&api_key=sk-test&bar=2"
+    assert redact_url(url, "***REDACTED***") == (
+        "https://host/x?foo=1&api_key=***REDACTED***&bar=2"
+    )
+    assert redact_request_url(url) == "https://host/x?foo=1&api_key=%2A%2A%2A&bar=2"
+
+
+def test_redact_url_masks_a_credential_query_key_decoded_lossily_on_invalid_utf8() -> None:
+    """``urllib.parse.unquote``'s own default (``errors="replace"``)
+    substitutes U+FFFD for an invalid byte sequence -- ``tok%65n%ff``
+    decodes to ``"token�"``, which still contains ``"token"``.
+    """
+    url = "https://host/x?tok%65n%ff=abcd1234"
+    assert redact_url(url, "***REDACTED***") == "https://host/x?tok%65n%ff=***REDACTED***"
+
+
+def test_redact_url_masks_a_credential_query_key_folded_as_unicode_case() -> None:
+    """``re.IGNORECASE`` folds the Kelvin sign (U+212A) to ``k``,
+    matching ``key`` against a decoded key of ``"Key"``.
+    """
+    url = "https://h/?%E2%84%AAey=abcd1234"
+    assert redact_url(url, "***REDACTED***") == "https://h/?%E2%84%AAey=***REDACTED***"
+
+
+def test_redact_url_cuts_the_whole_authority_when_its_own_userinfo_colon_precedes_a_later_at_sign() -> (
+    None
+):
+    """The ``:`` search for a later ``@`` runs from the start of the
+    ORIGINAL authority (userinfo included), not just the host -- a
+    password containing an ``@`` of its own (``alice:p@ss``) must
+    still be found, or its own tail (past the authority's own cut)
+    survives uncut.
+    """
+    for sep in ("/", "?", "#"):
+        url = f"http://alice:p@ss{sep}word@proxy:3128"
+        assert redact_url(url, "") == "http://proxy:3128"
+        assert redact_url(url, "***REDACTED***") == "http://***REDACTED***@proxy:3128"
+
+
+def test_redact_url_cuts_to_the_later_at_sign_when_the_authority_already_has_its_own_userinfo() -> (
+    None
+):
+    """An accepted over-redaction: a ``:`` before a later ``@``
+    always cuts.
+    """
+    assert redact_url("http://u:p@host/@alice", "") == "http://alice"
 
 
 @pytest.mark.parametrize("char", (" ", "\r"))
@@ -309,6 +444,29 @@ def test_check_proxy_url_refuses_an_at_sign_after_the_authoritys_own_boundary(
     message = str(exc_info.value)
     assert "alice" not in message
     assert password not in message
+
+
+@pytest.mark.parametrize("suffix", ("", "?q=1", "#frag"))
+def test_check_proxy_url_refuses_a_credential_with_no_colon_hidden_behind_a_slash(
+    suffix: str,
+) -> None:
+    """A credential with no ``:`` at all, past the authority's own
+    boundary, is still the whole authority -- not just a password --
+    so it is refused and never echoed, with no ``:`` required.
+    """
+    with pytest.raises(ValueError, match="invalid proxy URL") as exc_info:
+        check_proxy_url(f"http://abc/def@proxy:3128{suffix}")
+    message = str(exc_info.value)
+    assert "abc" not in message
+    assert "def" not in message
+
+
+def test_check_proxy_url_never_leaks_a_colonless_credential_in_an_unsupported_scheme() -> None:
+    with pytest.raises(ValueError, match="unsupported proxy scheme") as exc_info:
+        check_proxy_url("socks5://abc/def@proxy:1080")
+    message = str(exc_info.value)
+    assert "abc" not in message
+    assert "def" not in message
 
 
 @pytest.mark.parametrize("char", (" ", "\r"))
@@ -491,3 +649,15 @@ def test_split_proxy_url_stops_the_authority_at_a_query_string_or_fragment() -> 
     """
     assert split_proxy_url("http://proxy.corp:3128?x").hostport == "proxy.corp:3128"
     assert split_proxy_url("http://proxy.corp:3128#x").hostport == "proxy.corp:3128"
+
+
+def test_scrub_embedded_urls_ends_a_url_at_a_unit_separator_even_before_a_colon_and_at_sign() -> (
+    None
+):
+    """U+001F is in ``_EMBEDDED_URL_BOUNDARY``, what
+    ``_EMBEDDED_URL_RE`` uses -- it ends the embedded URL at ``/a``,
+    so the ``:c@d`` past it is never even recognized as part of a
+    URL, let alone cut for a credential.
+    """
+    text = "bad url http://h/a\x1fb:c@d"
+    assert scrub_embedded_urls(text) == text

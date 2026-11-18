@@ -400,16 +400,20 @@ class CyberdinerAdapter:
             return CheckResult(ok=False, missing=missing)
 
         url = self.expo_url.rstrip("/") + "/beta/jobs"
-        req = urllib.request.Request(
-            http_conventions.strip_request_url_userinfo(url), method="GET"
-        )
-        req.add_header("Authorization", f"Bearer {self.token}")
         try:
-            # Checked and proxied like every other request this
-            # adapter makes -- a bad `expo_url` (wrong scheme/port) or
-            # an unusable proxy counts as unreachable here too, the
-            # same as a connection failure (issue #778).
+            # `check_url` (and the `Request` it guards) now run inside
+            # this `try`, never before it (issue #818): a schemeless
+            # `expo_url` with no `:` at all used to build a `Request`
+            # first, which raises urllib's own bare "unknown url type"
+            # uncaught, instead of being reported in the `host:` line
+            # below like any other bad `expo_url` (wrong scheme/port)
+            # or unusable proxy, which counts as unreachable here too,
+            # the same as a connection failure (issue #778).
             http_conventions.check_url(url)
+            req = urllib.request.Request(
+                http_conventions.strip_request_url_userinfo(url), method="GET"
+            )
+            req.add_header("Authorization", f"Bearer {self.token}")
             with http_conventions.open_with_proxy_rule(req, timeout=2):
                 pass
         except urllib.error.HTTPError:

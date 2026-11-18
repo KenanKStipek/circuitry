@@ -149,6 +149,10 @@ pub fn curl_failure_message(
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
         .unwrap_or_else(|| "no response body".to_string());
+    // A response body a provider echoes back may itself contain a URL
+    // with userinfo (issue #819) -- scrubbed before it's ever shown,
+    // the same as every other surface that names a request URL.
+    let detail = electricity_tools::http_conventions::scrub_embedded_urls(&detail);
     let model_part = match model {
         Some(m) if !m.is_empty() => format!(" model={}", Value::Str(m.to_string()).py_repr()),
         _ => String::new(),
@@ -346,6 +350,30 @@ mod tests {
             "OpenAI-compatible request failed (curl exit 22) model='m' \
              url=http://127.0.0.1/v1/chat/completions?api_key=%2A%2A%2A: bad key ***"
         );
+    }
+
+    #[test]
+    fn curl_failure_message_scrubs_a_url_with_userinfo_in_the_response_body() {
+        // #819 item 8: a response body a provider echoes back may itself
+        // contain a URL with userinfo -- scrubbed the same as every other
+        // surface that names a request URL.
+        let password = "pw_value_pw_value";
+        let body = format!(
+            r#"{{"error": "could not verify callback at https://alice:{password}@callback.example.test/hook"}}"#
+        );
+        let message = curl_failure_message(
+            "webhook",
+            None,
+            "https://api.example.test/v1/send",
+            22,
+            &body,
+            "",
+            "",
+            &[],
+        );
+        assert!(!message.contains(password));
+        assert!(!message.contains("alice"));
+        assert!(message.contains("https://callback.example.test/hook"));
     }
 
     #[test]

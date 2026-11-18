@@ -181,8 +181,14 @@ class LastRun:
 
     @property
     def has_redacted_secrets(self) -> bool:
-        """True when replaying would pass a redaction marker as a real value."""
-        return any(pair.endswith(f"={REDACTED}") for pair in self.env_pairs)
+        """True when replaying would pass a redaction marker as a real value.
+
+        The marker isn't always the whole value: a URL-shaped value keeps
+        its scheme/host around the cut (``url=http://***REDACTED***@host``),
+        so this checks for the marker anywhere past the first ``=``, not
+        just an exact ``=***REDACTED***`` suffix.
+        """
+        return any(REDACTED in pair.partition("=")[2] for pair in self.env_pairs)
 
     @property
     def blocked_reason(self) -> str:

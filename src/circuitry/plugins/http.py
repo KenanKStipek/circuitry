@@ -50,7 +50,8 @@ ToolResult shape:
     With ``save_to``: ``{path, bytes, sha256, content_type, status}``, with
     ``path`` and ``sha256`` ``None`` (and ``bytes`` 0) when nothing was written.
   - ``raw``: ``{"status": int, "headers": {...}, "url": str, "body": str}``,
-    without ``body`` under ``save_to``.
+    without ``body`` under ``save_to``. ``url`` is redacted the same way
+    any other surface that names a request URL is (issue #818).
   - ``stdout``: ``None``. ``stderr``: error message on non-2xx, including a
     bounded, redacted excerpt of the response body when one is available
     (the JSON ``error``/``message``/``detail`` field, or the first ~500
@@ -650,7 +651,11 @@ class HttpPlugin:
                     "content_type": resp_headers.get("content-type"),
                     "status": status,
                 },
-                raw={"status": status, "headers": resp_headers, "url": url},
+                raw={
+                    "status": status,
+                    "headers": resp_headers,
+                    "url": http_conventions.redact_request_url(url),
+                },
                 stdout=None,
                 stderr=stderr,
                 exit_code=None,
@@ -678,7 +683,7 @@ class HttpPlugin:
             raw={
                 "status": status,
                 "headers": resp_headers,
-                "url": url,
+                "url": http_conventions.redact_request_url(url),
                 "body": text,
             },
             stdout=None,
