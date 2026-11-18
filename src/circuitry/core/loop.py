@@ -1019,9 +1019,10 @@ class LoopRuntime:
                                 "iter": {"index": iteration_count - 1, "count": iteration_count},
                             }
                             try:
+                                eval_ctx = _scope_ctx(cond_ctx, last_writes)
                                 should_continue = self._evaluate_condition(
                                     store=child_store,
-                                    ctx=_scope_ctx(cond_ctx, last_writes),
+                                    ctx=eval_ctx,
                                 )
                                 if meta and self.defn.while_def.mode == "model":
                                     meta["answer"] = self._model_answer
@@ -1047,6 +1048,18 @@ class LoopRuntime:
                                         meta["tokens_cache_write_total"] = (
                                             self._model_tokens_cache_write_total
                                         )
+
+                                # Written right after the evaluation above and before the
+                                # chosen outcome's pass or break (#628) -- the exception
+                                # branches below (fail, break/continue) already wrote their
+                                # own, since neither falls through to here.
+                                child_store.fire_decision(
+                                    None,
+                                    kind="while",
+                                    mode=self.defn.while_def.mode,
+                                    outcome={"continue": should_continue, "iteration": iteration_count},
+                                    inputs=self._decision_inputs(ctx=eval_ctx),
+                                )
                             except Exception as exc:
                                 if meta and self.defn.while_def.mode == "model":
                                     meta["answer"] = self._model_answer
@@ -1074,6 +1087,14 @@ class LoopRuntime:
                                         )
                                 if self.defn.on_error == "fail":
                                     termination_reason = "error"
+                                    child_store.fire_decision(
+                                        None,
+                                        kind="while",
+                                        mode=self.defn.while_def.mode,
+                                        outcome={"continue": False, "iteration": iteration_count},
+                                        inputs=self._decision_inputs(ctx=eval_ctx),
+                                        error=str(exc),
+                                    )
                                     raise
                                 # break/continue: a condition we cannot evaluate can
                                 # never become false, so continuing would spin to
@@ -1088,6 +1109,14 @@ class LoopRuntime:
                                 termination_reason = "condition_error"
                                 if meta:
                                     meta["error"] = str(exc)
+                                child_store.fire_decision(
+                                    None,
+                                    kind="while",
+                                    mode=self.defn.while_def.mode,
+                                    outcome={"continue": False, "iteration": iteration_count},
+                                    inputs=self._decision_inputs(ctx=eval_ctx),
+                                    error=str(exc),
+                                )
                                 # An interrupt is never lost just because
                                 # on_error degraded this condition's own
                                 # failure (#799).
@@ -1377,6 +1406,28 @@ class LoopRuntime:
         if self.defn.while_def.mode == "cel":
             return self._evaluate_cel(ctx=ctx)
         return self._evaluate_model(store=store, ctx=ctx)
+
+    def _decision_inputs(self, *, ctx: dict[str, Any]) -> dict[str, Any]:
+        """The ``decision`` line's own inputs (#628): ``answer`` for a
+        model-mode condition, or ``values``/``unset`` for a CEL one,
+        computed from the same *ctx* :meth:`_evaluate_condition` read.
+
+        Never raises -- an expression that cannot even parse already
+        surfaced that as this evaluation's own failure; this bookkeeping
+        must not mask it with one of its own.
+        """
+        if not self.defn.while_def or self.defn.while_def.mode == "model":
+            return {"answer": self._model_answer}
+        from .cel_eval import CelError, decision_inputs
+
+        try:
+            values, unset = decision_inputs(self.defn.while_def.expr or "", ctx)
+        except CelError:
+            return {"values": {}}
+        inputs: dict[str, Any] = {"values": values}
+        if unset:
+            inputs["unset"] = unset
+        return inputs
 
     def _evaluate_model(self, *, store: Store, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""

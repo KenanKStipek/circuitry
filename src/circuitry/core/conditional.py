@@ -244,8 +244,24 @@ class ConditionalRuntime:
                     if self._model_tokens_cache_write is not None:
                         meta["tokens_cache_write"] = self._model_tokens_cache_write
             if self.defn.on_error == "fail":
+                child_store.fire_decision(
+                    None,
+                    kind="if",
+                    mode=self.defn.condition.mode,
+                    outcome={"branch": None},
+                    inputs=self._decision_inputs(ctx=ctx),
+                    error=str(e),
+                )
                 raise
             if self.defn.on_error == "skip":
+                child_store.fire_decision(
+                    None,
+                    kind="if",
+                    mode=self.defn.condition.mode,
+                    outcome={"branch": None},
+                    inputs=self._decision_inputs(ctx=ctx),
+                    error=str(e),
+                )
                 if node:
                     node["value"] = {"result": None, "branch": None, "effects": {}}
                 return
@@ -257,6 +273,9 @@ class ConditionalRuntime:
                 e,
             )
             result = False
+            condition_error: str | None = str(e)
+        else:
+            condition_error = None
 
         branch = "then" if result else "else"
         effects_to_run = self.defn.then_effects if result else self.defn.else_effects
@@ -279,6 +298,18 @@ class ConditionalRuntime:
                     meta["tokens_cached_in"] = self._model_tokens_cached_in
                 if self._model_tokens_cache_write is not None:
                     meta["tokens_cache_write"] = self._model_tokens_cache_write
+
+        # Written right after the evaluation above and before the chosen
+        # branch's effects run -- the exception branches above (fail,
+        # skip) already wrote their own, since neither reaches this line.
+        child_store.fire_decision(
+            None,
+            kind="if",
+            mode=self.defn.condition.mode,
+            outcome={"branch": branch},
+            inputs=self._decision_inputs(ctx=ctx),
+            error=condition_error,
+        )
 
         branch_indent = "  " * (self.depth + 1)
         if self.verbose:
@@ -597,6 +628,28 @@ class ConditionalRuntime:
         if self.defn.condition.mode == "cel":
             return self._evaluate_cel(ctx=ctx)
         return self._evaluate_model(store=store, ctx=ctx)
+
+    def _decision_inputs(self, *, ctx: dict[str, Any]) -> dict[str, Any]:
+        """The ``decision`` line's own inputs (#628): ``answer`` for a
+        model-mode condition, or ``values``/``unset`` for a CEL one,
+        computed from the same *ctx* :meth:`_evaluate_condition` read.
+
+        Never raises -- an expression that cannot even parse already
+        surfaced that as this evaluation's own failure; this bookkeeping
+        must not mask it with one of its own.
+        """
+        if self.defn.condition.mode == "model":
+            return {"answer": self._model_answer}
+        from .cel_eval import CelError, decision_inputs
+
+        try:
+            values, unset = decision_inputs(self.defn.condition.expr or "", ctx)
+        except CelError:
+            return {"values": {}}
+        inputs: dict[str, Any] = {"values": values}
+        if unset:
+            inputs["unset"] = unset
+        return inputs
 
     def _evaluate_model(self, *, store: Store, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
