@@ -522,8 +522,7 @@ mod tests {
     #[test]
     fn has_redacted_secrets_detects_the_marker_in_a_url_query_value() {
         // A stashed `-e url=...?token=...` keeps its scheme/host, with
-        // only the credential-like query value masked (issue #819
-        // follow-up).
+        // only the credential-like query value masked.
         let mut args = Dict::new();
         args.insert(
             Value::Str("env_vars".to_string()),

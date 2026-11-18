@@ -1705,7 +1705,7 @@ fn run_subcommand_last_refuses_a_stash_with_redacted_secrets() {
 
 /// Same refusal, but for the marker embedded in a URL-shaped value's
 /// own query string (a stashed `-e url=...?token=...`), not a bare
-/// `=***REDACTED***` suffix (issue #819 follow-up).
+/// `=***REDACTED***` suffix.
 #[test]
 fn run_subcommand_last_refuses_a_stash_with_a_redacted_url_query_value() {
     let (mut cmd, home) = command("run-sub-last-redacted-url-query");

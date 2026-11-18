@@ -61,12 +61,11 @@ def test_password_in_url_never_reaches_any_output_surface(
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run)
 
     # A password hidden behind a `/`, past a REAL host:port the request
-    # actually reaches: a port exception for the colon-before-a-later-@
-    # rule was tried and withdrawn (issue #819 follow-up), so the
-    # credential has to sit on its own colon further down the path,
-    # never on the real authority's own (valid, numeric) one -- a
-    # plain `user:pass@host` shape is already covered by `main`'s own,
-    # unmodified redaction.
+    # actually reaches: the colon-before-a-later-@ rule never
+    # special-cases a port-shaped `:` suffix, so the credential has to
+    # sit on its own colon further down the path, never on the real
+    # authority's own (valid, numeric) one -- a plain `user:pass@host`
+    # shape is already covered by `main`'s own, unmodified redaction.
     url = f"http://127.0.0.1:{mock_server}/path:{PASSWORD}@decoyhost/secret"
 
     # The URL is a static literal in the document, not a `-e` input:

@@ -82,8 +82,7 @@ def test_redacts_a_credential_hidden_behind_the_path() -> None:
 
 
 def test_cuts_even_when_the_colon_before_a_later_at_sign_could_be_a_port() -> None:
-    """#819 follow-up: a port exception was tried and withdrawn —
-    ``http://user:12/34@host`` (a password containing a / whose first
+    """``http://user:12/34@host`` (a password containing a / whose first
     part happens to be all digits) must still be cut in full, so a
     port-shaped colon suffix (``alice:443``) is never special-cased."""
     out = redact({"base_url": "https://alice:443/x@api.example.test/v1"})
@@ -92,8 +91,8 @@ def test_cuts_even_when_the_colon_before_a_later_at_sign_could_be_a_port() -> No
 
 
 def test_redacts_authority_userinfo_even_with_a_later_at_sign() -> None:
-    """#819 follow-up: the authority's own userinfo is cut first, whether
-    or not another @ also appears later in the value (a scoped-package
+    """The authority's own userinfo is cut first, whether or not
+    another @ also appears later in the value (a scoped-package
     style path here)."""
     out = redact(
         {"base_url": "https://npmTOKEN123@registry.example.test/@acme/widget"}
@@ -103,16 +102,16 @@ def test_redacts_authority_userinfo_even_with_a_later_at_sign() -> None:
 
 
 def test_redacts_a_token_shaped_value_under_a_url_key_whole() -> None:
-    """#819 follow-up: `main`'s own ordinary-string rule (the JWT/key-shape
-    patterns) applies before the URL rule, so a token-shaped value with no
-    @ and no ? under a URL key still redacts wholesale."""
+    """`main`'s own ordinary-string rule (the JWT/key-shape patterns)
+    applies before the URL rule, so a token-shaped value with no @ and
+    no ? under a URL key still redacts wholesale."""
     key = "sk-" + "a" * 25
     assert redact({"endpoint": key}) == {"endpoint": REDACTED}
 
 
 def test_redacts_a_query_key_matched_in_its_decoded_form() -> None:
-    """#819 follow-up: the key is matched percent-decoded ("token"), but
-    only the value's raw text is replaced."""
+    """The key is matched percent-decoded ("token"), but only the
+    value's raw text is replaced."""
     out = redact({"url": "https://host/x?tok%65n=abcd1234"})
     assert out["url"] == f"https://host/x?tok%65n={REDACTED}"
 
