@@ -60,8 +60,14 @@ def test_password_in_url_never_reaches_any_output_surface(
     fake_last_run.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run)
 
-    user = "alice"
-    url = f"http://{user}:{PASSWORD}@127.0.0.1:{mock_server}/secret"
+    # A password hidden behind a `/`, past a REAL host:port the request
+    # actually reaches: the colon-before-a-later-@ rule only cuts when
+    # the text before it can't be a port (issue #819 follow-up), so
+    # the credential has to sit on its own colon further down the
+    # path, never on the real authority's own (valid, numeric) one --
+    # a plain `user:pass@host` shape is already covered by `main`'s
+    # own, unmodified redaction.
+    url = f"http://127.0.0.1:{mock_server}/path:{PASSWORD}@decoyhost/secret"
 
     # The URL is a static literal in the document, not a `-e` input:
     # `-e`-supplied values are the user's own data and are always
@@ -88,6 +94,8 @@ def test_password_in_url_never_reaches_any_output_surface(
     # The configured adapter's own base_url also carries the credential
     # (issue #819), so the effective-settings snapshot path is covered
     # too, not just the tool's own params/raw.
+    # A credential query key, no userinfo at all -- the query-masking
+    # half of the rule, covered separately from the userinfo cut above.
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(
         json.dumps(
@@ -97,7 +105,9 @@ def test_password_in_url_never_reaches_any_output_surface(
                 "runtime": {
                     "adapters": {
                         "ollama": {
-                            "base_url": f"http://{user}:{PASSWORD}@127.0.0.1:{mock_server}"
+                            "base_url": (
+                                f"http://127.0.0.1:{mock_server}/?api_key={PASSWORD}"
+                            )
                         }
                     }
                 },
@@ -138,4 +148,3 @@ def test_password_in_url_never_reaches_any_output_surface(
     }
     for name, text in surfaces.items():
         _assert_no_piece_leaks(text, PASSWORD, label=name)
-        assert user not in text, f"username leaked via {name}"

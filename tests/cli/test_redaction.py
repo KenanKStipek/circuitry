@@ -74,20 +74,21 @@ def test_redacts_a_schemeless_token_used_as_a_username_with_no_colon_at_all() ->
 
 def test_redacts_a_credential_hidden_behind_the_path() -> None:
     """#819: an @ past the parsed authority's own boundary still hides a
-    password, when the text before it can't be a port — the whole value
-    is cut at the LAST @, not just the netloc's own userinfo."""
+    password behind a colon — the whole value is cut at the LAST @, not
+    just the netloc's own userinfo."""
     out = redact({"base_url": "https://alice:longsecret/x@api.example.test/v1"})
     assert "alice" not in out["base_url"]
     assert out["base_url"] == f"https://{REDACTED}@api.example.test/v1"
 
 
-def test_leaves_an_at_sign_past_a_real_host_port_alone() -> None:
-    """#819 follow-up: ``443`` is a valid port, so ``alice:443`` reads as
-    a real host:port, not a hidden credential — the later @ is left
-    untouched, the same as ``http://localhost:8080/@alice``."""
-    url = "https://alice:443/x@api.example.test/v1"
-    out = redact({"base_url": url})
-    assert out["base_url"] == url
+def test_cuts_even_when_the_colon_before_a_later_at_sign_could_be_a_port() -> None:
+    """#819 follow-up: a port exception was tried and withdrawn —
+    ``http://user:12/34@host`` (a password containing a / whose first
+    part happens to be all digits) must still be cut in full, so a
+    port-shaped colon suffix (``alice:443``) is never special-cased."""
+    out = redact({"base_url": "https://alice:443/x@api.example.test/v1"})
+    assert "alice" not in out["base_url"]
+    assert out["base_url"] == f"https://{REDACTED}@api.example.test/v1"
 
 
 def test_redacts_authority_userinfo_even_with_a_later_at_sign() -> None:

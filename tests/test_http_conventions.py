@@ -232,12 +232,12 @@ def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
 
 def test_redact_request_url_masks_a_credential_query_param_behind_a_hidden_at_sign() -> None:
     """Issue #778: once the authority's own boundary hides a second
-    ``@`` behind a ``:`` that can't be a port (so the whole value is
-    cut at the LAST one, through :func:`redact_proxy_value`, rather
-    than just the authority's own userinfo), the query string still
-    carries its own credential-like key and must still be masked --
-    the cut runs first, since masking first would re-encode the query
-    string's own ``@`` as ``%40`` and the cut would no longer find it.
+    ``@`` behind a ``:`` (so the whole value is cut at the LAST one,
+    through :func:`redact_proxy_value`, rather than just the
+    authority's own userinfo), the query string still carries its own
+    credential-like key and must still be masked -- the cut runs
+    first, since masking first would re-encode the query string's own
+    ``@`` as ``%40`` and the cut would no longer find it.
     """
     redacted = redact_request_url("https://alice:longsecret/x@api.example.com/v1?api_key=sk")
     assert redacted == "https://api.example.com/v1?api_key=%2A%2A%2A"
@@ -245,14 +245,18 @@ def test_redact_request_url_masks_a_credential_query_param_behind_a_hidden_at_si
     assert "sk" not in redacted
 
 
-def test_redact_request_url_leaves_an_at_sign_past_a_real_host_port_alone() -> None:
-    """Issue #819 follow-up: ``443`` is a valid port, so ``alice:443``
-    reads as a real host:port, not a hidden credential -- the later
-    ``@`` is left untouched, the same as ``http://localhost:8080/@alice``.
+def test_redact_request_url_cuts_even_when_the_colon_before_a_later_at_sign_could_be_a_port() -> (
+    None
+):
+    """Issue #819 follow-up: a port exception was tried and withdrawn
+    -- ``http://user:12/34@host`` (a password containing a ``/`` whose
+    first part happens to be all digits) must still be cut in full, so
+    a port-shaped ``:`` suffix (``alice:443``) is never special-cased.
     The query's own credential-like key is still masked either way.
     """
     redacted = redact_request_url("https://alice:443/x@api.example.com/v1?api_key=sk")
-    assert redacted == "https://alice:443/x@api.example.com/v1?api_key=%2A%2A%2A"
+    assert redacted == "https://api.example.com/v1?api_key=%2A%2A%2A"
+    assert redact_request_url("http://user:12/34@host") == "http://host"
 
 
 def test_redact_request_url_cuts_authority_userinfo_even_with_a_later_at_sign() -> None:
@@ -301,13 +305,14 @@ def test_redact_url_cuts_a_password_hidden_behind_a_slash_but_not_a_bare_at_sign
     assert redact_request_url(url) == "http://127.0.0.1"
 
 
-def test_redact_url_leaves_a_real_port_before_a_later_at_sign_alone() -> None:
-    """Issue #819 follow-up: ``8080`` is a valid port, so the later
-    ``@`` (a scoped-path-style ``/@alice``) is left exactly as it is.
+def test_redact_url_cuts_a_colon_before_a_later_at_sign_even_when_it_could_be_a_port() -> None:
+    """Issue #819 follow-up: a port exception was tried and withdrawn
+    -- a port-shaped ``:`` suffix is never special-cased, so a
+    scoped-path-style ``/@alice`` is cut too.
     """
     url = "http://localhost:8080/@alice"
-    assert redact_url(url, "***REDACTED***") == url
-    assert redact_request_url(url) == url
+    assert redact_url(url, "***REDACTED***") == "http://***REDACTED***@alice"
+    assert redact_request_url(url) == "http://alice"
 
 
 def test_redact_url_masks_a_query_key_matched_in_its_decoded_form() -> None:
