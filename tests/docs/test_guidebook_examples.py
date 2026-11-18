@@ -102,10 +102,17 @@ def _stub_use_path_children(document_text: str, tmp_path: Path) -> None:
         return
     from circuitry.core.cycle_check import collect_use_refs
 
+    root = tmp_path.resolve()
     for kind, value in collect_use_refs(parsed):
         if kind != "path":
             continue
-        candidate = tmp_path / value
+        candidate = (tmp_path / value).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            # An absolute path, or one climbing above tmp_path with `../` --
+            # not a reference this harness's own sandbox can stand in for.
+            continue
         if candidate.exists():
             continue
         candidate.parent.mkdir(parents=True, exist_ok=True)
