@@ -26,7 +26,11 @@ const NAME_MERGE_RUNTIME_KEYS: [&str; 1] = ["secrets"];
 /// `_CEILING_LIST_KEYS`: `(top_key, name, leaf_key)` triples the merge
 /// re-narrows to a host/document intersection after the ordinary merge,
 /// rather than letting either side simply replace the other's list.
-const CEILING_LIST_KEYS: [(&str, &str, &str); 1] = [("plugins", "shell", "allowed_commands")];
+/// `service` gets the same ceiling as `shell` (#381).
+const CEILING_LIST_KEYS: [(&str, &str, &str); 2] = [
+    ("plugins", "shell", "allowed_commands"),
+    ("plugins", "service", "allowed_commands"),
+];
 
 fn deep_merge_dicts(base: &Dict, overlay: &Dict) -> Dict {
     let mut merged = base.clone();
@@ -321,5 +325,40 @@ mod tests {
             .as_list()
             .unwrap();
         assert_eq!(allowed, &[Value::from("ls")]);
+    }
+
+    #[test]
+    fn the_service_allowlist_ceiling_survives_even_when_the_document_sets_its_own() {
+        let config = nested(
+            &["plugins", "service"],
+            dict_of(vec![(
+                "allowed_commands",
+                Value::List(vec![Value::from("node"), Value::from("npm")]),
+            )]),
+        );
+        let document = nested(
+            &["plugins", "service"],
+            dict_of(vec![(
+                "allowed_commands",
+                Value::List(vec![Value::from("npm"), Value::from("rm")]),
+            )]),
+        );
+        let merged = merge_runtime(Some(&config), Some(&document)).unwrap();
+        let allowed = merged
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("plugins".into()))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("service".into()))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("allowed_commands".into()))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(allowed, &[Value::from("npm")]);
     }
 }
