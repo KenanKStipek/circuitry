@@ -70,6 +70,7 @@ first time it compiles, with the same message.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import logging
 import math
@@ -1005,10 +1006,16 @@ def decision_inputs(expr: str, ctx: Mapping[str, Any]) -> tuple[dict[str, Any], 
 
     Raises :class:`CelValidationError` if *expr* does not parse, the same
     as :func:`condition_paths`.
+
+    Every value kept is :func:`copy.deepcopy`'d out of *ctx* first: a
+    ``decision`` line's own writer serializes this later, on its own
+    schedule, and *ctx* is the live run state -- a concurrent branch
+    could still be mutating the very dict or list a whole-node read
+    (``has(state.x)``) captured a reference to.
     """
     compiled = condition_paths(expr)
     if compiled.reads_whole_state:
-        return {"state": ctx}, []
+        return {"state": copy.deepcopy(ctx)}, []
     values: dict[str, Any] = {}
     unset: list[str] = []
     seen: set[str] = set()
@@ -1025,7 +1032,7 @@ def decision_inputs(expr: str, ctx: Mapping[str, Any]) -> tuple[dict[str, Any], 
                 resolved = False
                 break
         if resolved and current is not None:
-            values[path] = current
+            values[path] = copy.deepcopy(current)
         else:
             unset.append(path)
     return values, unset

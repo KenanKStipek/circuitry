@@ -249,7 +249,11 @@ class ConditionalRuntime:
                     kind="if",
                     mode=self.defn.condition.mode,
                     outcome={"branch": None},
-                    inputs=self._decision_inputs(ctx=ctx),
+                    inputs=(
+                        self._decision_inputs(ctx=ctx)
+                        if child_store.decision is not None
+                        else {}
+                    ),
                     error=str(e),
                 )
                 raise
@@ -259,7 +263,11 @@ class ConditionalRuntime:
                     kind="if",
                     mode=self.defn.condition.mode,
                     outcome={"branch": None},
-                    inputs=self._decision_inputs(ctx=ctx),
+                    inputs=(
+                        self._decision_inputs(ctx=ctx)
+                        if child_store.decision is not None
+                        else {}
+                    ),
                     error=str(e),
                 )
                 if node:
@@ -307,7 +315,11 @@ class ConditionalRuntime:
             kind="if",
             mode=self.defn.condition.mode,
             outcome={"branch": branch},
-            inputs=self._decision_inputs(ctx=ctx),
+            inputs=(
+                self._decision_inputs(ctx=ctx)
+                if child_store.decision is not None
+                else {}
+            ),
             error=condition_error,
         )
 

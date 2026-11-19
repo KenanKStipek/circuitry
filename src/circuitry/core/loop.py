@@ -1058,7 +1058,11 @@ class LoopRuntime:
                                     kind="while",
                                     mode=self.defn.while_def.mode,
                                     outcome={"continue": should_continue, "iteration": iteration_count},
-                                    inputs=self._decision_inputs(ctx=eval_ctx),
+                                    inputs=(
+                                        self._decision_inputs(ctx=eval_ctx)
+                                        if child_store.decision is not None
+                                        else {}
+                                    ),
                                 )
                             except Exception as exc:
                                 if meta and self.defn.while_def.mode == "model":
@@ -1092,7 +1096,11 @@ class LoopRuntime:
                                         kind="while",
                                         mode=self.defn.while_def.mode,
                                         outcome={"continue": False, "iteration": iteration_count},
-                                        inputs=self._decision_inputs(ctx=eval_ctx),
+                                        inputs=(
+                                            self._decision_inputs(ctx=eval_ctx)
+                                            if child_store.decision is not None
+                                            else {}
+                                        ),
                                         error=str(exc),
                                     )
                                     raise
@@ -1114,7 +1122,11 @@ class LoopRuntime:
                                     kind="while",
                                     mode=self.defn.while_def.mode,
                                     outcome={"continue": False, "iteration": iteration_count},
-                                    inputs=self._decision_inputs(ctx=eval_ctx),
+                                    inputs=(
+                                        self._decision_inputs(ctx=eval_ctx)
+                                        if child_store.decision is not None
+                                        else {}
+                                    ),
                                     error=str(exc),
                                 )
                                 # An interrupt is never lost just because
