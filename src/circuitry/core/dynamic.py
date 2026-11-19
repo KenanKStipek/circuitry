@@ -235,16 +235,6 @@ class DynamicDefinition:
     # that skipped `cof check`'s own, scope-aware name validation).
     effect_names: frozenset[str] = field(default_factory=frozenset)
 
-    # This document's own content digest (#405) — `core.prompt_compose.
-    # document_content_digest`, computed over exactly the bytes this same
-    # `compile_orchestration` call read while resolving every `prompts:`/
-    # `template`/`messages[].content` `{file: ...}` source, via the
-    # `file_cache` it was given. Only populated on the root `DynamicDefinition`
-    # a `compile_orchestration` call returns, and only when its caller passed
-    # `resolved_path` (this document has no file of its own otherwise, or the
-    # caller has no use for the digest) — same lifecycle as `prompts` above.
-    content_digest: str | None = None
-
 
 class DynamicRuntime:
     def __init__(

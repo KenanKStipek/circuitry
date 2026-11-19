@@ -78,8 +78,13 @@ def _trust_document(path: Path, *, yes: bool, store: Path, config: Path | None) 
     )
     from .orchestration_loader import load_orchestration_file
 
+    # This command's own load/digest cycle (#405): the exact bytes parsed
+    # here are the ones the digest below hashes, so a document (or a
+    # prompt file it references) that changes between the two can't be
+    # recorded as consented under a digest it never actually had.
+    file_cache: dict[Path, bytes] = {}
     try:
-        orch = load_orchestration_file(path)
+        orch = load_orchestration_file(path, file_cache=file_cache)
     except (OSError, ValueError) as exc:
         raise _fail(str(exc)) from exc
 
@@ -117,6 +122,7 @@ def _trust_document(path: Path, *, yes: bool, store: Path, config: Path | None) 
             library_registry=library_registry,
             is_cache_path=library_registry.is_cache_path(path),
         ),
+        file_cache=file_cache,
     )
     consented = consented_capabilities(digest, store_path=store)
 

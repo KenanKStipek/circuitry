@@ -37,8 +37,8 @@ def load_orchestration_file(
     bytes parsed here are the same bytes a consent digest
     (``core.prompt_compose.document_content_digest``) given the same dict
     hashes, and the same bytes a later ``compile_orchestration(...,
-    resolved_path=path, file_cache=file_cache)`` call would hash again were
-    it asked to.
+    file_cache=file_cache)`` call resolves every ``{file: ...}`` prompt
+    source against.
     """
     suffix = path.suffix.lower()
     if suffix not in ORCHESTRATION_SUFFIXES:

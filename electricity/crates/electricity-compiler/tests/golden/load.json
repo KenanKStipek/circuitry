@@ -88,8 +88,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -218,8 +217,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "2ed27c1421e6928dbe13dbfdb5c59e1045b30341fe7ebe05700006bc5ac572c0",
@@ -421,8 +419,7 @@
       "effect_names": [
         "poll",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "5876adf86d4478dff29eb099957bf216f7a4830e64804eb8bc1314e1be7332f0",
@@ -509,8 +506,7 @@
       "effect_names": [
         "a",
         "b"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "8dbf7ffb333984f717b327b6e5f59f14a4bd45650137e76f0823906506cee067",
@@ -552,8 +548,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "45b169c3f856b44e227ec13abea87a4b92d903d193d6def004573a29a68612d3",
@@ -649,8 +644,7 @@
           "labels": null,
           "enabled": true,
           "prompts": {},
-          "effect_names": [],
-          "content_digest": null
+          "effect_names": []
         }
       ],
       "flow": "chain",
@@ -665,8 +659,7 @@
       "effect_names": [
         "d",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "5dd161e37587e4ce0b828f1594aba3b605279f41890a8783f5eb15d0c50ba39f",
@@ -708,8 +701,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "6fdc6cb8c2d11023067ce4c0e28a39f065248c0c13b0938cd129f779c617beca",
@@ -751,8 +743,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "03f75b8fc8eab2ed127b623138dfce01aec4dfc650434c17c3c7c1420248f35f",
@@ -792,8 +783,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "b93316e2350c393de8dcfea58b1b1140bf8617d31b9f15c1299fc798a29221ac",
@@ -831,8 +821,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "9efdffc5f005946874a73897bf907596f6ba2cad19512051bfbc966c61f37825",
@@ -870,8 +859,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "4927de63eb77969082f4feda266a361f8b13b2e4447faaa634414707d7d86bf1",
@@ -909,8 +897,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
@@ -948,8 +935,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "4d935a14d5f857a1342f9405fe9084fa597f5cf08ea4aa55996ff6cc0a4299b7",
@@ -989,8 +975,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "743cefdb60a209b67ece3f23c0754cec206511bfc10cd9b3c5061271a9b4ff39",
@@ -1032,8 +1017,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
@@ -1073,8 +1057,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
@@ -1114,8 +1097,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
@@ -1155,8 +1137,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
@@ -1196,8 +1177,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
@@ -1237,8 +1217,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
@@ -1278,8 +1257,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
@@ -1319,8 +1297,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
@@ -1360,8 +1337,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
@@ -1399,8 +1375,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "4a93ac98def6fbba14e959351fac1089d6c28e16d430974da430a42b1d3f11da",
@@ -1440,8 +1415,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
@@ -1481,8 +1455,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
@@ -1523,8 +1496,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
@@ -1564,8 +1536,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "a1ff70e8eac9f9ea3d6545637ac9bf46f2c8412c9f2992822c909e6fced8af2e",
@@ -1605,8 +1576,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
@@ -1646,8 +1616,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
@@ -1687,8 +1656,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
@@ -1728,8 +1696,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
@@ -1769,8 +1736,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
@@ -1810,8 +1776,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
@@ -1851,8 +1816,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
@@ -1892,8 +1856,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
@@ -1933,8 +1896,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "07d9bfa006bfa65576bae91d4720ef71086d2668781327202709df0d20b3f511",
@@ -1974,8 +1936,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "07d9bfa006bfa65576bae91d4720ef71086d2668781327202709df0d20b3f511",
@@ -2015,8 +1976,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
@@ -2056,8 +2016,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "03226346747cf8bb15c326c69c25f3cfe492f885aaef977b3fc88a61ab7c2ecd",
@@ -2098,8 +2057,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
@@ -2223,8 +2181,7 @@
       "prompts": {},
       "effect_names": [
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "f8e8fac197d673ea8c380516409c422f9311b6f5ca7008a073ba9b6b46f55f6e",
@@ -2292,8 +2249,7 @@
       "prompts": {},
       "effect_names": [
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "e8d1fad60679c296d15539bb9fa10d03fa851b501b26632e938c733ee51a2205",
@@ -2337,8 +2293,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "bedd7eb5cf3ac867dff6588e7f9ae329e2caef13bfc36f14ee5af56415fccad3",
@@ -2455,8 +2410,7 @@
       "effect_names": [
         "poll",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "87b9f26f99c933aa3458e38011f3e04ad0b5e2a3c3ad5d35866688ea60180f5b",
@@ -2522,8 +2476,7 @@
       "prompts": {},
       "effect_names": [
         "p"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "e2cd791f974341305a66afb93a1c165d383c4621d3af07c58468bf3e69bc0ed2",
@@ -2633,8 +2586,7 @@
       "effect_names": [
         "c",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "9dad538ee8cea176575a72c2046815e7c19373a62de92634042aaf4287147bc9",
@@ -2698,8 +2650,7 @@
       "prompts": {},
       "effect_names": [
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "1d5eb125eadfe26098733d409721c8135c77ef6232ba42c4c30edd0aa591e45a",
@@ -2783,8 +2734,7 @@
       "effect_names": [
         "poll",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "9420dbff29591fe594f99227c458380cbd9f7af58a5cd3d7c08229eb818864ce",
@@ -2848,8 +2798,7 @@
       "prompts": {},
       "effect_names": [
         "tool"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "fe90c15926c3c75547552421a16aa5eb3110e27832510608894cad588fd5b651",
@@ -2921,8 +2870,7 @@
       "prompts": {},
       "effect_names": [
         "run_it"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "e7e6d3f1e4b8075238b234214575305e6f60ac8b987af37a90924c718c3faa57",
@@ -3032,8 +2980,7 @@
         "first",
         "outer",
         "second"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "5472f6e48ebedd6dd857341cbaf3d58c1b9e830e4329eb2868df3adb58353bb1",
@@ -3119,8 +3066,7 @@
       "effect_names": [
         "refine",
         "review"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "ee6dc756e360e3a1aee71847602641893edb857688ab5c8be12837b28a9c0ee5",
@@ -3230,8 +3176,7 @@
         "first",
         "outer",
         "second"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "e0cd3a267f99f59cef03039df23a1212df9e194bd45e1941eeaf32a56e0d3951",
@@ -3317,8 +3262,7 @@
       "effect_names": [
         "l",
         "s"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "43bce8d0c7967869a961ac46e5647b6b4323ffadd25a2b44071b8f00333933f0",
@@ -3401,8 +3345,7 @@
       "effect_names": [
         "c",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "7eede2c4643f84d174dc3b99a87eacb02043b9dd877970940600aea3340d29ab",
@@ -3487,8 +3430,7 @@
       "effect_names": [
         "t",
         "use"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "9eea22daee0bfa202416444115be9cdde65bb5ac4a6faf23a981b08809d2493c",
@@ -3553,8 +3495,7 @@
       "prompts": {},
       "effect_names": [
         "tool"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "ccb0466669979192404b523dc3c749d85380189b57c9f5eeca81ccdb5fe58fd3",
@@ -3641,8 +3582,7 @@
       "effect_names": [
         "l",
         "s"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "ed3644a0f524ec9d9b4304223e1e5f30f259736346a288af26abab92386bf102",
@@ -3793,8 +3733,7 @@
         "marker",
         "outer",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "9d17b6443db339cbc32aea7ebb4c33c2f025b783f56ab98b3e14b0e14a9aab4c",
@@ -3925,8 +3864,7 @@
         "route",
         "t",
         "t2"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "2ed74cbe10f5fd6615376cfc24697c98c62911a4120a9d4446a51a0d86351d8a",
@@ -4038,8 +3976,7 @@
         "first",
         "outer",
         "second"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "f0d970e267e25da64ec35f64c681ee5e5ec67beaea6c38e7abe69dfe0b226c37",
@@ -4122,8 +4059,7 @@
       "effect_names": [
         "c",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "b9038a49515b7110b03ae47178ae1d5c360fd2d208548c672ea6a9c946cf31e3",
@@ -4217,8 +4153,7 @@
       "effect_names": [
         "p",
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "50b20309d66bc1daec12d14dc73e63939e15e2cea56e1b96dd93c6ce160a21c4",
@@ -4282,8 +4217,7 @@
       "prompts": {},
       "effect_names": [
         "t"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "049244026257aa8fa70a4a0769012898df3b18688ddc8bfbad98cdaeb083a022",

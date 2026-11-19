@@ -287,9 +287,6 @@ fn project_dynamic_region(op: &Op, region: &Region) -> Json {
         // real root alone.
         "prompts": {},
         "effect_names": Json::Array(Vec::new()),
-        // Root-only in Circuitry's own dump too (#405); every non-root
-        // dynamic carries this same `null` placeholder.
-        "content_digest": Json::Null,
     })
 }
 

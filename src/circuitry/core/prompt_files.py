@@ -67,16 +67,15 @@ class PromptFileError(ValueError):
 #: caller that owns a cycle's lifetime builds the dict and threads it through
 #: every call below; ``None`` (the default everywhere) disables caching
 #: entirely -- a plain, uncached read, exactly like before this existed.
+#: Never carried on ``runtime_config``, or any other value that outlives
+#: one load/digest/compile cycle: a cache shared across two separate
+#: cycles (a consent decision made from one dispatch's bytes, reused by a
+#: later, separate dispatch) would let a gate's decision quietly go stale
+#: (#405). Each cycle's own owner -- a run's top-level load/gate/compile,
+#: one ``use`` dispatch, ``cof trust``, ``cof check``, a ``--resume``
+#: change check together with the run it starts -- builds its own dict
+#: and threads it through every call in that one cycle, then lets it go.
 FileReadCache = dict[Path, bytes]
-
-#: The ``runtime_config`` key a run's own file-read cache rides under
-#: (same private-key convention as ``core.concurrency.RUNTIME_CONFIG_KEY``/
-#: ``_orchestration_dir``) -- set once, on the shared dict every effect in
-#: the run sees, by whichever surface built it (``cli.runtime_shim.run``),
-#: so a ``use: ref:`` child `core.use.UseRuntime` loads and digests, however
-#: much later in a long run, shares the exact same cache a static consent
-#: pre-scan of that same child may already have populated (#405).
-RUNTIME_CONFIG_FILE_CACHE_KEY = "_prompt_file_cache"
 
 
 def read_file_cached(path: Path, file_cache: FileReadCache | None) -> bytes:
@@ -189,24 +188,31 @@ def resolve_prompt_file(
     cycle (#405) — shared with :func:`circuitry.core.prompt_compose.
     document_content_digest`'s own prompt-file walk, so the bytes the
     consent digest hashed are exactly the bytes compilation uses here.
+
+    The existence/regular-file/size checks below run every time, cache hit
+    or not — only the actual byte read is ever skipped on a hit. A digest
+    walk that primed the cache never validated those (it hashes whatever
+    is there, best-effort); skipping them here on a cache hit would let an
+    over-limit or no-longer-a-regular-file prompt source through silently
+    once something else had already read it this cycle (#405).
     """
     resolved = resolve_prompt_file_path(
         path_str, document_dir=document_dir, confinement_root=confinement_root, field=field
     )
 
+    if not resolved.exists():
+        raise PromptFileError(f"{field}: 'file' {path_str!r} does not exist.")
+    if not resolved.is_file():
+        raise PromptFileError(f"{field}: 'file' {path_str!r} is not a regular file.")
+    size = resolved.stat().st_size
+    if size > MAX_PROMPT_FILE_BYTES:
+        raise PromptFileError(
+            f"{field}: 'file' {path_str!r} is {size} bytes, over the "
+            f"{MAX_PROMPT_FILE_BYTES}-byte limit for a prompt file."
+        )
+
     cached = file_cache.get(resolved) if file_cache is not None else None
     if cached is None:
-        if not resolved.exists():
-            raise PromptFileError(f"{field}: 'file' {path_str!r} does not exist.")
-        if not resolved.is_file():
-            raise PromptFileError(f"{field}: 'file' {path_str!r} is not a regular file.")
-
-        size = resolved.stat().st_size
-        if size > MAX_PROMPT_FILE_BYTES:
-            raise PromptFileError(
-                f"{field}: 'file' {path_str!r} is {size} bytes, over the "
-                f"{MAX_PROMPT_FILE_BYTES}-byte limit for a prompt file."
-            )
         try:
             data = resolved.read_bytes()
         except OSError as exc:
@@ -217,6 +223,15 @@ def resolve_prompt_file(
             file_cache[resolved] = data
     else:
         data = cached
+
+    # The bytes actually used, not just the stat() above: a cache hit's
+    # bytes came from an earlier read (the digest walk's own, say) that
+    # never checked this limit at all.
+    if len(data) > MAX_PROMPT_FILE_BYTES:
+        raise PromptFileError(
+            f"{field}: 'file' {path_str!r} is {len(data)} bytes, over the "
+            f"{MAX_PROMPT_FILE_BYTES}-byte limit for a prompt file."
+        )
 
     try:
         return _decode_prompt_text(data)

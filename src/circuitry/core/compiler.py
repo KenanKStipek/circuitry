@@ -37,7 +37,6 @@ from .prompt_compose import (
     all_effect_names,
     check_prompt_composition,
     compile_declared_prompts,
-    document_content_digest,
 )
 from .prompt_files import (
     DispatchFileSource,
@@ -483,7 +482,6 @@ def compile_orchestration(
     confinement_root: Path | None = None,
     trusted: bool = False,
     file_cache: dict[Path, bytes] | None = None,
-    resolved_path: Path | None = None,
 ) -> DynamicDefinition:
     """Compile *orch* to its effect tree, root ``DynamicDefinition.prompts``
     carrying its own declared prompts (#396).
@@ -507,10 +505,7 @@ def compile_orchestration(
     this document's consent digest first, through
     ``core.prompt_compose.document_content_digest`` with the same dict,
     gets the exact bytes that digest hashed here, never a second,
-    independent read that could by then see different bytes. *resolved_path*,
-    when given alongside it, makes this call compute and return that same
-    digest itself, as the root ``DynamicDefinition.content_digest``, reusing
-    *file_cache*'s already-read bytes rather than reading anything again.
+    independent read that could by then see different bytes.
 
     A document with no file of its own cannot name a ``state_file`` either
     (the ``systemone`` tool). Every tool effect records ``ToolDefinition.limited``
@@ -574,17 +569,6 @@ def compile_orchestration(
 
         flow = _normalize_flow(orch.get("flow") or orch.get("strategy") or "chain")
 
-        content_digest = (
-            document_content_digest(
-                resolved_path,
-                orch,
-                confinement_root=confinement_root,
-                file_cache=file_cache,
-            )
-            if resolved_path is not None
-            else None
-        )
-
         return DynamicDefinition(
             name=root_name,
             effects=compiled_effects,
@@ -592,7 +576,6 @@ def compile_orchestration(
             finally_effects=tuple(compiled_finally),
             prompts=declared_prompts,
             effect_names=all_effect_names(orch),
-            content_digest=content_digest,
         )
 
 

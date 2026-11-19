@@ -54,8 +54,7 @@
       "prompts": {},
       "effect_names": [
         "greet"
-      ],
-      "content_digest": null
+      ]
     },
     "definition_error": null,
     "digest": "a1b52d6a6126012fab7308b324c2f56333f300c3171eac531b5126fe06d9f621",
@@ -95,8 +94,7 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": [],
-      "content_digest": null
+      "effect_names": []
     },
     "definition_error": null,
     "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

@@ -42,7 +42,6 @@ from ..core.interface_inputs import check_interface_inputs
 from ..core.label import clean_label as _clean_label
 from ..core.label import render_document_label
 from ..core.parsed_stdout import parsed_stdout_errors
-from ..core.prompt_files import RUNTIME_CONFIG_FILE_CACHE_KEY
 from ..core.prompt_record import prompt_sent_errors
 from ..core.report import build_report_payload
 from ..core.runtime_plugins import (
@@ -132,6 +131,13 @@ class RunRequest:
     dry_run: bool
     validate_only: bool
     initial_state: dict[str, Any] | None = None
+    # Seeds this run's own file-read cache (#405) with whatever a caller's
+    # own pre-run check (`cli.app._resolve_resume_state`'s `--resume`
+    # change check) already read -- the document (and every referenced
+    # prompt file) that check found unchanged is the exact same document
+    # this run then loads, digests and compiles, one read each, never two.
+    # `None` (the default everywhere else) just means "build a fresh one".
+    file_cache: dict[Path, bytes] | None = None
     shared_library_metadata: dict[str, Any] | None = None
     verbose: bool = False
     # The caller already knows whether this run is interactive (a TTY,
@@ -535,10 +541,12 @@ def run(req: RunRequest) -> RunResult:
         # file it references (#405): built once, here, and threaded through
         # the consent gate below, the `document_hash` stamped further down
         # and the actual compile step, so none of them can see different
-        # bytes than another -- and, via `runtime_config` once that exists,
-        # through to a `use: ref:` child's own load/digest/compile, however
-        # much later in the run it actually dispatches.
-        file_cache: dict[Path, bytes] = {}
+        # bytes than another. `req.file_cache`, when a caller's own
+        # pre-run check already read this document (`--resume`'s change
+        # check), seeds this one instead of starting empty -- that check's
+        # bytes are this run's bytes too, never a second, possibly
+        # different read of the same file.
+        file_cache: dict[Path, bytes] = req.file_cache if req.file_cache is not None else {}
         orch = load_orchestration_file(req.orchestration_path, file_cache=file_cache)
 
         allowlist_errors = check_allowlist(
@@ -705,11 +713,6 @@ def run(req: RunRequest) -> RunResult:
         runtime_config["_orchestration_dir"] = str(
             req.orchestration_path.resolve().parent
         )
-        # This run's own file-read cache (#405), so a `use: ref:` child
-        # `core.use.UseRuntime` loads and digests later shares the exact
-        # same single read the gate above (and `document_hash` below) used,
-        # however much later in the run it actually dispatches.
-        runtime_config[RUNTIME_CONFIG_FILE_CACHE_KEY] = file_cache
         # What every nested runtime builds — `use` children, generated plans,
         # profile provider overrides — is checked against these as it is
         # built; the document check above only sees the document's text.
@@ -882,9 +885,7 @@ def run(req: RunRequest) -> RunResult:
         # already in here, isn't JSON-serializable at all — dropped before
         # this snapshot, never before a live call reads `effective.runtime`.
         _snapshot_runtime = {
-            k: v
-            for k, v in effective.runtime.items()
-            if k not in (_CONCURRENCY_LIMITER_KEY, RUNTIME_CONFIG_FILE_CACHE_KEY)
+            k: v for k, v in effective.runtime.items() if k != _CONCURRENCY_LIMITER_KEY
         }
         state["runtime"]["effective_settings"] = {
             "model": effective.model,
@@ -964,12 +965,9 @@ def run(req: RunRequest) -> RunResult:
             # run by path can name any `within` for a prompt's
             # `file: {from: ...}`; a limited one stays inside its project.
             trusted=document_trust_document or cfg.trust_orchestration_runtime,
-            # Both read through the same single on-disk read the consent
-            # gate and `document_hash` above already used (#405); passing
-            # `resolved_path` makes this call compute and return that exact
-            # digest again, for free, as `root_def.content_digest`.
+            # The same single on-disk read the consent gate and
+            # `document_hash` above already used (#405).
             file_cache=file_cache,
-            resolved_path=req.orchestration_path,
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
@@ -1747,7 +1745,20 @@ def validate(
         trust_document = effective_document_trust(
             trust_document, orchestration_path, library_registry
         )
-    text = orchestration_path.read_text(encoding="utf-8").strip()
+    # This command's own load/compile cycle (#405): built once here and
+    # reused below by the actual parse and by `compile_orchestration`
+    # further down, so a `{file: ...}` prompt source referenced from this
+    # document is never read from disk more than once for this one check.
+    from ..core.prompt_files import read_file_cached
+
+    file_cache: dict[Path, bytes] = {}
+    text = (
+        read_file_cached(orchestration_path, file_cache)
+        .decode("utf-8")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
     if not text:
         return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": config_warnings}
 
@@ -1757,7 +1768,7 @@ def validate(
     lint_warnings: list[str] = list(config_warnings)
 
     try:
-        orch = load_orchestration_file(orchestration_path)
+        orch = load_orchestration_file(orchestration_path, file_cache=file_cache)
 
         from ..core.lint import lint_orchestration
         lint_warnings = [
@@ -1826,6 +1837,10 @@ def validate(
                 is_cache_path=document_is_cache_path,
             ),
             trusted=trusted,
+            # This check's own single on-disk read (#405), already used
+            # above for the parse -- a `{file: ...}` prompt source this
+            # document references sees the exact same bytes here.
+            file_cache=file_cache,
         )
         # The secrets the document names (#598), for `cof check` to list;
         # compiling already refused them in a limited document.

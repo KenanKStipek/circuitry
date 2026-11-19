@@ -349,14 +349,6 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "effect_names",
         "program::Program::effect_names (root dynamic only; non-root is always empty)",
     );
-    add(
-        "DynamicDefinition",
-        "content_digest",
-        "program::DocumentInfo::digest (root dynamic only, and only when the \
-         caller passed compile_orchestration its own resolved_path; non-root \
-         is always None) -- electricity's own digest::document_content_digest \
-         attaches the same value unconditionally, via pipeline::post_state_checks",
-    );
 
     // ConditionalDefinition -> region::Region::If
     add(

@@ -985,7 +985,7 @@ class UseRuntime:
         return iface_outputs or None
 
     def _load_child_orch(
-        self, ctx: dict[str, Any]
+        self, ctx: dict[str, Any], *, file_cache: dict[Path, bytes]
     ) -> tuple[dict[str, Any], str, str, str]:
         """Load the child orchestration dict, a display label, a cycle-identity
         string, and the SHA-256 identifying it.
@@ -997,6 +997,16 @@ class UseRuntime:
         'inline:<sha256-of-canonical-json>'; the digest is of the rendered
         document's own canonical JSON text (:func:`_canonical_json_digest`) —
         there is no YAML text to hash, since this path never dumps one.
+
+        *file_cache* is this one call's own load/digest cycle (#405): the
+        caller owns its lifetime and decides what shares it. A dispatch
+        (`execute`) builds one cache and reuses it across every retry
+        attempt of the same child, so a consent decision made from the
+        first attempt's bytes stays valid for every later one; a one-off
+        skip-check (`resolved_inputs_match_recorded`) builds its own,
+        thrown away right after. Never carried on `runtime_config` — a
+        cache that outlived one load/digest/compile cycle let a dispatch
+        re-run against bytes a consent decision never saw (#405).
         """
         if self.defn.inline_document is not None:
             # Every string leaf composes against *ctx* exactly as an
@@ -1051,16 +1061,14 @@ class UseRuntime:
 
         # File-based resolution
         from ..cli.orchestration_loader import load_orchestration_file
-        from .prompt_files import RUNTIME_CONFIG_FILE_CACHE_KEY
 
         resolved_path = self._resolve_orchestration()
         identity = str(resolved_path.resolve())
-        # This run's own file-read cache (#405), when the caller built one
-        # (`cli.runtime_shim.run`) — shared with the compile step this
-        # child gets further down `execute_use`, so neither this digest nor
-        # that compile reads this child's own file, or any prompt file it
-        # references, more than once for the whole run.
-        file_cache = self.runtime_config.get(RUNTIME_CONFIG_FILE_CACHE_KEY)
+        # *file_cache* is this call's own load/digest cycle (#405) — shared
+        # with the compile step further down `execute` (and with every
+        # retry attempt that calls back in here), so neither reads this
+        # child's own file, or any prompt file it references, more than
+        # once for the cycle the caller built it for.
         child_orch = load_orchestration_file(resolved_path, file_cache=file_cache)
         digest = self._content_digest(resolved_path, child_orch, file_cache=file_cache)
         # A path/ref child gets the same structural check `cof check` gives a
@@ -1372,7 +1380,14 @@ class UseRuntime:
         if not isinstance(recorded, dict):
             return False
         try:
-            child_orch, _label, _identity, _digest = self._load_child_orch(ctx)
+            # A standalone check, not part of any `execute()` dispatch -- its
+            # own one-off load/digest cycle (#405), never shared with a real
+            # dispatch's own cache: if this skip-check decides not to skip,
+            # `execute()` runs moments later with a fresh cache of its own.
+            file_cache: dict[Path, bytes] = {}
+            child_orch, _label, _identity, _digest = self._load_child_orch(
+                ctx, file_cache=file_cache
+            )
             child_inputs: dict[str, Any] = {}
             unresolved: dict[str, str] = {}
             if self.defn.inputs:
@@ -1477,12 +1492,21 @@ class UseRuntime:
                         _console.print(line)
                 return
 
+            # This dispatch's own load/digest/compile cycle (#405): built
+            # once here and reused for every retry attempt below and the
+            # compile step further down, so a consent decision made from
+            # these bytes stays decided for the bytes that actually run --
+            # never carried on `runtime_config`, so a later, separate
+            # dispatch of this same `use` effect (another loop iteration)
+            # gets its own fresh cache and may legitimately see new bytes.
+            file_cache: dict[Path, bytes] = {}
+
             # Capability consent (#275), checked once per execute() call,
             # before the retry loop: a `ref:` child's consent decision is a
             # property of its digest, not of which attempt is running, and a
             # refused child must never even start the retry/backoff schedule.
             _preload_orch, _preload_label, _preload_identity, _preload_digest = (
-                self._load_child_orch(ctx)
+                self._load_child_orch(ctx, file_cache=file_cache)
             )
             child_capability_ceiling = self._check_capability_consent(
                 _preload_orch, _preload_label, _preload_digest
@@ -1540,8 +1564,12 @@ class UseRuntime:
 
                 attempt_failure: Exception | None = None
                 try:
-                    # Load (file or inline) and compile
-                    child_orch, resolved_label, identity, digest = self._load_child_orch(ctx)
+                    # Load (file or inline) and compile -- same file_cache
+                    # every attempt, so a retry never sees different bytes
+                    # than the consent decision above already saw.
+                    child_orch, resolved_label, identity, digest = self._load_child_orch(
+                        ctx, file_cache=file_cache
+                    )
                     meta["orchestration_sha256"] = digest
                     label = resolved_label
                     if not meta["inline"]:
@@ -1635,21 +1663,18 @@ class UseRuntime:
                         and not meta["inline"]
                         and self._pin is None
                     )
-                    from .prompt_files import (
-                        RUNTIME_CONFIG_FILE_CACHE_KEY as _FILE_CACHE_KEY,
-                    )
-
                     child_root = compile_orchestration(
                         orch=child_orch,
                         root_name="prime",
                         document_dir=child_document_dir,
                         confinement_root=child_confinement_root,
                         trusted=child_trusted,
-                        # Reused rather than re-derived: this child's own file-read
-                        # cache (#405), already populated above by `_load_child_orch`/
-                        # `_content_digest`, so its own `{file: ...}` sources read
-                        # here see the exact same bytes that digest already hashed.
-                        file_cache=self.runtime_config.get(_FILE_CACHE_KEY),
+                    # Reused rather than re-derived: this dispatch's own
+                    # file-read cache (#405), already populated above by
+                    # `_load_child_orch`/`_content_digest`, so its own
+                    # `{file: ...}` sources read here see the exact same
+                    # bytes that digest already hashed.
+                        file_cache=file_cache,
                     )
                     # "A child document run with `use` sees only its own
                     # declared prompts" (#396) — set fresh here rather than
