@@ -108,12 +108,17 @@ fn add_prompt_files(
 /// so a state file an older release wrote still resumes without
 /// `--force`. COMPATIBILITY FALLBACK ONLY, same as the Python function
 /// this ports -- remove both together.
+///
+/// Reads through [`crate::file_cache::read_cached`], same as
+/// [`document_content_digest`]: this fallback runs in the same
+/// load/digest cycle, on the same cache, so it never reads a byte this
+/// cycle's digest or compile step didn't already read.
 pub fn legacy_document_sha256(
     resolved_path: &Path,
     document: &Value,
     confinement_root: &Path,
 ) -> io::Result<String> {
-    let document_bytes = std::fs::read(resolved_path)?;
+    let document_bytes = crate::file_cache::read_cached(resolved_path)?;
     let mut hasher = Sha256::new();
     hasher.update(&document_bytes);
 
@@ -134,7 +139,7 @@ pub fn legacy_document_sha256(
                 // A file that fails to read is skipped, not fatal --
                 // `_legacy_document_sha256`'s own per-file `except
                 // OSError: continue`.
-                if let Ok(data) = std::fs::read(&prompt_file) {
+                if let Ok(data) = crate::file_cache::read_cached(&prompt_file) {
                     hasher.update(&data);
                 }
             }

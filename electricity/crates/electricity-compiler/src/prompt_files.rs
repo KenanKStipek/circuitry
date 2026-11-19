@@ -268,6 +268,20 @@ fn resolve_prompt_file(
             repr_str(&path_str)
         ))
     })?;
+
+    // The bytes actually used, not just the metadata check above: a cache
+    // hit's bytes came from an earlier read (the digest walk's own, say)
+    // that never checked this limit at all -- `core/prompt_files.py::
+    // resolve_prompt_file`'s own second check.
+    let len = bytes.len() as u64;
+    if len > MAX_PROMPT_FILE_BYTES {
+        return Err(CompileError(format!(
+            "{field}: 'file' {} is {len} bytes, over the {MAX_PROMPT_FILE_BYTES}-byte \
+             limit for a prompt file.",
+            repr_str(&path_str)
+        )));
+    }
+
     let text = match std::str::from_utf8(&bytes) {
         Ok(text) => text.to_string(),
         Err(_) => {

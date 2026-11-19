@@ -34,6 +34,31 @@ use std::path::{Path, PathBuf};
 
 thread_local! {
     static CACHE: RefCell<Option<HashMap<PathBuf, Vec<u8>>>> = const { RefCell::new(None) };
+    static READ_COUNTS: RefCell<HashMap<PathBuf, u32>> = RefCell::new(HashMap::new());
+}
+
+/// Clears this thread's real-disk-read counts (see [`read_count`]) --
+/// call before the cycle under test, so an earlier test's own reads on
+/// this same thread don't leak into this one's count.
+pub fn reset_read_counts() {
+    READ_COUNTS.with(|cell| cell.borrow_mut().clear());
+}
+
+/// How many times [`read_cached`] has actually gone to disk for *path*
+/// on this thread since the last [`reset_read_counts`] -- a cache hit
+/// never increments this, only a real `std::fs::read` does. Lets a
+/// cycle owner's own test (`check_for_run`'s, `electricity::run`'s, a
+/// `use: path:` dispatch's) assert a path was read from disk exactly
+/// once across its whole call, without needing the file's content to
+/// change mid-call to notice a second, redundant read.
+pub fn read_count(path: &Path) -> u32 {
+    READ_COUNTS.with(|cell| *cell.borrow().get(path).unwrap_or(&0))
+}
+
+fn record_read(path: &Path) {
+    READ_COUNTS.with(|cell| {
+        *cell.borrow_mut().entry(path.to_path_buf()).or_insert(0) += 1;
+    });
 }
 
 /// Activates this thread's file-read cache for the scope of the returned
@@ -76,11 +101,15 @@ pub fn read_cached(path: &Path) -> io::Result<Vec<u8>> {
                 if let Some(data) = cache.get(path) {
                     return Ok(data.clone());
                 }
+                record_read(path);
                 let data = std::fs::read(path)?;
                 cache.insert(path.to_path_buf(), data.clone());
                 Ok(data)
             }
-            None => std::fs::read(path),
+            None => {
+                record_read(path);
+                std::fs::read(path)
+            }
         }
     })
 }

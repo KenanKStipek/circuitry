@@ -3654,6 +3654,21 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         );
     }
 
+    /// `load_child`'s own `_use_child_file_cache` guard (#405): the child's
+    /// `load_document` and `document_content_digest` reads, both inside
+    /// this one `UseSource::Path` match arm, share one cache -- the child
+    /// is read from disk exactly once for this dispatch. Catches a
+    /// regression that removes this call's own `enter()` directly, not
+    /// just a change to `electricity_compiler::file_cache` itself.
+    #[tokio::test]
+    async fn a_path_child_is_read_from_disk_exactly_once() {
+        let project = ChildProject::new("single-read");
+        let child_path = project.0.join("child.yml");
+        electricity_compiler::file_cache::reset_read_counts();
+        let _origin = loaded_path_child_origin(&project, true).await;
+        assert_eq!(electricity_compiler::file_cache::read_count(&child_path), 1);
+    }
+
     /// Issue #578: an inline child is generated, so it is never trusted,
     /// whatever its parent is.
     #[tokio::test]

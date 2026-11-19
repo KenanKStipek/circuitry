@@ -1944,6 +1944,34 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// `check_for_run`'s own `enter()` (#405): the document load inside
+    /// `prepare_document` and the digest `post_state_checks` computes
+    /// afterward both read the same path -- a cache shared across the
+    /// whole call means it's read from disk exactly once, same as
+    /// `crate::file_cache`'s own doc comment names `check_for_run` as
+    /// one of its two callers. Catches a regression that removes this
+    /// call's own `enter()` directly -- not just a change to the cache
+    /// module itself, which every test above already exercises without
+    /// going through `check_for_run` at all.
+    #[test]
+    fn check_for_run_reads_the_document_from_disk_exactly_once() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-pipeline-check-for-run-reads-once-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc_path = std::fs::canonicalize(&dir).unwrap().join("doc.yml");
+        std::fs::write(&doc_path, "effects:\n  - type: tool\n    name: s\n    provider: uuid\n")
+            .unwrap();
+
+        crate::file_cache::reset_read_counts();
+        let result = check_for_run(&doc_path, &CheckOptions::default());
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert_eq!(crate::file_cache::read_count(&doc_path), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn pre_state_checks_reports_a_concurrency_config_error_before_post_state_checks_runs() {
         let dir = std::env::temp_dir().join(format!(
