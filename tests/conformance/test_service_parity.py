@@ -332,11 +332,14 @@ def test_a_ready_timeout_matches_on_both_engines(tmp_path: Path, electricity_bin
 def test_a_command_that_exits_at_once_matches_on_both_engines(
     tmp_path: Path, electricity_binary: Path,
 ) -> None:
-    """Issue #844: a command that exits before `ready` can even be
-    checked once gave electricity 'pid <n> vanished before it could be
-    recorded' instead of cof's 'exited with code <n> before it was
-    ready' -- `false` (no shell, argv form), not `sleep nope` or `sh -c
-    'exit N'`, to fail at once reliably on both macOS and Linux."""
+    """Issue #844's own reproduction: a command that exits before
+    `ready` can even be checked once gave electricity 'pid <n> vanished
+    before it could be recorded' instead of cof's 'exited with code
+    <n> before it was ready', followed by the log tail. `sleep nope`
+    fails at once with exit code 1 on both the GNU and the BSD `sleep`,
+    so this also checks the log tail itself matches between the two
+    engines, not just everything `_assert_parity` otherwise scrubs it
+    down to."""
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     port = _free_port()  # nothing ever listens here, same port both engines
@@ -359,7 +362,7 @@ def test_a_command_that_exits_at_once_matches_on_both_engines(
             {
                 "action": "start",
                 "name": "web",
-                "command": ["false"],
+                "command": ["sleep", "nope"],
                 "ready": f"http://127.0.0.1:{port}/",
                 "ports": [port],
             },
@@ -370,13 +373,66 @@ def test_a_command_that_exits_at_once_matches_on_both_engines(
         assert result.returncode == 0, result.stdout
         node = _svc_node(result)
         error = node["meta"]["error"]
-        assert error == "service 'web': exited with code 1 before it was ready", (
+        assert error.startswith("service 'web': exited with code 1 before it was ready"), (
             f"{engine}: {error}"
         )
         nodes[engine] = node
 
     _assert_parity(nodes["cof"], nodes["electricity"])
-    assert nodes["cof"]["meta"]["error"] == nodes["electricity"]["meta"]["error"]
+    # `meta.error` embeds the log's own absolute path (different
+    # per-engine tmp directory here), so compare the part before it
+    # and the log tail's own content separately, rather than the
+    # whole string.
+    cof_error, electricity_error = nodes["cof"]["meta"]["error"], nodes["electricity"]["meta"]["error"]
+    assert cof_error.split("\n--- log tail", 1)[0] == electricity_error.split("\n--- log tail", 1)[0]
+    cof_tail = nodes["cof"]["meta"]["raw"]["log_tail"]
+    electricity_tail = nodes["electricity"]["meta"]["raw"]["log_tail"]
+    assert cof_tail == electricity_tail, (cof_tail, electricity_tail)
+    assert cof_tail, "the log tail should carry sleep's own error output"
+
+
+def test_a_command_that_exits_at_once_with_no_ready_matches_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """A `start` with no `ready` at all has nothing else to check, so
+    the exit itself must be the one and only thing reported -- not
+    success, on either engine."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    nodes: dict[str, dict] = {}
+    for engine, runner in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-exit-now-no-ready"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        _write_orchestration(
+            doc_path,
+            {
+                "action": "start",
+                "name": "web",
+                "command": ["sleep", "nope"],
+            },
+            on_error="continue",
+        )
+
+        result = runner(doc_path, config_path)
+        assert result.returncode == 0, result.stdout
+        node = _svc_node(result)
+        error = node["meta"]["error"]
+        assert error.startswith("service 'web': exited with code 1 before it was ready"), (
+            f"{engine}: {error}"
+        )
+        nodes[engine] = node
+
+    _assert_parity(nodes["cof"], nodes["electricity"])
 
 
 def test_a_port_held_by_an_unrelated_process_is_never_signalled_on_either_engine(
