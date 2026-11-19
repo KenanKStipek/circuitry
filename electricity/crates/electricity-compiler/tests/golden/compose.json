@@ -283,7 +283,7 @@
       ],
       "warnings": []
     },
-    "run_error": "prompts.voice: 'file' 'big.md' is 1048577 bytes, over the 1048576-byte limit for a prompt file.",
+    "run_error": null,
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' 'big.md' is 1048577 bytes, over the 1048576-byte limit for a prompt file.",
     "digest": "1bed0099abc64b6a394d7cdabcdb45f9178ff1518dcdf74043c1e1742384faa3",
@@ -291,7 +291,7 @@
       "validate_errors": [
         "exact"
       ],
-      "run_error": "exact"
+      "run_error": null
     }
   },
   {
@@ -402,7 +402,8 @@
       },
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "2480d05ff24ffb7cf171d2ba853ab8d074f6a4c6b4b81c7d21fca3f9bc4c1082",
@@ -895,7 +896,8 @@
         "branch",
         "inner",
         "outer"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "7cf621e5f3427b97ed8ecf761a6ae7628e89ad860f0bcce33abc6fcee5a9347b",
@@ -970,7 +972,8 @@
         "branch",
         "inner",
         "inner2"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "68aec12e36570655d5c55214957aede45cca4cedb52580cd5859d049aefb1d61",
@@ -1028,7 +1031,8 @@
           "labels": null,
           "enabled": true,
           "prompts": {},
-          "effect_names": []
+          "effect_names": [],
+          "content_digest": null
         }
       ],
       "flow": "chain",
@@ -1044,7 +1048,8 @@
         "inner",
         "inner2",
         "loop_ns"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "00ae0d7556605e09e2f3ccc1891d010308b9e73d0ce78ffa96f0029fc41c045b",
@@ -1209,7 +1214,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "b45f4338c1d6788f6b50e624560e3d28f747b74c140f6c7a0783e099b4f004db",
@@ -1261,7 +1267,8 @@
       },
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "255201180dc93797f3c20b3c39d97b1d963e884886d014d0260f59a73b9c73d7",
@@ -1314,7 +1321,8 @@
       },
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "e2688e557e4125b92b749975838d2a0fef746962a78a3da41416e8828485d985",

@@ -679,3 +679,26 @@ def test_prime_documents_the_interface_block() -> None:
 def test_prime_forbids_fences_and_multiple_documents() -> None:
     assert "NO markdown fences" in WIZARD_PRIME_V1
     assert "ONE YAML document" in WIZARD_PRIME_V1
+
+
+def test_composing_prompts_example_passes_the_wizards_own_validator() -> None:
+    """The prime's COMPOSING PROMPTS section teaches `prompts:`/`{{> name}}`
+    with a worked example (#405) -- it only ever passed by hand-trace; this
+    runs that exact snippet through the same `validate_yaml` tool the
+    wizard itself calls on every draft.
+    """
+    import re
+
+    start = WIZARD_PRIME_V1.index("=== COMPOSING PROMPTS ===")
+    end = WIZARD_PRIME_V1.index("=== STATE PATHS ===")
+    section = WIZARD_PRIME_V1[start:end]
+    match = re.search(r"^( *)prompts:\n(?:\1.*\n)*", section, re.MULTILINE)
+    assert match, "COMPOSING PROMPTS no longer has a 'prompts:' example to extract"
+    indent = match.group(1)
+    snippet = "\n".join(
+        line[len(indent) :] if line.startswith(indent) else line
+        for line in match.group(0).splitlines()
+    )
+
+    verdict = ValidateYamlPlugin().execute(params={"yaml": snippet}).value
+    assert verdict["ok"] is True, verdict["errors"]

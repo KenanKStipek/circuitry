@@ -119,7 +119,8 @@
     "labels",
     "enabled",
     "prompts",
-    "effect_names"
+    "effect_names",
+    "content_digest"
   ],
   "ConditionalDefinition": [
     "name",

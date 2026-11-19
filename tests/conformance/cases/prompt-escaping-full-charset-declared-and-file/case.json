@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #405",
+  "description": "A declared prompt and a prompt file both splice {{input.x}} via {{> name}} into a tool params leaf (Escape::Html); the full \" & < > set stays unescaped at the splice point on both engines, the same way the single <b> case already covered does.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "x=\"<b>&"]
+}

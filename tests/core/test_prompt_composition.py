@@ -908,6 +908,61 @@ def test_use_inline_child_cannot_use_file(tmp_path: Path) -> None:
     assert "generated at run time" in store.get("prime.u.meta.error")
 
 
+def test_run_uses_the_prompt_file_bytes_its_own_consent_gate_hashed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The consent digest stamped at ``runtime.last_run.document_hash`` and
+    the actual compile step must read a referenced prompt file through the
+    same single on-disk read (#405): stub the real read so a second one
+    would see different bytes, and show the run still executes with the
+    first -- the digest and the rendered template can never disagree about
+    what this document's content even is.
+
+    Without the fix (reverting it to two independent reads) this fails on
+    both assertions: ``reads`` would have length 2, and the rendered value
+    would be ``\"second\"``, not ``\"first\"``.
+    """
+    prompt_path = tmp_path / "brief.md"
+    prompt_path.write_text("first", encoding="utf-8")
+    orch_path = tmp_path / "orch.yml"
+    orch_path.write_text(
+        "prompts:\n  brief: {file: brief.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n",
+        encoding="utf-8",
+    )
+
+    real_read_bytes = Path.read_bytes
+    reads: list[bytes] = []
+
+    def fake_read_bytes(self: Path) -> bytes:
+        data = real_read_bytes(self)
+        if self.name == "brief.md":
+            reads.append(data)
+            # Proof the file genuinely changed between calls, not a stub
+            # that merely claims it did -- a second real read would see
+            # this on disk too.
+            if len(reads) == 1:
+                prompt_path.write_text("second", encoding="utf-8")
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=_mock_adapter(),
+        )
+    )
+
+    assert result.ok, result.error
+    assert len(reads) == 1, f"brief.md was read from disk {len(reads)} times, not once"
+    assert result.state["prime"]["y"]["value"] == "first"
+
+
 def test_a_library_documents_prompt_file_stays_inside_its_source(tmp_path: Path) -> None:
     lib = tmp_path / "lib"
     _write(lib / "voice.md", "Library voice.")

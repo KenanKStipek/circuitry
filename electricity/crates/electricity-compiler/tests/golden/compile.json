@@ -54,7 +54,8 @@
       "prompts": {},
       "effect_names": [
         "greet"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "a1b52d6a6126012fab7308b324c2f56333f300c3171eac531b5126fe06d9f621",
@@ -129,7 +130,8 @@
       "prompts": {},
       "effect_names": [
         "chat"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "c80483d2f864df4418e35433b5c73cc1ab01a68ba4e94b53149ec1d6115663d1",
@@ -195,7 +197,8 @@
       "prompts": {},
       "effect_names": [
         "extract"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "6090181adf580fa1e3840c518020f70cbba54a31a7ee9f3b9ec71fd427ae45ac",
@@ -266,7 +269,8 @@
       "prompts": {},
       "effect_names": [
         "fetch"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "2a14a93c940b3b02781fc1a48b5693c366be4fbfb28e48ed7ef1e8e16d9419ba",
@@ -330,7 +334,8 @@
       "prompts": {},
       "effect_names": [
         "fetch"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "1adf8da3a69dd7dbcb8f365d832d5608b6d7c910f76290be7d5411b95798a6e7",
@@ -392,7 +397,8 @@
       "prompts": {},
       "effect_names": [
         "fetch"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "b700ea22cc890df408a8d5e02e422c1839112a2b4ac0eb974f3655cbdbf01733",
@@ -455,7 +461,8 @@
       "prompts": {},
       "effect_names": [
         "fetch"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "a2dd4581c282724472310c9ce56d2a1d5f9355916b48be72fa83840b52e8c0f4",
@@ -522,7 +529,8 @@
       "prompts": {},
       "effect_names": [
         "sub"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "c8709a15c6025f2fff246fcf38d72db90ade369f938ae44f6aecf20554019976",
@@ -584,7 +592,8 @@
       "prompts": {},
       "effect_names": [
         "sub"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "e2a4fcbd3c720f969dc5957de8e51669e10d7e6027a36866d676a4ad81bc108a",
@@ -633,7 +642,8 @@
       "prompts": {},
       "effect_names": [
         "out"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "5122b8a862a10cf83be4a79c3f920dc2d6fc2b05f139b2dc5fa72c1490ffd283",
@@ -700,7 +710,8 @@
             "labels": null,
             "enabled": true,
             "prompts": {},
-            "effect_names": []
+            "effect_names": [],
+            "content_digest": null
           },
           "plan_from_step": "propose_steps",
           "max_iterations": 1,
@@ -724,7 +735,8 @@
       "effect_names": [
         "propose_steps",
         "think"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "0d7b01d552f4d8be0d6003066b6d073caa7348c0e7e723356c2ae7b993532397",
@@ -836,7 +848,8 @@
           "labels": null,
           "enabled": true,
           "prompts": {},
-          "effect_names": []
+          "effect_names": [],
+          "content_digest": null
         }
       ],
       "flow": "chain",
@@ -853,7 +866,8 @@
         "b",
         "cleanup",
         "group"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "5580aedeee3949973d0b82ec60ebd0fdae15e66532e2f1f615dba7add701fb1d",
@@ -959,7 +973,8 @@
         "branch",
         "no_branch",
         "yes_branch"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "4098dfe9ea5368b412d38861eb25f033b0e86ba19b3fc318626455e7307c17fd",
@@ -1041,7 +1056,8 @@
       "prompts": {},
       "effect_names": [
         "yes_branch"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "b2d00aaa8a12701b0522c0ace998f4e2a753d2bedfc166396ed262d1ba196585",
@@ -1127,7 +1143,8 @@
       "effect_names": [
         "handle",
         "iterate"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "ddc4c7434d2e92b72cbc7c8682596b1ab9d4929c60da3b7fb684f3520cc59e40",
@@ -1212,7 +1229,8 @@
       "effect_names": [
         "poll",
         "tick"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "d9a308eeb6293c5d9cefcf9dc561d237a393652b4830bdc6a5413499263df528",
@@ -1296,7 +1314,8 @@
       "effect_names": [
         "handle",
         "parallel_iterate"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "19bec6c588fb872198352e020fc7e44a458df41a538678e5f135b485116707b3",
@@ -1379,7 +1398,8 @@
       "prompts": {},
       "effect_names": [
         "handle"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "43ea481dc30e833011288d6a1e1e1ab21afd53af47ce9ff66c1f55309a7692e9",
@@ -1443,7 +1463,8 @@
       "prompts": {},
       "effect_names": [
         "greet"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "8ad41824a146a9a5cae02bfb849ab10f3dd48b1b29b69f370a924966f6d89510",
@@ -2040,7 +2061,8 @@
           "labels": null,
           "enabled": true,
           "prompts": {},
-          "effect_names": []
+          "effect_names": [],
+          "content_digest": null
         },
         {
           "name": "plain",
@@ -2078,7 +2100,8 @@
           "labels": null,
           "enabled": true,
           "prompts": {},
-          "effect_names": []
+          "effect_names": [],
+          "content_digest": null
         },
         {
           "name": "sub",
@@ -2118,7 +2141,8 @@
         "release",
         "session",
         "sub"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "93f1d3e561051804cb9324a2da1cb79c04cb8029d685509cc065b9a3653917ef",
@@ -2712,7 +2736,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "ec09ed320588f06c0b08ed8f5c4e7b9a146fa33ee6262ddcedfceabdea5426e8",
@@ -3658,7 +3683,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "3989c787081fa8220873952c69dc482c29c8e86eb63b2f07a0900832996abe50",
@@ -4268,7 +4294,8 @@
       "effect_names": [
         "reader",
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "47ef1bad6f0ff8bb246a37e45384aec6868a5a3eae9e754b807b669c6bf3fb2f",
@@ -4366,7 +4393,8 @@
       "effect_names": [
         "reader",
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "f67fc6392ffe43ffe0f752293f1e7af10b0f0962bf053b1087c4369b04f53d6d",
@@ -4486,7 +4514,8 @@
       "labels": null,
       "enabled": true,
       "prompts": {},
-      "effect_names": []
+      "effect_names": [],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "717b8689fc3b20dac3e0e72739d7f81a5d0b002f0948eaef6bb8445033ae0e0e",
@@ -4577,7 +4606,8 @@
       "prompts": {},
       "effect_names": [
         "handle"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "fe0edc1376d94253668177c2bb2086b7006348af6ae55290dcd68c2fd1c2cfca",
@@ -4698,7 +4728,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "5256c01edc9f37cbd268870259b195817b7507a319a409aefe4e0c8535276b50",
@@ -4762,7 +4793,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "67d76ade5d01dffb9631421008d41e4608187b4b3dc26a8bcf231e38af91aeb4",
@@ -4806,7 +4838,8 @@
           "labels": null,
           "enabled": true,
           "prompts": {},
-          "effect_names": []
+          "effect_names": [],
+          "content_digest": null
         }
       ],
       "flow": "chain",
@@ -4820,7 +4853,8 @@
       "prompts": {},
       "effect_names": [
         "g"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "bdfd95a95eb2872e4ffed1d1862ca02b96c771b46d2a683d56d0343ccb354b2c",
@@ -4885,7 +4919,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "cc2f6ad15e20031af38a12e84efec6592e98078a16eb47f4382821daebd49702",
@@ -4947,7 +4982,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "f8fa66125f1fd21d9359e10b69da9648f323b22a4825de113880aaf1df75f3b9",
@@ -5029,7 +5065,8 @@
       "effect_names": [
         "each_job",
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "ecbdcefcd844c421fc8d404528ccc11198c6a69668cfd998d4389c76b2bd561d",
@@ -5473,7 +5510,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "2d40cdc5031cabdad29be2b793ed0b27e2f886f54340a049c62e12740c655b0a",
@@ -5540,7 +5578,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "3759e40da97cab8afccb3e649d245ae56e43e03d69d6268d81ab71308695f4e5",
@@ -5627,7 +5666,8 @@
       "effect_names": [
         "each_job",
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "f76d97a716647df69d422adb283a990d00516a814752772baac93a99933fe5ba",
@@ -6073,7 +6113,8 @@
       "prompts": {},
       "effect_names": [
         "edit"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "74b1afadfbda54e8bfd792a126adbabbe61221f51a5caa8ae0ea8be770855180",
@@ -6142,7 +6183,8 @@
       "prompts": {},
       "effect_names": [
         "edit"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "cfa4e6204d6802d598e20dcae958b6f2be0b0a699a3ab144f595c6516e833784",
@@ -6222,7 +6264,8 @@
       "prompts": {},
       "effect_names": [
         "edit"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "7f4992ca5357683ad098b6b6bdc47ba3b0d6aa8834e5c19c44b89e4284534210",
@@ -6311,7 +6354,8 @@
       "effect_names": [
         "each_job",
         "edit"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "db93150939c6bcc2b37317032f10511cf0bd2a5bf47542a54612e1f9fa695a93",
@@ -6957,7 +7001,8 @@
             "labels": null,
             "enabled": true,
             "prompts": {},
-            "effect_names": []
+            "effect_names": [],
+            "content_digest": null
           },
           "plan_from_step": "propose_steps",
           "max_iterations": 1,
@@ -6982,7 +7027,8 @@
         "other",
         "propose_steps",
         "r"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "509adc0fce764ad8cb2440b44b8be9f8375e39e58ec5618afb9e98077e367dbd",
@@ -7050,7 +7096,8 @@
       "prompts": {},
       "effect_names": [
         "implement"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "5ffce22c1cd986740fe58f4209980f8c72bc543cba0f2650ad2c1c56841588db",
@@ -7114,7 +7161,8 @@
       "prompts": {},
       "effect_names": [
         "implement"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "ade75e131000ab652b1936299556dfb7e4aca9e9a6318421c7390aa519a2a927",
@@ -7410,7 +7458,8 @@
       "prompts": {},
       "effect_names": [
         "implement"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "323c3ddaa65e6dc27d9e6b2b79a4bc032a8a8008ed5c93e092776b5f1cfec91a",
@@ -7474,7 +7523,8 @@
       "prompts": {},
       "effect_names": [
         "implement"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "9f9931d448b2e4d38bcaecb80ea24bf7270e09b1b67830af514eacaef30e437d",
@@ -7533,7 +7583,8 @@
       "prompts": {},
       "effect_names": [
         "implement"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "9134ccdf77e800812eb2aaeae8fae8d348a9c1cdb80160ad4c31d134fa4b53dd",
@@ -7603,7 +7654,8 @@
       "prompts": {},
       "effect_names": [
         "t"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "7f8cb60ac6ae3eacf5808037fa4a31f535b9a5825f359317675f2c8310748ddc",
@@ -7668,7 +7720,8 @@
       "prompts": {},
       "effect_names": [
         "greet"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "5c508904ce8864d448f1259480bb2105a1ebbb70aed2b1d7fb6684fcd1fca0dc",
@@ -7739,7 +7792,8 @@
       "prompts": {},
       "effect_names": [
         "chat"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "cddcfafd7833daa1a19a114a7e70f46031bea0ee29ded0d4d28a815f6a3bc7a1",
@@ -7789,7 +7843,8 @@
       "prompts": {},
       "effect_names": [
         "out"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "0bac6b0dda3dbab3c348367bf5353324fb7df44f95669a86d21929ab1c26b817",
@@ -8047,7 +8102,8 @@
       "prompts": {},
       "effect_names": [
         "handle"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "a499093172e93ee5264acade87be644bf5243c8d42ba95a30457042758e7ec91",
@@ -8130,7 +8186,8 @@
       "prompts": {},
       "effect_names": [
         "handle"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "21184d571f4a3074ec9a5c29bd665f94dc64f5946c5723588eccc0a83ff0aa12",
@@ -8203,7 +8260,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "b2ec90b90e4d231c6e6bd7dccf2107689191f3624731e0c04dc9b743b19ab1dd",
@@ -8257,7 +8315,8 @@
       "prompts": {},
       "effect_names": [
         "x"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "602b40fc8df416f113afddd5561711fbf01dc829323576f397c0b4664282c4c8",
@@ -8345,7 +8404,8 @@
       "effect_names": [
         "handle",
         "it"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "f99b3d0d68e5c121f54b26fc74e8d46ddb2a2e8de4acdef9326cde22ab6dd6b2",
@@ -8603,7 +8663,8 @@
             "labels": null,
             "enabled": true,
             "prompts": {},
-            "effect_names": []
+            "effect_names": [],
+            "content_digest": null
           },
           "plan_from_step": "propose_steps",
           "max_iterations": 1,
@@ -8656,7 +8717,8 @@
         "it",
         "propose_steps",
         "think"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "42c1668dc5eabb8d303581c5a97abf9bbdcb13fa6fa292f7f73c17e3417d4271",
@@ -8724,7 +8786,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "fe58f70ee020907997a898b3fe1d3f46f6047d3d6e744b62dede415e9d5a75e5",
@@ -8789,7 +8852,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "fe58f70ee020907997a898b3fe1d3f46f6047d3d6e744b62dede415e9d5a75e5",
@@ -8855,7 +8919,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "fe58f70ee020907997a898b3fe1d3f46f6047d3d6e744b62dede415e9d5a75e5",
@@ -8923,7 +8988,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "e057847adda2c7d01667c4fdc7aa99dd5f63240e33d1f2f47631b98089490dca",
@@ -8989,7 +9055,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
@@ -9056,7 +9123,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
@@ -9123,7 +9191,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
@@ -9191,7 +9260,8 @@
       "prompts": {},
       "effect_names": [
         "s"
-      ]
+      ],
+      "content_digest": null
     },
     "definition_error": null,
     "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
