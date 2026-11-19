@@ -2,7 +2,8 @@
 //! own Flow/Tape screens don't read it yet. `named_if_taken`
 //! predates the engines emitting it, so inserting the `decision` line
 //! either engine would now write right after `prime.gate`'s own
-//! `start` -- before the chosen branch starts, same as the ruling --
+//! `start` -- before the chosen branch starts, the order `--events`
+//! documents --
 //! must draw and log exactly as the fixture's own recorded transcript
 //! does without it.
 
