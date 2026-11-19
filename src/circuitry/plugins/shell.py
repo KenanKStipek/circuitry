@@ -36,8 +36,9 @@ can only narrow the allowlist further, never widen it past the host's pin
 ceiling even for a *trusted* document (``cof run ./f.yml`` or
 ``trust_orchestration_runtime``): its own
 ``runtime.plugins.shell.allowed_commands`` intersects with the host's pin
-rather than replacing it — the one ``runtime:`` leaf a trusted document
-cannot simply overwrite (see
+rather than replacing it — one of the two ``runtime:`` leaves a trusted
+document cannot simply overwrite, the ``service`` plugin's
+``allowed_commands`` pin being the other (see
 ``cli.effective_settings._CEILING_LIST_KEYS``).
 
 AC C.5: a non-allowlisted command must be rejected before any side
