@@ -197,14 +197,18 @@ thread_local! {
     /// `osi`, `cof` or `electricity`, so a pid the OS has since
     /// recycled for some unrelated process is never mistaken for
     /// this test's own.
-    static SPAWNED_OSI_PIDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    static SPAWNED_OSI_PIDS: RefCell<Vec<(u32, PathBuf)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Records *pid* as one of this test's own spawned `osi` processes,
 /// for [`diagnose_stalled_wait`] to find later from a caller that
-/// never itself sees the `Child` it belongs to.
-fn note_spawned_osi(pid: u32) {
-    SPAWNED_OSI_PIDS.with(|pids| pids.borrow_mut().push(pid));
+/// never itself sees the `Child` it belongs to -- *trace_path* is
+/// where that same `osi` was told to write its own `OSI_EXIT_TRACE`
+/// (issue #825), so a stalled wait can print it however the process
+/// itself ended, with no ties to whether `ps` still finds it alive at
+/// that moment.
+fn note_spawned_osi(pid: u32, trace_path: PathBuf) {
+    SPAWNED_OSI_PIDS.with(|pids| pids.borrow_mut().push((pid, trace_path)));
 }
 
 /// What *this test's* own spawned `osi` (and whatever it in turn
@@ -287,7 +291,8 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
         });
     }
 
-    let mut roots: Vec<u32> = SPAWNED_OSI_PIDS.with(|pids| pids.borrow().clone());
+    let spawned: Vec<(u32, PathBuf)> = SPAWNED_OSI_PIDS.with(|pids| pids.borrow().clone());
+    let mut roots: Vec<u32> = spawned.iter().map(|(pid, _)| *pid).collect();
     if let Some(pid) = extra_pid {
         roots.push(pid);
     }
@@ -343,6 +348,29 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
                 if let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) {
                     out.push_str(&format!("pid {pid} task {tid:?} stat: {stat}\n"));
                 }
+            }
+        }
+    }
+
+    // `OSI_EXIT_TRACE` (issue #825): every osi this test spawned
+    // gets its own trace file, printed here regardless of whether
+    // `ps` still finds that pid alive above -- the whole point of
+    // this trace is the run that already exited silently, before
+    // ever reaching the point this diagnostic's caller was waiting
+    // for.
+    for (pid, trace_path) in &spawned {
+        match std::fs::read_to_string(trace_path) {
+            Ok(text) if !text.is_empty() => {
+                out.push_str(&format!("pid {pid} OSI_EXIT_TRACE ({trace_path:?}):\n"));
+                out.push_str(&text);
+            }
+            Ok(_) => {
+                out.push_str(&format!(
+                    "pid {pid} OSI_EXIT_TRACE ({trace_path:?}): empty\n"
+                ));
+            }
+            Err(e) => {
+                out.push_str(&format!("pid {pid} OSI_EXIT_TRACE ({trace_path:?}): {e}\n"));
             }
         }
     }
@@ -1214,6 +1242,14 @@ pub fn spawn_osi_on_pty_with_env(
     cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
     // Issue #698: same discipline for the run registry.
     cmd.env("OSI_RUNS_DIR", home.path().join("runs"));
+    // Issue #825: a per-spawn trace file inside this test's own
+    // temp directory, so `diagnose_stalled_wait` can print exactly
+    // why *this* osi exited, with no inherited `OSI_EXIT_TRACE` of
+    // the real caller's own ever in the way.
+    static NEXT_TRACE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let trace_id = NEXT_TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let trace_path = home.path().join(format!("exit-trace-{trace_id}.jsonl"));
+    cmd.env("OSI_EXIT_TRACE", &trace_path);
     // A machine-wide `ps` scan would otherwise let a Select/All pty
     // test see, and open or signal, an orchestration this test
     // never started -- off by default for every pty test spawned
@@ -1268,7 +1304,7 @@ pub fn spawn_osi_on_pty_with_env(
         });
     }
     let child = cmd.spawn().expect("spawn osi on a pty");
-    note_spawned_osi(child.id());
+    note_spawned_osi(child.id(), trace_path);
     child
 }
 
