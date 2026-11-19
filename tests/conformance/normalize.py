@@ -123,6 +123,14 @@ def _normalize_leaf(key: str, value: Any, *, field_path: str | None) -> Any:
             raise NormalizationError(f"{key!r}: expected a UUID string, got {value!r}")
         return UUID_PLACEHOLDER
     if kind == "timestamp_iso":
+        # A decision line's own whole-state read (#628) can capture a
+        # node still mid-run -- the condition's own host node hasn't
+        # written its own `completed_at` yet when the condition that
+        # gates it reads the document it sits in -- so `None` here is a
+        # real "not yet", not a missing/malformed value to reject, the
+        # same as `duration`/`pid` above.
+        if value is None:
+            return None
         if not isinstance(value, str):
             raise NormalizationError(f"{key!r}: expected an ISO-8601 string, got {value!r}")
         try:
@@ -940,10 +948,27 @@ def serialize_events_text(text: str, replacements: Sequence[tuple[str, str]]) ->
     baked into a committed fixture, so a later catalogue change (a new
     shape, a narrower or wider mask) never makes a committed file stale
     on its own.
+
+    A CEL condition's own whole-state read (#628) makes a `decision`
+    line's own ``values.state`` the entire live document, the same shape
+    `--out` itself is -- so it gets `redact_leaked_paths`'s own `<out>`/
+    `<case>` placeholder treatment first, the one `redact_runtime_strings`
+    alone (a bare substring replace of the case directory, which never
+    covers the generator's own separate `out`/home temp root) can't give
+    it.
     """
+    events = []
+    for raw_event in _parse_event_lines_raw(text):
+        values = raw_event.get("values")
+        if isinstance(values, dict) and isinstance(values.get("state"), dict):
+            events.append(
+                {**raw_event, "values": {**values, "state": redact_leaked_paths(values["state"])}}
+            )
+        else:
+            events.append(raw_event)
     lines = [
         json.dumps(redact_runtime_strings(event, replacements), separators=(",", ":"), ensure_ascii=True)
-        for event in _parse_event_lines_raw(text)
+        for event in events
     ]
     return "".join(f"{line}\n" for line in lines)
 
@@ -1327,8 +1352,18 @@ def _comparable_event(event: dict[str, Any]) -> dict[str, Any]:
     # the one place a `decision` line's own value tree reaches this suite's
     # comparison at all, so it gets the same treatment here rather than a
     # dedicated `_EVENT_FIELD_RULES` entry of its own.
+    #
+    # A whole-state read's own `values["state"]` (#628) is the entire
+    # `--out` document, so it's normalized as that document's own root --
+    # `_PATH_FIELD_RULES`' exact dotted paths (`runtime.effective_
+    # settings.out`) assume the value handed to `normalize()` already
+    # *is* that root, not one more `state` key nested above it.
     if "values" in comparable:
-        comparable["values"] = normalize(comparable["values"])
+        values = comparable["values"]
+        if isinstance(values, dict) and isinstance(values.get("state"), dict):
+            comparable["values"] = {**values, "state": normalize(values["state"])}
+        else:
+            comparable["values"] = normalize(values)
     return comparable
 
 

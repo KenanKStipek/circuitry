@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #628",
+  "description": "An unnamed if whose CEL condition reads state as a whole (size(state) > 0, not any state.-rooted path): the decision line's values carries {\"state\": <the whole state>}, the same shape on both engines, with nothing unset.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
