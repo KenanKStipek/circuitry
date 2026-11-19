@@ -353,9 +353,11 @@ _NAME_MERGE_RUNTIME_KEYS: frozenset[str] = frozenset({"secrets"})
 
 #: Host ceiling that survives a merge as an intersection, never a plain
 #: overlay — a document (trusted or not) can only narrow it, never replace
-#: it outright (#316, the shell half of #264). `(top_key, name, leaf_key)`.
+#: it outright (#316, the shell half of #264; #381 gives `service` the
+#: same ceiling). `(top_key, name, leaf_key)`.
 _CEILING_LIST_KEYS: tuple[tuple[str, str, str], ...] = (
     ("plugins", "shell", "allowed_commands"),
+    ("plugins", "service", "allowed_commands"),
 )
 
 

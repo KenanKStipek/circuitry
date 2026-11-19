@@ -347,7 +347,14 @@ def _build_service(cfg: dict[str, Any]) -> ToolPlugin:
     state_dir = cfg.get("state_dir")
     if state_dir is not None and not isinstance(state_dir, str):
         raise ValueError("runtime.plugins.service.state_dir must be a path string.")
-    return ServicePlugin(state_dir=state_dir or None)
+    pinned = cfg.get("allowed_commands")
+    if pinned is not None:
+        if not isinstance(pinned, list) or not all(isinstance(c, str) for c in pinned):
+            raise ValueError(
+                "runtime.plugins.service.allowed_commands must be a list of strings."
+            )
+        pinned = tuple(pinned)
+    return ServicePlugin(state_dir=state_dir or None, pinned_allowed_commands=pinned)
 
 
 def _build_gpg(cfg: dict[str, Any]) -> ToolPlugin:

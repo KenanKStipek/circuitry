@@ -6,8 +6,13 @@ exactly what it started — never anything else on the machine.
 
 Params:
   - ``action`` (required): ``start`` | ``stop`` | ``status``.
-  - ``name`` (required, str): the service's name, unique per state
-    directory. Letters, digits, ``_``, ``.`` and ``-``.
+  - ``name`` (required, str): the service's name. Letters, digits, ``_``,
+    ``.`` and ``-``.
+  - ``namespace`` (optional, str): same pattern as ``name``. Keys the
+    record by ``<namespace>@<name>`` instead of bare ``name``, so two
+    namespaces using the same ``name`` keep separate records and
+    processes. Ports stay machine-wide: a port held by another
+    namespace's service is still refused at ``start``.
 
 ``start`` also takes:
   - ``command`` (required): an argv list, or with ``shell: true`` a string
@@ -22,12 +27,20 @@ Params:
     ``ports`` when it is a port or a localhost URL.
   - ``ready_timeout_ms`` (optional, default 60000, never longer than the
     effect's own timeout).
-  - ``log`` (optional, str, default ``<state_dir>/<name>.log``): stdout and
-    stderr are appended here.
+  - ``log`` (optional, str, default ``<state_dir>/<key>.log``, where
+    ``<key>`` is ``name`` or ``<namespace>@<name>``): stdout and stderr
+    are appended here.
   - ``grace_ms`` (optional, default 5000): SIGTERM-to-SIGKILL grace when a
     failed or cancelled start tears the process group down again.
 
 ``stop`` takes ``grace_ms`` (same default); ``status`` takes nothing else.
+
+A host may pin ``runtime.plugins.service.allowed_commands`` in config: a
+list of bare command names (see ``shell.is_bare_command_name``).
+``start`` of an argv command whose ``command[0]`` is not in the pin is
+refused before anything happens; ``shell: true`` is refused unless the
+pin names ``sh`` (which then admits any string — the pin is all or
+nothing in shell mode). Without a pin, behaviour is unchanged.
 
 Ownership is provable before any signal: a record in the state directory
 (``runtime.plugins.service.state_dir``, default
@@ -70,6 +83,7 @@ from urllib.parse import urlparse
 from ..core.cancellation import get_token
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
+from .shell import is_bare_command_name
 
 _ACTIONS = ("start", "stop", "status")
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
@@ -397,7 +411,9 @@ def _ready_port(ready: dict[str, Any] | None) -> int | None:
 def _format_holder(holder: dict[str, Any]) -> str:
     port = holder["port"]
     if holder.get("service"):
-        return f"port {port} is claimed by service {holder['service']!r} (pgid {holder.get('pgid')})"
+        namespace = holder.get("namespace")
+        label = f"{namespace}@{holder['service']}" if namespace else holder["service"]
+        return f"port {port} is claimed by service {label!r} (pgid {holder.get('pgid')})"
     if holder.get("pid") is None:
         return (
             f"port {port} is held by a process this plugin did not start "
@@ -415,6 +431,11 @@ class ServicePlugin:
     #: ``runtime.plugins.service.state_dir``; ``None`` means
     #: :func:`default_state_dir`.
     state_dir: str | None = None
+    #: Host-level pin from ``runtime.plugins.service.allowed_commands``.
+    #: ``None`` means no pin (today's behaviour). An argv command is
+    #: refused unless ``command[0]`` is a bare name in this pin;
+    #: ``shell: true`` is refused unless ``"sh"`` is in it.
+    pinned_allowed_commands: tuple[str, ...] | None = None
 
     # -- state directory -------------------------------------------------
 
@@ -444,21 +465,21 @@ class ServicePlugin:
             os.close(fd)
 
     @staticmethod
-    def _record_path(state_dir: Path, name: str) -> Path:
-        return state_dir / f"{name}.json"
+    def _record_path(state_dir: Path, key: str) -> Path:
+        return state_dir / f"{key}.json"
 
-    def _load(self, state_dir: Path, name: str) -> dict[str, Any] | None:
-        path = self._record_path(state_dir, name)
+    def _load(self, state_dir: Path, key: str) -> dict[str, Any] | None:
+        path = self._record_path(state_dir, key)
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
         except (OSError, ValueError):
-            return {"name": name}  # unreadable: incomplete, so stale
-        return record if isinstance(record, dict) else {"name": name}
+            return {"name": key}  # unreadable: incomplete, so stale
+        return record if isinstance(record, dict) else {"name": key}
 
-    def _save(self, state_dir: Path, record: dict[str, Any]) -> None:
-        path = self._record_path(state_dir, str(record["name"]))
+    def _save(self, state_dir: Path, key: str, record: dict[str, Any]) -> None:
+        path = self._record_path(state_dir, key)
         tmp = path.with_suffix(".json.tmp")
         # 0600 from creation, matching the state directory's own 0700: a
         # service record can carry the command and env the service started
@@ -468,29 +489,30 @@ class ServicePlugin:
             handle.write(json.dumps(record, indent=2, sort_keys=True))
         os.replace(tmp, path)
 
-    def _drop(self, state_dir: Path, name: str) -> None:
-        self._record_path(state_dir, name).unlink(missing_ok=True)
+    def _drop(self, state_dir: Path, key: str) -> None:
+        self._record_path(state_dir, key).unlink(missing_ok=True)
 
     def _live_record(
-        self, state_dir: Path, name: str
+        self, state_dir: Path, key: str
     ) -> tuple[dict[str, Any] | None, str | None]:
-        """The record for *name* when it still proves ours; otherwise drop
-        it and return why it was stale."""
-        record = self._load(state_dir, name)
+        """The record for *key* (``name``, or ``<namespace>@<name>``) when
+        it still proves ours; otherwise drop it and return why it was
+        stale."""
+        record = self._load(state_dir, key)
         if record is None:
             return None, None
         ownership = check_ownership(record)
         if ownership.ours:
             return record, None
-        self._drop(state_dir, name)
+        self._drop(state_dir, key)
         return None, ownership.reason
 
-    def _other_claims(self, state_dir: Path, name: str) -> dict[int, dict[str, Any]]:
+    def _other_claims(self, state_dir: Path, key: str) -> dict[int, dict[str, Any]]:
         """Port -> live record of another service of ours that claims it."""
         claims: dict[int, dict[str, Any]] = {}
         for path in sorted(state_dir.glob("*.json")):
             other = path.stem
-            if other == name:
+            if other == key:
                 continue
             record, _ = self._live_record(state_dir, other)
             if record is not None:
@@ -519,14 +541,30 @@ class ServicePlugin:
                 "service: params['name'] is required: letters, digits, '_', '.' and '-' "
                 f"(starting with a letter or digit), got {name!r}."
             )
+        namespace_param = params.get("namespace")
+        namespace = str(namespace_param).strip() if namespace_param else ""
+        if namespace and not _NAME_RE.match(namespace):
+            raise ValueError(
+                "service: params['namespace'] must be letters, digits, '_', '.' and '-' "
+                f"(starting with a letter or digit), got {namespace!r}."
+            )
+        key = f"{namespace}@{name}" if namespace else name
         if action == "start":
-            return self._start(name, params, timeout_seconds=timeout_seconds)
+            return self._start(key, name, namespace, params, timeout_seconds=timeout_seconds)
         if action == "stop":
             grace = _parse_ms(params, "grace_ms", _DEFAULT_GRACE_MS) / 1000
-            return self._stop(name, grace_seconds=grace)
-        return self._status(name)
+            return self._stop(key, name, namespace, grace_seconds=grace)
+        return self._status(key, name, namespace)
 
-    def _start(self, name: str, params: dict[str, Any], *, timeout_seconds: int) -> ToolResult:
+    def _start(
+        self,
+        key: str,
+        name: str,
+        namespace: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: int,
+    ) -> ToolResult:
         shell = _as_bool(params.get("shell"))
         command = params.get("command")
         if shell:
@@ -546,6 +584,22 @@ class ServicePlugin:
             argv = [str(a) for a in command]
         if any("\x00" in a for a in argv):
             raise ValueError("service: params['command'] contains a null byte.")
+
+        if self.pinned_allowed_commands is not None:
+            pin = self.pinned_allowed_commands
+            if shell:
+                if "sh" not in pin:
+                    raise PermissionError(
+                        "service: shell: true needs 'sh' in the host's "
+                        f"runtime.plugins.service.allowed_commands pin {sorted(pin)}."
+                    )
+            else:
+                exe = argv[0]
+                if not is_bare_command_name(exe) or exe not in pin:
+                    raise PermissionError(
+                        f"service: command {exe!r} is not in the host's "
+                        f"runtime.plugins.service.allowed_commands pin {sorted(pin)}."
+                    )
 
         raw_ports = params.get("ports")
         if raw_ports is None or raw_ports == "":
@@ -578,40 +632,48 @@ class ServicePlugin:
             log_path = (
                 Path(str(log_param)).expanduser().resolve()
                 if log_param
-                else state_dir / f"{name}.log"
+                else state_dir / f"{key}.log"
             )
-            existing, _ = self._live_record(state_dir, name)
+            existing, _ = self._live_record(state_dir, key)
             if existing is not None:
                 started = False
                 record = existing
                 proc: subprocess.Popen[bytes] | None = None
                 log_offset = 0
             else:
-                claims = self._other_claims(state_dir, name)
+                claims = self._other_claims(state_dir, key)
                 holders: list[dict[str, Any]] = []
                 for port in ports:
                     if port in claims:
-                        holders.append(
-                            {
-                                "port": port,
-                                "pid": claims[port].get("pgid"),
-                                "pgid": claims[port].get("pgid"),
-                                "command": claims[port].get("command"),
-                                "cwd": claims[port].get("cwd"),
-                                "service": claims[port].get("name"),
-                            }
-                        )
+                        holder = {
+                            "port": port,
+                            "pid": claims[port].get("pgid"),
+                            "pgid": claims[port].get("pgid"),
+                            "command": claims[port].get("command"),
+                            "cwd": claims[port].get("cwd"),
+                            "service": claims[port].get("name"),
+                        }
+                        if claims[port].get("namespace"):
+                            holder["namespace"] = claims[port]["namespace"]
+                        holders.append(holder)
                     else:
                         holders.extend(port_holders(port))
                 if holders:
                     detail = "; ".join(_format_holder(h) for h in holders)
                     message = (
-                        f"service {name!r}: not started — {detail}. Nothing was "
+                        f"service {name!r}: not started \u2014 {detail}. Nothing was "
                         "signalled; stop that process yourself or pick another port."
                     )
+                    raw: dict[str, Any] = {
+                        "action": "start",
+                        "name": name,
+                        "port_holders": holders,
+                    }
+                    if namespace:
+                        raw["namespace"] = namespace
                     return ToolResult(
                         value=None,
-                        raw={"action": "start", "name": name, "port_holders": holders},
+                        raw=raw,
                         stderr=message,
                         ok=False,
                     )
@@ -649,7 +711,9 @@ class ServicePlugin:
                         "ready": ready,
                         "started_at": datetime.now(timezone.utc).isoformat(),
                     }
-                    self._save(state_dir, record)
+                    if namespace:
+                        record["namespace"] = namespace
+                    self._save(state_dir, key, record)
                 except BaseException:
                     self._terminate_group(proc.pid, grace_seconds=grace)
                     raise
@@ -661,9 +725,11 @@ class ServicePlugin:
         except BaseException:
             # Cancelled (Ctrl-C/SIGTERM) while waiting: stop what we just started.
             if started:
-                self._stop(name, grace_seconds=grace, expected_pgid=int(record["pgid"]))
+                self._stop(
+                    key, name, namespace, grace_seconds=grace, expected_pgid=int(record["pgid"])
+                )
             raise
-        value = {
+        value: dict[str, Any] = {
             "name": name,
             "running": True,
             "ready": outcome is None,
@@ -673,11 +739,15 @@ class ServicePlugin:
             "log": record.get("log"),
             "started_at": record.get("started_at"),
         }
+        if namespace:
+            value["namespace"] = namespace
         if outcome is None:
             return ToolResult(value=value, raw={"action": "start", **value})
         tail = _log_tail(Path(str(record.get("log"))), log_offset)
         if started:
-            self._stop(name, grace_seconds=grace, expected_pgid=int(record["pgid"]))
+            self._stop(
+                key, name, namespace, grace_seconds=grace, expected_pgid=int(record["pgid"])
+            )
             value["running"] = False
         message = f"service {name!r}: {outcome}" + (
             f"\n--- log tail ({record.get('log')}) ---\n{tail}" if tail else ""
@@ -737,13 +807,20 @@ class ServicePlugin:
         return not _group_exists(pgid), sent
 
     def _stop(
-        self, name: str, *, grace_seconds: float, expected_pgid: int | None = None
+        self,
+        key: str,
+        name: str,
+        namespace: str,
+        *,
+        grace_seconds: float,
+        expected_pgid: int | None = None,
     ) -> ToolResult:
-        """Stop *name*. With *expected_pgid* (a start cleaning up after
-        itself), only when the record still names that group: another run
-        may have stopped and restarted the service meanwhile."""
+        """Stop *key* (``name``, or ``<namespace>@<name>``). With
+        *expected_pgid* (a start cleaning up after itself), only when the
+        record still names that group: another run may have stopped and
+        restarted the service meanwhile."""
         with self._locked() as state_dir:
-            record, stale_reason = self._live_record(state_dir, name)
+            record, stale_reason = self._live_record(state_dir, key)
             if record is not None and expected_pgid not in (None, int(record["pgid"])):
                 record = None
             if record is None:
@@ -757,6 +834,8 @@ class ServicePlugin:
                     "port_holders": [],
                     "stale_record": stale_reason,
                 }
+                if namespace:
+                    value["namespace"] = namespace
                 return ToolResult(value=value, raw={"action": "stop", **value})
             pgid = int(record["pgid"])
             gone, sent = self._terminate_group(pgid, grace_seconds=grace_seconds)
@@ -772,7 +851,7 @@ class ServicePlugin:
                     stderr=message,
                     ok=False,
                 )
-            self._drop(state_dir, name)
+            self._drop(state_dir, key)
         ports = [int(p) for p in record.get("ports") or []]
         holders: list[dict[str, Any]] = []
         deadline = time.monotonic() + _SETTLE_SECONDS
@@ -791,11 +870,13 @@ class ServicePlugin:
             "port_holders": holders,
             "stale_record": None,
         }
+        if namespace:
+            value["namespace"] = namespace
         return ToolResult(value=value, raw={"action": "stop", **value})
 
-    def _status(self, name: str) -> ToolResult:
+    def _status(self, key: str, name: str, namespace: str) -> ToolResult:
         with self._locked() as state_dir:
-            record, stale_reason = self._live_record(state_dir, name)
+            record, stale_reason = self._live_record(state_dir, key)
         ports = [int(p) for p in (record or {}).get("ports") or []]
         holders = [h for port in ports for h in port_holders(port)]
         pgid = int(record["pgid"]) if record else None
@@ -806,7 +887,7 @@ class ServicePlugin:
         if record is not None:
             # No readiness check was given at start: nothing to report.
             ready = _probe_ready(ready_spec) if ready_spec else None
-        value = {
+        value: dict[str, Any] = {
             "name": name,
             "running": record is not None,
             "ready": ready,
@@ -817,6 +898,8 @@ class ServicePlugin:
             "port_holders": holders,
             "stale_record": stale_reason,
         }
+        if namespace:
+            value["namespace"] = namespace
         return ToolResult(value=value, raw={"action": "status", **value})
 
     def check(self) -> CheckResult:
