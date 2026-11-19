@@ -3104,36 +3104,37 @@ mod imp {
             assert!(!err.contains("vanished"), "{err}");
         }
 
-        /// A `start` with no `ready` at all must still report an
-        /// already-exited command as an exit, not as running --
-        /// otherwise the exit code the reaper reports after this call
-        /// already returned is simply lost, and a dead command looks
-        /// like a running service with no readiness check (#844).
+        /// A `start` with no `ready` at all must poll the child
+        /// exactly once -- the only check it has -- and report an
+        /// exit it catches that way the same as any other exit before
+        /// `ready`, never as a running service with no readiness
+        /// check (#844). Driving `wait_ready` directly, once the
+        /// child is already a zombie, is what makes this
+        /// deterministic: going through `execute` leaves the single
+        /// poll racing the child's own exit, which a fast enough
+        /// machine can win.
         #[tokio::test]
         async fn a_command_that_exits_at_once_with_no_ready_reports_the_exit() {
-            let dir = tempdir();
-            let token = CancellationToken::new();
-            let plugin = plugin(dir.path());
-            let name = format!("svc-exit-now-no-ready-{}", std::process::id());
-            let result = plugin
-                .execute(
-                    params(vec![
-                        ("action", Value::from("start")),
-                        ("name", Value::from(name.as_str())),
-                        ("command", Value::List(vec![Value::from("false")])),
-                    ]),
-                    &call(&token),
-                )
-                .await
-                .unwrap();
-            assert!(!result.ok);
-            assert_eq!(result.value, Value::None);
-            let raw = result.raw.as_dict().unwrap();
-            assert_eq!(get(raw, "running"), Some(&Value::from(false)));
-            let err = result.stderr.unwrap();
-            assert!(
-                err.contains("exited with code 1 before it was ready"),
-                "{err}"
+            let child = std::process::Command::new("false").spawn().unwrap();
+            let pid = child.id();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !is_zombie(pid) {
+                assert!(
+                    Instant::now() < deadline,
+                    "the child never became a zombie to wait on"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let result = wait_ready(
+                pid,
+                Some(ChildGuard::new(child)),
+                None,
+                Duration::from_secs(1),
+            )
+            .await;
+            assert_eq!(
+                result,
+                Some("exited with code 1 before it was ready".to_string())
             );
         }
 

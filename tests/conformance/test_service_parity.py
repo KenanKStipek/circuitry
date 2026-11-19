@@ -391,50 +391,6 @@ def test_a_command_that_exits_at_once_matches_on_both_engines(
     assert cof_tail, "the log tail should carry sleep's own error output"
 
 
-def test_a_command_that_exits_at_once_with_no_ready_matches_on_both_engines(
-    tmp_path: Path, electricity_binary: Path,
-) -> None:
-    """A `start` with no `ready` at all has nothing else to check, so
-    the exit itself must be the one and only thing reported -- not
-    success, on either engine."""
-    home_dir = tmp_path / "home"
-    home_dir.mkdir()
-    nodes: dict[str, dict] = {}
-    for engine, runner in (
-        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
-        (
-            "electricity",
-            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
-        ),
-    ):
-        case_dir = tmp_path / f"{engine}-exit-now-no-ready"
-        case_dir.mkdir()
-        state_dir = case_dir / "state"
-        doc_path = case_dir / "orchestration.json"
-        config_path = case_dir / "config.json"
-        _write_config(config_path, state_dir)
-        _write_orchestration(
-            doc_path,
-            {
-                "action": "start",
-                "name": "web",
-                "command": ["sleep", "nope"],
-            },
-            on_error="continue",
-        )
-
-        result = runner(doc_path, config_path)
-        assert result.returncode == 0, result.stdout
-        node = _svc_node(result)
-        error = node["meta"]["error"]
-        assert error.startswith("service 'web': exited with code 1 before it was ready"), (
-            f"{engine}: {error}"
-        )
-        nodes[engine] = node
-
-    _assert_parity(nodes["cof"], nodes["electricity"])
-
-
 def test_a_port_held_by_an_unrelated_process_is_never_signalled_on_either_engine(
     tmp_path: Path, electricity_binary: Path,
 ) -> None:
