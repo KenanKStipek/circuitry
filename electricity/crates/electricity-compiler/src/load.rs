@@ -150,11 +150,16 @@ fn is_truthy(value: &Value) -> bool {
 /// Reads *path* the way Python's `Path.read_text(encoding="utf-8")`
 /// does: UTF-8 decoded, then universal-newline translated (`\r\n` and a
 /// lone `\r` both become `\n`) -- text-mode semantics, not the raw
-/// bytes a digest needs (`digest::document_content_digest` reads the
-/// file separately, by its own raw bytes).
+/// bytes a digest needs (`digest::document_content_digest` hashes
+/// *path*'s own raw bytes, decoded and translated nowhere -- the same
+/// single on-disk read as this function's own, through the same cache
+/// when one is active, never a second read of different bytes).
 pub(crate) fn read_universal_newlines(path: &Path) -> Result<String, CompileError> {
-    let bytes =
-        std::fs::read(path).map_err(|err| CompileError(format!("{}: {err}", path.display())))?;
+    // Shared with the consent/resume digest (#405): the same bytes get
+    // parsed here and hashed there, while a cache is active on this
+    // thread -- `crate::file_cache::read_cached`'s own doc comment.
+    let bytes = crate::file_cache::read_cached(path)
+        .map_err(|err| CompileError(format!("{}: {err}", path.display())))?;
     let text = String::from_utf8(bytes)
         .map_err(|err| CompileError(format!("{}: invalid UTF-8 ({err})", path.display())))?;
     Ok(translate_universal_newlines(&text))

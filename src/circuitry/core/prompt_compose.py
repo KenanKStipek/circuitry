@@ -156,13 +156,17 @@ def compile_declared_prompts(
     *,
     document_dir: Any = None,
     confinement_root: Any = None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> dict[str, str]:
     """The document's ``prompts:`` map, as ``{name: raw template text}``.
 
     Each value is a string or ``{file: <path>}``; a file's content is read
     here (compile time), via ``core.prompt_files``. Declared-prompt text is
     not rendered here — only extracted — since it can include other
-    declared prompts and effects that don't have values yet.
+    declared prompts and effects that don't have values yet. *file_cache*
+    (a ``core.prompt_files.FileReadCache``), when given, is the single
+    on-disk read each referenced file gets in its whole
+    load/consent/compile cycle (#405).
     """
     from .prompt_files import resolve_text_or_file
 
@@ -184,6 +188,7 @@ def compile_declared_prompts(
             field=f"prompts.{name}",
             document_dir=document_dir,
             confinement_root=confinement_root,
+            file_cache=file_cache,
         )
     return declared
 
@@ -223,7 +228,11 @@ def all_effect_names(orch: Mapping[str, Any]) -> frozenset[str]:
 
 
 def document_content_digest(
-    resolved_path: Path, orch: Mapping[str, Any], *, confinement_root: Path | None = None
+    resolved_path: Path,
+    orch: Mapping[str, Any],
+    *,
+    confinement_root: Path | None = None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> str:
     """SHA-256 of *resolved_path*'s bytes, plus every prompt file it
     references (#396) — shared by every surface that treats a document's
@@ -241,6 +250,13 @@ def document_content_digest(
     fail again, loudly, moments later) just falls back to the file's own
     bytes.
 
+    *file_cache*, when given, is this document's and every one of its
+    prompt files' single on-disk read for the whole load/consent/compile
+    cycle it belongs to (#405): a caller that also compiles *orch* and
+    passes the same dict to :func:`compile_declared_prompts` (directly, or
+    through :func:`circuitry.core.compiler.compile_orchestration`) gets the
+    exact bytes this digest hashed, not a second, possibly different, read.
+
     Each prompt file's own path (relative to the document's directory, so
     the digest doesn't vary with where a checkout happens to sit on disk —
     a ``../`` sibling included, so it doesn't vary with the *project's*
@@ -250,10 +266,10 @@ def document_content_digest(
     (same total bytes, same file set, different split) would leave the
     digest unchanged.
     """
-    from .prompt_files import default_project_root
+    from .prompt_files import default_project_root, read_file_cached
 
     hasher = hashlib.sha256()
-    hasher.update(resolved_path.read_bytes())
+    hasher.update(read_file_cached(resolved_path, file_cache))
     try:
         document_dir = resolved_path.resolve().parent
         root = (
@@ -265,7 +281,7 @@ def document_content_digest(
             orch, document_dir=document_dir, confinement_root=root
         )
         for prompt_file in sorted(set(paths)):
-            data = prompt_file.read_bytes()
+            data = read_file_cached(prompt_file, file_cache)
             try:
                 label = Path(os.path.relpath(prompt_file, document_dir)).as_posix()
             except ValueError:

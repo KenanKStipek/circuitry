@@ -1,0 +1,36 @@
+name: use-path-child-rewritten-between-dispatches
+effects:
+  - type: tool
+    name: seed
+    provider: fs
+    params:
+      mode: write
+      path: scratch/child.yml
+      content: |
+        effects:
+          - type: tool
+            name: result
+            provider: json
+            params: {mode: stringify, input: {marker: "first"}}
+  - type: use
+    name: before
+    path: scratch/child.yml
+  - type: tool
+    name: rewrite
+    provider: fs
+    params:
+      mode: write
+      path: scratch/child.yml
+      content: |
+        effects:
+          - type: tool
+            name: result
+            provider: json
+            params: {mode: stringify, input: {marker: "second"}}
+  - type: use
+    name: after
+    path: scratch/child.yml
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: scratch, recursive: true}

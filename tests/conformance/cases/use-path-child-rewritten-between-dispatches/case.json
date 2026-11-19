@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #405",
+  "description": "An `fs` write rewrites `child.yml` between two `use: path: child.yml` effects of the same root run -- the second dispatch's own load/digest/compile cycle reads the rewritten content fresh, never a cached read left over from the first dispatch.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

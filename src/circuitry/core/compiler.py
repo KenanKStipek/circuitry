@@ -97,17 +97,24 @@ _RESERVED_EFFECT_NAMES = frozenset({"value", "meta", "input", "prime", "runtime"
 #: at all) — see ``core.prompt_files``.
 #: The third item is whether the document is trusted (run by path), which
 #: decides if a ``file: {from: ...}``'s ``within`` is confined to the project
-#: (#578); see :func:`compile_orchestration`.
-_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None, bool]] = ContextVar(
-    "circuitry_document_location", default=(None, None, False)
-)
+#: (#578); see :func:`compile_orchestration`. The fourth is this compile's
+#: file-read cache (#405): every ``{file: ...}`` a ``prompt``/``yield``
+#: effect resolves (``_compile_prompt``/``_compile_yield``) reads through
+#: it too, so a file this document's own consent digest already hashed is
+#: never read from disk a second time here.
+_DOCUMENT_LOCATION: ContextVar[
+    tuple[Path | None, Path | None, bool, dict[Path, bytes] | None]
+] = ContextVar("circuitry_document_location", default=(None, None, False, None))
 
 
 @contextmanager
 def _document_location(
-    document_dir: Path | None, confinement_root: Path | None, trusted: bool = False
+    document_dir: Path | None,
+    confinement_root: Path | None,
+    trusted: bool = False,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> Iterator[None]:
-    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root, trusted))
+    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root, trusted, file_cache))
     try:
         yield
     finally:
@@ -124,6 +131,10 @@ def _current_confinement_root() -> Path | None:
 
 def _current_document_trusted() -> bool:
     return _DOCUMENT_LOCATION.get()[2]
+
+
+def _current_file_cache() -> dict[Path, bytes] | None:
+    return _DOCUMENT_LOCATION.get()[3]
 
 
 def _scope_child(scope_path: str, child_name: str) -> str:
@@ -470,6 +481,7 @@ def compile_orchestration(
     document_dir: Path | None = None,
     confinement_root: Path | None = None,
     trusted: bool = False,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> DynamicDefinition:
     """Compile *orch* to its effect tree, root ``DynamicDefinition.prompts``
     carrying its own declared prompts (#396).
@@ -488,6 +500,13 @@ def compile_orchestration(
     ``use`` child, so "a child document sees only its own declared prompts"
     needs no special-casing at the ``use`` boundary.
 
+    *file_cache*, when given, is this call's single on-disk read for every
+    ``{file: ...}`` prompt source it resolves (#405): a caller that computed
+    this document's consent digest first, through
+    ``core.prompt_compose.document_content_digest`` with the same dict,
+    gets the exact bytes that digest hashed here, never a second,
+    independent read that could by then see different bytes.
+
     A document with no file of its own cannot name a ``state_file`` either
     (the ``systemone`` tool). Every tool effect records ``ToolDefinition.limited``
     from *trusted*, whatever its provider (since #603); ``systemone``'s own
@@ -496,7 +515,7 @@ def compile_orchestration(
     and at dispatch for one read from ``input``. A limited document with no
     project reads no file at all.
     """
-    with _document_location(document_dir, confinement_root, trusted):
+    with _document_location(document_dir, confinement_root, trusted, file_cache):
         _check_runtime_env_secrets(orch.get("runtime"))
         # Support both 'effects' (spec) and 'steps' (legacy)
         effects = orch.get("effects") or orch.get("steps") or []
@@ -506,7 +525,10 @@ def compile_orchestration(
 
         try:
             declared_prompts = compile_declared_prompts(
-                orch, document_dir=document_dir, confinement_root=confinement_root
+                orch,
+                document_dir=document_dir,
+                confinement_root=confinement_root,
+                file_cache=file_cache,
             )
         except PromptCompositionError as exc:
             raise ValueError(str(exc)) from exc
@@ -1976,6 +1998,7 @@ def _compile_yield(effect: dict[str, Any], *, effect_path: str) -> YieldDefiniti
         field=f"{effect_path}.template",
         document_dir=_current_document_dir(),
         confinement_root=_current_confinement_root(),
+        file_cache=_current_file_cache(),
     )
     if not template.strip():
         raise ValueError(f"Yield effect '{name}': 'template' must not be empty.")
@@ -2125,6 +2148,7 @@ def _compile_prompt(
                 field=f"{effect_path}.template",
                 document_dir=_current_document_dir(),
                 confinement_root=_current_confinement_root(),
+                file_cache=_current_file_cache(),
             )
             if template_raw is not None
             else None
@@ -2161,6 +2185,7 @@ def _compile_prompt(
                         field=content_field,
                         document_dir=_current_document_dir(),
                         confinement_root=_current_confinement_root(),
+                        file_cache=_current_file_cache(),
                     ),
                 )
             )
