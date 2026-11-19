@@ -68,6 +68,7 @@ __all__ = [
     "compile_declared_prompts",
     "declared_prompts",
     "document_content_digest",
+    "iter_referenced_prompt_file_refs",
     "known_effect_names",
     "referenced_prompt_file_paths",
     "render_with_composition",
@@ -298,6 +299,63 @@ def document_content_digest(
     return hasher.hexdigest()
 
 
+def _file_ref(value: Any) -> str | None:
+    """*value*'s path, if it is a literal ``{file: <path>}`` — never a
+    dispatch-time ``{file: {from: ...}}`` (``set(value) == {"file"}`` is
+    false for it, since its own ``file`` is itself a mapping, not a string).
+    """
+    if (
+        isinstance(value, Mapping)
+        and set(value) == {"file"}
+        and isinstance(value.get("file"), str)
+    ):
+        return value["file"]
+    return None
+
+
+def iter_referenced_prompt_file_refs(orch: Mapping[str, Any]) -> Iterator[str]:
+    """Every literal ``{file: <path>}`` string *orch* names as a prompt
+    source — declared ``prompts:`` values, and every effect's ``template``
+    and ``messages[].content`` (#396 §3, the only fields
+    ``compile_declared_prompts``/``core.compiler`` ever resolve a ``{file:
+    ...}`` prompt source for).
+
+    The one walk :func:`referenced_prompt_file_paths` (best-effort, for
+    content-hashing callers) and a ``github`` library source's own fetch
+    (:mod:`circuitry.cli.github_source`, strict, for callers that must fetch
+    exactly what a run will later read) both build on, so the two can never
+    drift apart (#837).
+    """
+    prompts = orch.get("prompts")
+    if isinstance(prompts, Mapping):
+        for value in prompts.values():
+            ref = _file_ref(value)
+            if ref is not None:
+                yield ref
+
+    def walk(effects: Any) -> Iterator[str]:
+        if not isinstance(effects, list):
+            return
+        for effect in effects:
+            if not isinstance(effect, Mapping):
+                continue
+            ref = _file_ref(effect.get("template"))
+            if ref is not None:
+                yield ref
+            messages = effect.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, Mapping):
+                        ref = _file_ref(message.get("content"))
+                        if ref is not None:
+                            yield ref
+            for field in _CHILD_LISTS:
+                yield from walk(effect.get(field))
+
+    yield from walk(orch.get("effects") or orch.get("steps") or [])
+    yield from walk(orch.get("finally"))
+
+
 def referenced_prompt_file_paths(
     orch: Mapping[str, Any], *, document_dir: Path, confinement_root: Path
 ) -> list[Path]:
@@ -315,47 +373,18 @@ def referenced_prompt_file_paths(
     from .prompt_files import PromptFileError, resolve_prompt_file_path
 
     paths: list[Path] = []
-
-    def resolve(value: Any) -> None:
-        if (
-            isinstance(value, Mapping)
-            and set(value) == {"file"}
-            and isinstance(value.get("file"), str)
-        ):
-            try:
-                paths.append(
-                    resolve_prompt_file_path(
-                        value["file"],
-                        document_dir=document_dir,
-                        confinement_root=confinement_root,
-                        field="file",
-                    )
+    for ref in iter_referenced_prompt_file_refs(orch):
+        try:
+            paths.append(
+                resolve_prompt_file_path(
+                    ref,
+                    document_dir=document_dir,
+                    confinement_root=confinement_root,
+                    field="file",
                 )
-            except PromptFileError:
-                pass
-
-    prompts = orch.get("prompts")
-    if isinstance(prompts, Mapping):
-        for value in prompts.values():
-            resolve(value)
-
-    def walk(effects: Any) -> None:
-        if not isinstance(effects, list):
-            return
-        for effect in effects:
-            if not isinstance(effect, Mapping):
-                continue
-            resolve(effect.get("template"))
-            messages = effect.get("messages")
-            if isinstance(messages, list):
-                for message in messages:
-                    if isinstance(message, Mapping):
-                        resolve(message.get("content"))
-            for field in _CHILD_LISTS:
-                walk(effect.get(field))
-
-    walk(orch.get("effects") or orch.get("steps") or [])
-    walk(orch.get("finally"))
+            )
+        except PromptFileError:
+            pass
     return paths
 
 
