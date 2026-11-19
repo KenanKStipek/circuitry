@@ -23,8 +23,8 @@
 //! concurrency-*group* errors share.
 
 use crate::{
-    CheckOptions, CheckReport, DocumentOrigin, RunCheckError, compile_document, cycles, digest,
-    groups, lint, load, load_document, structural_errors, unknown_key_warnings,
+    CheckOptions, CheckReport, DocumentOrigin, RunCheckError, compile_document, compose, cycles,
+    digest, groups, lint, load, load_document, structural_errors, unknown_key_warnings,
 };
 use electricity_bytecode::{DocumentInfo, Program};
 use electricity_value::{Dict, Value};
@@ -906,6 +906,7 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
             };
         }
     };
+    warnings.extend(compose::tree_sibling_warnings(&document, &origin));
 
     let merged_runtime = merged_runtime_block(options, &document);
     let config_errors = concurrency_config_errors(merged_runtime.as_ref());
