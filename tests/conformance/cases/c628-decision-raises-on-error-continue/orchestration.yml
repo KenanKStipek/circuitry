@@ -1,0 +1,19 @@
+name: c628-decision-raises-on-error-continue
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      strict: true
+      expr: "state.prime.missing.value == 1"
+    on_error: continue
+    then:
+      - type: tool
+        name: yes_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: no_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

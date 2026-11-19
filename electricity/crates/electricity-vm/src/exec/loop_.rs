@@ -7,7 +7,10 @@
 //! out of scope (M2-G; electricity's non-TTY stdout never prints one)
 //! -- every pass here always starts at index 0.
 
-use super::{CtxChain, CtxSource, execute_op, key, normalize_labels, store_err, wrap_effect_error};
+use super::{
+    CtxChain, CtxSource, cel_decision_inputs, decision_payload, execute_op, key, normalize_labels,
+    store_err, wrap_effect_error,
+};
 use crate::exec::dynamic::now_iso;
 use crate::{
     CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError,
@@ -1693,12 +1696,55 @@ async fn run_while<'a>(
                     &last_writes,
                 ))]
             };
+            let effect_path = frame.effect_path(&op.path);
             match cond {
                 Condition::Cel { expr, strict } => {
-                    match evaluate_while_condition(expr, *strict, &cond_chain, store) {
-                        Ok(b) => b,
+                    let cel_state = super::live_scope::build_cel_state(&cond_chain, store, expr);
+                    match evaluate_while_condition(expr, *strict, &cel_state) {
+                        Ok(b) => {
+                            // Written right after the evaluation above
+                            // and before the pass it gates starts, or
+                            // the loop stops (#628) -- the `Err` arm
+                            // below writes its own, at each of its own
+                            // exit points, since neither falls through
+                            // to here.
+                            if observer.wants_decisions() {
+                                observer.decision(
+                                    &effect_path,
+                                    &decision_payload(
+                                        "while",
+                                        cond.mode(),
+                                        vec![
+                                            ("continue", Value::Bool(b)),
+                                            ("iteration", Value::from(i64::from(iteration_count))),
+                                        ],
+                                        cel_decision_inputs(expr, &cel_state),
+                                        None,
+                                    ),
+                                );
+                            }
+                            b
+                        }
                         Err(e) => match on_error {
                             OnError::Fail => {
+                                if observer.wants_decisions() {
+                                    observer.decision(
+                                        &effect_path,
+                                        &decision_payload(
+                                            "while",
+                                            cond.mode(),
+                                            vec![
+                                                ("continue", Value::Bool(false)),
+                                                (
+                                                    "iteration",
+                                                    Value::from(i64::from(iteration_count)),
+                                                ),
+                                            ],
+                                            cel_decision_inputs(expr, &cel_state),
+                                            Some(&e.to_string()),
+                                        ),
+                                    );
+                                }
                                 state.termination_reason = "error".to_string();
                                 state.iteration_count = iteration_count;
                                 return Err(e);
@@ -1712,6 +1758,24 @@ async fn run_while<'a>(
                                 state.termination_reason = "condition_error".to_string();
                                 if let Some(m) = meta {
                                     store.set_leaf(m, key("error"), Value::Str(e.to_string()));
+                                }
+                                if observer.wants_decisions() {
+                                    observer.decision(
+                                        &effect_path,
+                                        &decision_payload(
+                                            "while",
+                                            cond.mode(),
+                                            vec![
+                                                ("continue", Value::Bool(false)),
+                                                (
+                                                    "iteration",
+                                                    Value::from(i64::from(iteration_count)),
+                                                ),
+                                            ],
+                                            cel_decision_inputs(expr, &cel_state),
+                                            Some(&e.to_string()),
+                                        ),
+                                    );
                                 }
                                 // An interrupt is never lost just because
                                 // on_error degraded this condition's own
@@ -1738,7 +1802,6 @@ async fn run_while<'a>(
                     // through this frame's own enclosing-container
                     // fallback chain.
                     let live_root = super::live_scope::LiveRoot::new(&cond_chain, store, frame);
-                    let effect_path = frame.effect_path(&op.path);
                     let outcome = super::condition_model::evaluate_model_condition(
                         super::condition_model::ConditionKind::While,
                         template,
@@ -1776,8 +1839,30 @@ async fn run_while<'a>(
                             tokens_cache_write_total,
                         );
                     }
+                    let answer = outcome
+                        .generated
+                        .as_ref()
+                        .map(|g| Value::Str(g.text.clone()))
+                        .unwrap_or(Value::None);
                     match outcome.verdict {
-                        Ok(b) => b,
+                        Ok(b) => {
+                            if observer.wants_decisions() {
+                                observer.decision(
+                                    &effect_path,
+                                    &decision_payload(
+                                        "while",
+                                        cond.mode(),
+                                        vec![
+                                            ("continue", Value::Bool(b)),
+                                            ("iteration", Value::from(i64::from(iteration_count))),
+                                        ],
+                                        vec![("answer", answer)],
+                                        None,
+                                    ),
+                                );
+                            }
+                            b
+                        }
                         Err(failure) => {
                             // The failure's own class (`TemplateError` for a
                             // render failure, the adapter's own class for a
@@ -1792,6 +1877,24 @@ async fn run_while<'a>(
                             };
                             match on_error {
                                 OnError::Fail => {
+                                    if observer.wants_decisions() {
+                                        observer.decision(
+                                            &effect_path,
+                                            &decision_payload(
+                                                "while",
+                                                cond.mode(),
+                                                vec![
+                                                    ("continue", Value::Bool(false)),
+                                                    (
+                                                        "iteration",
+                                                        Value::from(i64::from(iteration_count)),
+                                                    ),
+                                                ],
+                                                vec![("answer", answer)],
+                                                Some(&e.to_string()),
+                                            ),
+                                        );
+                                    }
                                     state.termination_reason = "error".to_string();
                                     state.iteration_count = iteration_count;
                                     return Err(e);
@@ -1805,6 +1908,24 @@ async fn run_while<'a>(
                                     state.termination_reason = "condition_error".to_string();
                                     if let Some(m) = meta {
                                         store.set_leaf(m, key("error"), Value::Str(e.to_string()));
+                                    }
+                                    if observer.wants_decisions() {
+                                        observer.decision(
+                                            &effect_path,
+                                            &decision_payload(
+                                                "while",
+                                                cond.mode(),
+                                                vec![
+                                                    ("continue", Value::Bool(false)),
+                                                    (
+                                                        "iteration",
+                                                        Value::from(i64::from(iteration_count)),
+                                                    ),
+                                                ],
+                                                vec![("answer", answer)],
+                                                Some(&e.to_string()),
+                                            ),
+                                        );
                                     }
                                     // An interrupt is never lost just
                                     // because on_error degraded this
@@ -1951,21 +2072,18 @@ async fn run_while<'a>(
 /// CEL-only helper has no occasion to do.
 ///
 /// Issue #463: *state* is only the subtrees *expr* actually reads,
-/// walked live, not a whole-tree `live_ctx` snapshot of *cond_chain*
-/// -- see `live_scope::build_cel_state`'s own doc comment for why
-/// this is exactly `evaluate_condition`'s own internal narrowing,
-/// just performed before the snapshot rather than after it.
-fn evaluate_while_condition(
-    expr: &str,
-    strict: bool,
-    cond_chain: &CtxChain,
-    store: &Store,
-) -> Result<bool, VmError> {
-    let state = super::live_scope::build_cel_state(cond_chain, store, expr);
+/// walked live, not a whole-tree `live_ctx` snapshot -- see
+/// `live_scope::build_cel_state`'s own doc comment for why this is
+/// exactly `evaluate_condition`'s own internal narrowing, just
+/// performed before the snapshot rather than after it. The caller
+/// builds *state* once, with `build_cel_state`, and passes it straight
+/// through -- it's also this check's own `decision` line's `values`
+/// (#628), so evaluating it twice would double that work for nothing.
+fn evaluate_while_condition(expr: &str, strict: bool, state: &Value) -> Result<bool, VmError> {
     // `core/cel_eval.py::CelEvaluationError` propagates bare, same as
     // the `if` CEL arm (`exec::conditional::decide_and_run`) -- never a
     // bare `VmError::Message`.
-    electricity_cel::evaluate_condition(expr, &state, strict).map_err(|e| VmError::Raised {
+    electricity_cel::evaluate_condition(expr, state, strict).map_err(|e| VmError::Raised {
         py_class: electricity_tools::PyExc::CelEvaluationError,
         message: e.to_string(),
         cause: electricity_tools::ErrorCause::None,

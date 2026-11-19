@@ -594,13 +594,26 @@
           "v": 1,
           "seq": 3,
           "ts": "<TS>",
+          "ev": "decision",
+          "path": "prime.gate",
+          "kind": "if",
+          "mode": "cel",
+          "branch": "then",
+          "values": {
+            "state.input.n": 5
+          }
+        },
+        {
+          "v": 1,
+          "seq": 4,
+          "ts": "<TS>",
           "ev": "start",
           "id": 2,
           "path": "prime.gate.yes_branch"
         },
         {
           "v": 1,
-          "seq": 4,
+          "seq": 5,
           "ts": "<TS>",
           "ev": "end",
           "id": 2,
@@ -610,7 +623,7 @@
         },
         {
           "v": 1,
-          "seq": 5,
+          "seq": 6,
           "ts": "<TS>",
           "ev": "end",
           "id": 1,
@@ -620,7 +633,7 @@
         },
         {
           "v": 1,
-          "seq": 6,
+          "seq": 7,
           "ts": "<TS>",
           "ev": "end",
           "id": 0,
@@ -630,7 +643,7 @@
         },
         {
           "v": 1,
-          "seq": 7,
+          "seq": 8,
           "ts": "<TS>",
           "ev": "run_end",
           "ok": true
