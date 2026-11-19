@@ -27,7 +27,19 @@ FORMAT_LABELS: dict[str, str] = {
 }
 
 
-def load_orchestration_file(path: Path) -> dict[str, Any]:
+def load_orchestration_file(
+    path: Path, *, file_cache: dict[Path, bytes] | None = None
+) -> dict[str, Any]:
+    """Loads and parses *path* as an orchestration document.
+
+    *file_cache*, when given, is this document's single on-disk read for
+    the whole load/consent/compile cycle it belongs to (#405): the exact
+    bytes parsed here are the same bytes a consent digest
+    (``core.prompt_compose.document_content_digest``) given the same dict
+    hashes, and the same bytes a later ``compile_orchestration(...,
+    file_cache=file_cache)`` call resolves every ``{file: ...}`` prompt
+    source against.
+    """
     suffix = path.suffix.lower()
     if suffix not in ORCHESTRATION_SUFFIXES:
         supported = ", ".join(sorted(ORCHESTRATION_SUFFIXES))
@@ -37,7 +49,10 @@ def load_orchestration_file(path: Path) -> dict[str, Any]:
         )
 
     label = FORMAT_LABELS[suffix]
-    raw = path.read_text(encoding="utf-8")
+    from ..core.prompt_files import read_file_cached
+
+    raw_bytes = read_file_cached(path, file_cache)
+    raw = raw_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
     if suffix in {".yml", ".yaml"}:
         try:

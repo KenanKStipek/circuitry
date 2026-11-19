@@ -1160,6 +1160,11 @@ pub fn post_state_checks(
 /// exist so run wiring can call each on its own, not to change
 /// what this function itself does.
 pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
+    // One on-disk read per file for this whole call (#405): the document
+    // load inside `prepare_document`, `post_state_checks`'s own compile
+    // step and the digest it attaches to `Program.document` afterward all
+    // share it -- see `crate::file_cache::enter`'s own doc comment.
+    let _file_cache = crate::file_cache::enter();
     let loaded = prepare_document(path, options)?;
     let effective_runtime = merged_runtime_block(options, &loaded.document);
     pre_state_checks(&loaded, options, effective_runtime.as_ref())?;
@@ -1935,6 +1940,37 @@ mod tests {
             program.document.unwrap().digest,
             whole.document.unwrap().digest
         );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `check_for_run`'s own `enter()` (#405): the document load inside
+    /// `prepare_document` and the digest `post_state_checks` computes
+    /// afterward both read the same path -- a cache shared across the
+    /// whole call means it's read from disk exactly once, same as
+    /// `crate::file_cache`'s own doc comment names `check_for_run` as
+    /// one of its two callers. Catches a regression that removes this
+    /// call's own `enter()` directly -- not just a change to the cache
+    /// module itself, which every test above already exercises without
+    /// going through `check_for_run` at all.
+    #[test]
+    fn check_for_run_reads_the_document_from_disk_exactly_once() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-pipeline-check-for-run-reads-once-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc_path = std::fs::canonicalize(&dir).unwrap().join("doc.yml");
+        std::fs::write(
+            &doc_path,
+            "effects:\n  - type: tool\n    name: s\n    provider: uuid\n",
+        )
+        .unwrap();
+
+        crate::file_cache::reset_read_counts();
+        let result = check_for_run(&doc_path, &CheckOptions::default());
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert_eq!(crate::file_cache::read_count(&doc_path), 1);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

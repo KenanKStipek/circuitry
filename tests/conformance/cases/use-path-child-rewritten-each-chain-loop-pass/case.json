@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #405",
+  "description": "A chain loop whose own body rewrites `child.yml` with that pass's own marker before a `use: path: child.yml` of it -- each pass's own dispatch reads that pass's own rewrite, never a prior pass's cached bytes.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

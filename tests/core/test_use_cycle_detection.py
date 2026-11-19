@@ -432,18 +432,18 @@ def test_static_cache_prevents_redundant_loads(tmp_path: Path) -> None:
     a_orch = yaml.safe_load(a.read_text())
 
     read_calls = {"n": 0}
-    real_read = Path.read_text
+    real_read = Path.read_bytes
 
     def counted_read(self: Path, *args, **kwargs):
         if self.name == "leaf.yml":
             read_calls["n"] += 1
         return real_read(self, *args, **kwargs)
 
-    Path.read_text = counted_read  # type: ignore[method-assign]
+    Path.read_bytes = counted_read  # type: ignore[method-assign]
     try:
         cycle = cycle_check.detect_cycles(a_orch, root_path=a)
     finally:
-        Path.read_text = real_read  # type: ignore[method-assign]
+        Path.read_bytes = real_read  # type: ignore[method-assign]
 
     assert cycle is None
     assert read_calls["n"] == 1, f"leaf.yml read {read_calls['n']} times — cache failed"

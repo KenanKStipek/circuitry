@@ -1456,6 +1456,15 @@ pub async fn run_orchestration_with_config(
     }
 
     // Step 5: load the document -- a load error still writes --out.
+    //
+    // One on-disk read per file from here through `post_state_checks`
+    // below (#405, dropped explicitly right after it, well before any
+    // further `.await` this function reaches): the document load here,
+    // `document_hash` (step 12) and `post_state_checks`'s own compile step
+    // and digest all share it -- see `electricity_compiler::file_cache::
+    // enter`'s own doc comment. Safe only because nothing between here and
+    // that explicit drop suspends this `async fn`.
+    let _file_cache = electricity_compiler::file_cache::enter();
     let mut check_options = electricity_compiler::CheckOptions {
         skip_preflight: true,
         trust_document: true,
@@ -1679,7 +1688,12 @@ pub async fn run_orchestration_with_config(
                 // `cof trust` recorded it under, so a past consent for
                 // it would never be found (fails closed, never open).
                 let digest = electricity_config::config_trust::config_digest(
-                    &std::fs::read(&req.orchestration_path).unwrap_or_default(),
+                    // Shared with the document load above (#405): this gate's own
+                    // digest hashes the exact same bytes `prepare_document` already
+                    // read, through the same cache, never a second, independent
+                    // read that could by then see different bytes.
+                    &electricity_compiler::file_cache::read_cached(&req.orchestration_path)
+                        .unwrap_or_default(),
                 );
                 let consented = std::env::home_dir()
                     .map(|home| electricity_config::trust_store_path(&home))
@@ -2226,6 +2240,10 @@ pub async fn run_orchestration_with_config(
             Ok(program) => program,
             Err(err) => fail!(err.to_string()),
         };
+    // This span's own file-read cache has done its job (#405) -- dropped
+    // explicitly, here, rather than left to this `async fn`'s own eventual
+    // (possibly much later, possibly cross-thread) completion.
+    drop(_file_cache);
 
     // `core/compiler.py::_compile_allow_tools`'s own unknown-provider
     // check (#772) -- `electricity-compiler` cannot make it itself (that

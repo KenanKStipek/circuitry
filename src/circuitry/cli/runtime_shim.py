@@ -131,6 +131,13 @@ class RunRequest:
     dry_run: bool
     validate_only: bool
     initial_state: dict[str, Any] | None = None
+    # Seeds this run's own file-read cache (#405) with whatever a caller's
+    # own pre-run check (`cli.app._resolve_resume_state`'s `--resume`
+    # change check) already read -- the document (and every referenced
+    # prompt file) that check found unchanged is the exact same document
+    # this run then loads, digests and compiles, one read each, never two.
+    # `None` (the default everywhere else) just means "build a fresh one".
+    file_cache: dict[Path, bytes] | None = None
     shared_library_metadata: dict[str, Any] | None = None
     verbose: bool = False
     # The caller already knows whether this run is interactive (a TTY,
@@ -530,7 +537,17 @@ def run(req: RunRequest) -> RunResult:
         # A skipped (untrusted) project config, first, so a failing run
         # still says which settings it ran without.
         warnings.extend(cfg.resolution_warnings())
-        orch = load_orchestration_file(req.orchestration_path)
+        # This run's single on-disk read for the document and every prompt
+        # file it references (#405): built once, here, and threaded through
+        # the consent gate below, the `document_hash` stamped further down
+        # and the actual compile step, so none of them can see different
+        # bytes than another. `req.file_cache`, when a caller's own
+        # pre-run check already read this document (`--resume`'s change
+        # check), seeds this one instead of starting empty -- that check's
+        # bytes are this run's bytes too, never a second, possibly
+        # different read of the same file.
+        file_cache: dict[Path, bytes] = req.file_cache if req.file_cache is not None else {}
+        orch = load_orchestration_file(req.orchestration_path, file_cache=file_cache)
 
         allowlist_errors = check_allowlist(
             orch=orch, config=cfg, root_path=req.orchestration_path
@@ -568,6 +585,7 @@ def run(req: RunRequest) -> RunResult:
             store_path=trust_store_path(),
             allow_capabilities=req.allow_capabilities,
             prompt=req.capability_prompt,
+            file_cache=file_cache,
         )
         # A path inside a library source's own cache directory names the
         # exact same fetched content a library-name run would resolve to
@@ -836,6 +854,7 @@ def run(req: RunRequest) -> RunResult:
                     is_cache_path=document_is_cache_path,
                     remote_library_source=req.remote_library_source,
                 ),
+                file_cache=file_cache,
             )
         except OSError:
             # The document check above already loaded this same file; an
@@ -946,6 +965,9 @@ def run(req: RunRequest) -> RunResult:
             # run by path can name any `within` for a prompt's
             # `file: {from: ...}`; a limited one stays inside its project.
             trusted=document_trust_document or cfg.trust_orchestration_runtime,
+            # The same single on-disk read the consent gate and
+            # `document_hash` above already used (#405).
+            file_cache=file_cache,
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
@@ -965,7 +987,10 @@ def run(req: RunRequest) -> RunResult:
         from ..core.cycle_check import detect_cycles
 
         cycle = detect_cycles(
-            orch, root_path=req.orchestration_path, runtime=effective.runtime
+            orch,
+            root_path=req.orchestration_path,
+            runtime=effective.runtime,
+            file_cache=file_cache,
         )
         if cycle is not None:
             raise ValueError(f"Cycle: {' → '.join(cycle)}")
@@ -1081,9 +1106,13 @@ def run(req: RunRequest) -> RunResult:
                 req.config,
                 skip_adapter_check=req.adapter is not None,
                 runtime=preflight_runtime,
+                file_cache=file_cache,
             )
             hard_results, soft_results = classify_preflight_results(
-                req.orchestration_path, preflight_results, preflight_runtime
+                req.orchestration_path,
+                preflight_results,
+                preflight_runtime,
+                file_cache=file_cache,
             )
             preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
@@ -1599,6 +1628,7 @@ def _use_path_child_check_errors(
     trusted: bool,
     runtime: dict[str, Any] | None,
     known_groups: frozenset[str] = frozenset(),
+    file_cache: dict[Path, bytes] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Every `use: path:`/legacy `orchestration:` child of *orch* that fails
     to resolve, parse, validate or compile, recursively (#832), as one
@@ -1609,6 +1639,9 @@ def _use_path_child_check_errors(
     ``(errors, warnings)`` -- a failure whose own `use` effect tolerates it
     (`on_error: skip`/`continue`) lands in *warnings* instead, the same way
     a soft adapter dependency already does (`classify_preflight_results`).
+
+    *file_cache*, when given, is `cof check`'s own cache (#405), passed
+    straight through to :func:`check_use_path_children`.
     """
     from ..core.cycle_check import check_use_path_children
 
@@ -1619,6 +1652,7 @@ def _use_path_child_check_errors(
         trusted=trusted,
         runtime=runtime,
         known_groups=known_groups,
+        file_cache=file_cache,
     )
 
     def render(pairs: list[tuple[str, str]]) -> list[str]:
@@ -1635,6 +1669,7 @@ def _use_path_child_secrets(
     orchestration_path: Path,
     trusted: bool,
     runtime: dict[str, Any] | None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> dict[str, list[str]]:
     """Every secret a `use: path:` child of *orch* names anywhere in its own
     tree, recursively (#611), by name: the resolved path of every child that
@@ -1659,7 +1694,7 @@ def _use_path_child_secrets(
 
     by_name: dict[str, list[str]] = {}
     for label, child_orch, parent_dir in iter_use_path_children(
-        orch, root_path=orchestration_path, runtime=runtime
+        orch, root_path=orchestration_path, runtime=runtime, file_cache=file_cache
     ):
         try:
             child_def = compile_orchestration(
@@ -1670,6 +1705,7 @@ def _use_path_child_secrets(
                     default_project_root(parent_dir) if parent_dir is not None else parent_dir
                 ),
                 trusted=trusted,
+                file_cache=file_cache,
             )
         except Exception:
             continue
@@ -1724,7 +1760,20 @@ def validate(
         trust_document = effective_document_trust(
             trust_document, orchestration_path, library_registry
         )
-    text = orchestration_path.read_text(encoding="utf-8").strip()
+    # This command's own load/compile cycle (#405): built once here and
+    # reused below by the actual parse and by `compile_orchestration`
+    # further down, so a `{file: ...}` prompt source referenced from this
+    # document is never read from disk more than once for this one check.
+    from ..core.prompt_files import read_file_cached
+
+    file_cache: dict[Path, bytes] = {}
+    text = (
+        read_file_cached(orchestration_path, file_cache)
+        .decode("utf-8")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
     if not text:
         return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": config_warnings}
 
@@ -1734,7 +1783,7 @@ def validate(
     lint_warnings: list[str] = list(config_warnings)
 
     try:
-        orch = load_orchestration_file(orchestration_path)
+        orch = load_orchestration_file(orchestration_path, file_cache=file_cache)
 
         from ..core.lint import lint_orchestration
         lint_warnings = [
@@ -1803,6 +1852,10 @@ def validate(
                 is_cache_path=document_is_cache_path,
             ),
             trusted=trusted,
+            # This check's own single on-disk read (#405), already used
+            # above for the parse -- a `{file: ...}` prompt source this
+            # document references sees the exact same bytes here.
+            file_cache=file_cache,
         )
         # The secrets the document names (#598), for `cof check` to list;
         # compiling already refused them in a limited document.
@@ -1823,6 +1876,7 @@ def validate(
             orchestration_path=orchestration_path,
             trusted=trusted,
             runtime=config.runtime if config is not None else None,
+            file_cache=file_cache,
         )
         named_secrets = sorted({*root_named_secrets, *child_secret_labels})
         secret_children = {
@@ -1906,6 +1960,7 @@ def validate(
             orch,
             root_path=orchestration_path,
             runtime=(config.runtime if config is not None else None),
+            file_cache=file_cache,
         )
         if cycle is not None:
             return {
@@ -1931,6 +1986,7 @@ def validate(
             trusted=trusted,
             runtime=merged_runtime,
             known_groups=frozenset(groups),
+            file_cache=file_cache,
         )
         if child_check_errors:
             return {
@@ -1952,9 +2008,13 @@ def validate(
                 config,
                 skip_adapter_check=skip_adapter_check,
                 runtime=preflight_runtime,
+                file_cache=file_cache,
             )
             hard_results, soft_results = classify_preflight_results(
-                orchestration_path, preflight_results, preflight_runtime
+                orchestration_path,
+                preflight_results,
+                preflight_runtime,
+                file_cache=file_cache,
             )
             preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
@@ -2002,6 +2062,7 @@ def preflight(
     *,
     skip_adapter_check: bool = False,
     runtime: dict[str, Any] | None = None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> list[tuple[str, CheckResult]]:
     """Walk an orchestration's referenced extensions and call ``check()`` on
     each. Returns an ordered list of ``(label, CheckResult)`` tuples.
@@ -2029,8 +2090,12 @@ def preflight(
 
     *runtime*: the runtime config adapters and tools are built from, when it
     is not ``config.runtime``: see :func:`with_document_aliases`.
+
+    *file_cache*, when given, is the calling cycle's own cache (#405): the
+    same document bytes the gate digested and compile read, not a second
+    read of the same file.
     """
-    orch = load_orchestration_file(orchestration_path)
+    orch = load_orchestration_file(orchestration_path, file_cache=file_cache)
     adapter_refs, tool_refs = walk_orchestration_refs(orch)
     checked_adapter_refs = (
         walk_orchestration_refs(orch, include_document_adapter=False)[0]
@@ -2202,6 +2267,8 @@ def classify_preflight_results(
     orchestration_path: Path,
     results: list[tuple[str, CheckResult]],
     runtime: dict[str, Any] | None = None,
+    *,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> tuple[list[tuple[str, CheckResult]], list[tuple[str, CheckResult]]]:
     """Split raw ``preflight()`` results into ``(hard, soft)``.
 
@@ -2214,8 +2281,11 @@ def classify_preflight_results(
     hard: an adapter that doesn't exist is a configuration mistake, not a
     missing credential the run can degrade past. An alias
     (``runtime.adapters.<alias>.adapter``) in *runtime* is known when it builds.
+
+    *file_cache*, when given, is the calling cycle's own cache (#405): the
+    same document bytes ``preflight()`` itself just read, not a second read.
     """
-    orch = load_orchestration_file(orchestration_path)
+    orch = load_orchestration_file(orchestration_path, file_cache=file_cache)
     usages = collect_adapter_usages(orch)
     hard: list[tuple[str, CheckResult]] = []
     soft: list[tuple[str, CheckResult]] = []
