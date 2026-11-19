@@ -901,16 +901,26 @@ pid; a stale record is dropped, never acted on. A port already held by
 another process is reported, by pid/command/working directory when `lsof`
 is available, but never signalled. `service` needs the `shell` and
 `network` capabilities, so a fetched or referenced document asks for
-consent before using it, the same as `shell`.
+consent before using it, the same as `shell`. A host may additionally pin
+`runtime.plugins.service.allowed_commands` — its own ceiling, matched the
+same way as `shell`'s (#381): a bare `command[0]` (never a path) must be
+in the pin, and `shell: true` is refused unless the pin names `sh` (which
+then admits any string — the pin is all or nothing in shell mode). The
+check runs before anything else `start` does: no state directory, no port
+claim, no process. This pin is a ceiling even for a trusted document, the
+same as `shell`'s own (`cli/effective_settings.py::_CEILING_LIST_KEYS`).
 
-**What it does not guard.** `runtime.plugins.shell.allowed_commands`, the
-host's pin on which binaries the `shell` plugin may run, does not apply to
-`service`: `service` runs any command it is given, as an argv list or (with
-`shell: true`) a `/bin/sh -c` string. Where a host relies on that pin to
-bound what a document can execute, `service` needs to be kept out of
-`enabled_tools` as well — being in `enabled_tools` without the shell
-allowlist widens what a document can run, not just what it can leave
-running.
+**What it does not guard.** Without a host pin, `service` runs any
+command it is given, as an argv list or (with `shell: true`) a `/bin/sh
+-c` string — `runtime.plugins.shell.allowed_commands`, the `shell`
+plugin's own pin, never applied to `service` and still does not.
+`service`'s own pin bounds *which* program it may run, never what that
+program's own arguments can do once started (the same residual risk
+Section 16 describes for every tool plugin with a fixed or pinned
+binary). A host that enables `service` without setting
+`runtime.plugins.service.allowed_commands` still lets a document run any
+command through it — being in `enabled_tools` without a pin of its own
+widens what a document can run, not just what it can leave running.
 
 ### 15. `systemone`'s `api_key_env`
 
@@ -975,12 +985,15 @@ runs an external binary, and that pin does not reach any of them:
   `git`/`gh` subcommand that writes or pushes, a `kubectl`/`docker`
   command against a live cluster or daemon), which is each plugin's own
   concern, not the allowlist's.
-- **An arbitrary command, chosen per effect or in config.** `service` (see
+- **An arbitrary command, chosen per effect or in config, bounded only by
+  its own optional pin.** `service` (see
   [Section 14](#14-the-service-tool)) runs whatever command its own
-  `params.command`/`params.shell` names, exactly like `shell` without its
-  allowlist. `mcp` (`plugins/mcp_client.py::McpPlugin`) starts the stdio
-  command configured per server under `runtime.plugins.mcp.servers`; it is
-  tagged only `network` in `plugins/capabilities.py`, not `shell`.
+  `params.command`/`params.shell` names, governed by its own
+  `runtime.plugins.service.allowed_commands` pin — never `shell`'s — which
+  is optional and, unset, bounds nothing. `mcp`
+  (`plugins/mcp_client.py::McpPlugin`) starts the stdio command configured
+  per server under `runtime.plugins.mcp.servers`; it is tagged only
+  `network` in `plugins/capabilities.py`, not `shell`.
   `runtime.secrets.<name>.command` (`secrets.py::_command_output`) runs an
   arbitrary argv the same way, defined under `runtime.secrets` by the
   host or a trusted document (see [Section 12](#12-secrets-runtimesecrets-and-secret-)).
@@ -989,10 +1002,12 @@ runs an external binary, and that pin does not reach any of them:
   session with the user's own permissions — not sandboxed by this or any
   other allowlist.
 
-None of these plugins has an `allowed_commands`-style pin of its own — a
-host that relies on `shell.allowed_commands` to bound what a document can
-execute needs to leave every name above out of `enabled_tools` too, since
-the shell allowlist bounds nothing it does not itself govern. A trusted
+`service` is the only plugin in this section with an `allowed_commands`-
+style pin of its own (#381); none of the others has one — a host that
+relies on `shell.allowed_commands` to bound what a document can execute
+still needs to leave every other name above out of `enabled_tools`, or set
+`service`'s own pin, since neither allowlist bounds a plugin it does not
+itself govern. A trusted
 document can also set `runtime.plugins.<name>.binary`,
 `runtime.plugins.mcp.servers` or `runtime.secrets.<name>.command` itself
 (the same trust rule as any other `runtime.plugins`/`runtime.secrets` host

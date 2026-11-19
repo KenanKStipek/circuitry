@@ -11,6 +11,16 @@ One provider, three actions: `params.action` is `start`, `stop` or
 and `-`). A name is unique per state directory, so a later `stop` or
 `status` — in the same run or a later one — finds it by name.
 
+An optional `params.namespace` (same character rule as `name`) keys the
+record by `<namespace>@<name>` instead of bare `name`: two orchestrations
+using the same service name but different namespaces keep separate
+records and processes — one's `stop` never reaches the other's, and
+`status` in one namespace never reports the other's record. Ports stay a
+machine-wide resource regardless: a port held by a service in another
+namespace is still refused at `start`, naming that namespace and name.
+Without `namespace`, behaviour — including the record's filename — is
+exactly what it is without this field at all.
+
 ```yaml
 - type: tool
   name: start_web
@@ -33,12 +43,13 @@ and `-`). A name is unique per state directory, so a later `stop` or
 |---|---|---|---|
 | `command` | list of strings | — | Required. The argv to run (no shell). |
 | `shell` | bool | `false` | Run `command`, then a single string, with `/bin/sh -c`. |
+| `namespace` | string | — | Keys the record by `<namespace>@<name>`; see above. `stop` and `status` take it too. |
 | `cwd` | string | the run's working directory | The process's working directory. |
 | `env` | mapping | — | Environment variables merged over the inherited environment. |
 | `ports` | list of ints | `[]` | TCP ports the service listens on. Checked before it starts, recorded, and waited on by `stop`. |
 | `ready` | string or int | — | An `http(s)://` URL, ready on any response below 500, or a TCP port on localhost, ready once it accepts a connection. Without it, the service counts as ready as soon as it has started. |
 | `ready_timeout_ms` | int | `60000` | How long to wait for `ready`; never longer than the effect's own timeout (`timeout_ms`). |
-| `log` | string | `<state_dir>/<name>.log` | stdout and stderr are appended here. |
+| `log` | string | `<state_dir>/<key>.log` (`<key>` is `name`, or `<namespace>@<name>`) | stdout and stderr are appended here. |
 | `grace_ms` | int | `5000` | SIGTERM-to-SIGKILL grace when a failed or cancelled start stops the process again. |
 
 **Certificate checks are off for an `https://` readiness URL.** A local dev
@@ -74,8 +85,9 @@ What `start` does, in order:
    new one is left alone.
 
 `value`: `{name, running, ready, already_running, pgid, ports, log,
-started_at}`. A failed start returns `ok: false` (so `on_error` applies)
-with `meta.raw.port_holders` or `meta.raw.log_tail`.
+started_at}`, plus `namespace` when one was given. A failed start returns
+`ok: false` (so `on_error` applies) with `meta.raw.port_holders` or
+`meta.raw.log_tail`.
 
 ## `stop`
 
@@ -87,7 +99,8 @@ the recorded ports to be free.
 
 `stop` is idempotent: no record, or a stale one, is `ok` with
 `value.stopped: false`. `value`: `{name, stopped, running, pgid, signal,
-ports_free, port_holders, stale_record}` — `signal` is the last one sent
+ports_free, port_holders, stale_record}`, plus `namespace` when one was
+given — `signal` is the last one sent
 (`SIGTERM`, or `SIGKILL` when the grace period ran out); `ports_free` is
 `false`, with `port_holders`, if something else took a port over once the
 group was gone. Only a group that survives SIGKILL fails `stop`.
@@ -95,18 +108,23 @@ group was gone. Only a group that survives SIGKILL fails `stop`.
 ## `status`
 
 `value`: `{name, running, ready, pgid, ports, log, started_at,
-port_holders, stale_record}`. `ready` re-runs the start's own readiness
-check (`null` when it had none); each entry of `port_holders` carries
-`ours: true` when it belongs to this service's process group. A stale
-record is dropped and reported in `stale_record`, never an error.
+port_holders, stale_record}`, plus `namespace` when one was given.
+`ready` re-runs the start's own readiness check (`null` when it had
+none); each entry of `port_holders` carries `ours: true` when it belongs
+to this service's process group. A stale record is dropped and reported
+in `stale_record`, never an error.
 
 ## Ownership
 
-Every running service has a record, `<state_dir>/<name>.json`, holding its
-process group id, the group leader's start time, the machine's boot time,
-its ports, its log path and its command. Records are claimed and written
-under an exclusive lock (`flock` on `<state_dir>/.lock`), so two runs can
-neither both start the same service nor take over each other's.
+Every running service has a record, `<state_dir>/<key>.json` (`<key>` is
+`name`, or `<namespace>@<name>`), holding its process group id, the group
+leader's start time, the machine's boot time, its ports, its log path
+and its command — plus `namespace`, when one was given; a record without
+a namespace is byte for byte what it was before this field existed.
+Records are claimed and written under an exclusive lock (`flock` on
+`<state_dir>/.lock`), so two runs can neither both start the same service
+nor take over each other's. `@` can't occur in `name` or `namespace`
+(the same character rule as both), so the key is unambiguous.
 
 Before any signal, the record must prove the group is still the one this
 plugin started:
@@ -172,9 +190,29 @@ document asks before using it (see the capability-consent table in the
 [orchestration reference](../orchestration-reference.md#tool)).
 
 `service` runs any command it is given — an argv list, or a `/bin/sh -c`
-string with `shell: true`. The host pin `runtime.plugins.shell.allowed_commands`
-applies to the `shell` plugin only, not to `service`: where that pin is
-what you rely on, leave `service` out of the `enabled_tools` allowlist.
+string with `shell: true`. `runtime.plugins.shell.allowed_commands` (the
+`shell` plugin's own pin) does not apply to `service`; a host that wants
+to bound what `service` can run instead pins
+`runtime.plugins.service.allowed_commands` in config, a list of bare
+command names (letters, digits, `-`, `_` — no paths):
+
+```json
+{"runtime": {"plugins": {"service": {"allowed_commands": ["node", "npm"]}}}}
+```
+
+With this pin set, `start` of an argv command refuses before anything
+happens (no state directory, no port claim, no process) unless
+`command[0]` is a bare name in the pin — a path (`./bin/x`,
+`/usr/bin/python3`) is never a bare name, so it is always refused.
+`shell: true` is refused unless the pin names `sh`; a pinned `sh` then
+admits any string, so in shell mode the pin is all or nothing. The pin
+follows the same host-ceiling rule as the shell pin (see
+[Host settings versus orchestration documents](../threat-model.md#6-host-settings-versus-orchestration-documents)):
+a limited document's `runtime:` block cannot set it, and a trusted
+document's own `runtime.plugins.service.allowed_commands` intersects with
+it rather than replacing it. Without a pin, `service` runs any command,
+as before — a host that wants to rely on the shell pin alone still needs
+to leave `service` out of the `enabled_tools` allowlist.
 
 POSIX only (macOS, Linux). The leader's start time comes from
 `/proc/<pid>/stat` on Linux and `ps -o lstart=` elsewhere; the boot time
@@ -182,12 +220,15 @@ from `/proc/stat` or `sysctl -n kern.boottime`. `lsof` is optional.
 
 ## electricity
 
-`electricity` runs `service` too, over the same record format and the same
-`flock` on `<state_dir>/.lock`: a service `cof run` starts, `electricity run`
-can stop or query, and the other way round. Ownership (the process group id,
-the leader's start time, the boot time) is checked the same way on both
-engines before any signal, and a port held by a process the tool didn't
-start is reported, never signalled, on both. The readiness probe follows
+`electricity` runs `service` too, over the same record format (including
+`namespace` and the `<key>.json`/`<key>.log` naming) and the same `flock`
+on `<state_dir>/.lock`: a service `cof run` starts, `electricity run`
+can stop or query, and the other way round, namespace included. The
+host pin `runtime.plugins.service.allowed_commands` is enforced the same
+way, with the same denial text, on both engines. Ownership (the process
+group id, the leader's start time, the boot time) is checked the same way
+on both engines before any signal, and a port held by a process the tool
+didn't start is reported, never signalled, on both. The readiness probe follows
 redirects the same way `cof run`'s own `urllib` opener does, and a `start`
 cancelled (Ctrl-C, SIGTERM) while waiting for `ready` tears the group down
 with the same graceful `SIGTERM`-then-`grace_ms`-then-`SIGKILL` an ordinary
