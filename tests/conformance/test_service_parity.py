@@ -329,6 +329,56 @@ def test_a_ready_timeout_matches_on_both_engines(tmp_path: Path, electricity_bin
     assert errors["cof"] == errors["electricity"]
 
 
+def test_a_command_that_exits_at_once_matches_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """Issue #844: a command that exits before `ready` can even be
+    checked once gave electricity 'pid <n> vanished before it could be
+    recorded' instead of cof's 'exited with code <n> before it was
+    ready' -- `false` (no shell, argv form), not `sleep nope` or `sh -c
+    'exit N'`, to fail at once reliably on both macOS and Linux."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    port = _free_port()  # nothing ever listens here, same port both engines
+    nodes: dict[str, dict] = {}
+    for engine, runner in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-exit-now"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        _write_orchestration(
+            doc_path,
+            {
+                "action": "start",
+                "name": "web",
+                "command": ["false"],
+                "ready": f"http://127.0.0.1:{port}/",
+                "ports": [port],
+            },
+            on_error="continue",
+        )
+
+        result = runner(doc_path, config_path)
+        assert result.returncode == 0, result.stdout
+        node = _svc_node(result)
+        error = node["meta"]["error"]
+        assert error == "service 'web': exited with code 1 before it was ready", (
+            f"{engine}: {error}"
+        )
+        nodes[engine] = node
+
+    _assert_parity(nodes["cof"], nodes["electricity"])
+    assert nodes["cof"]["meta"]["error"] == nodes["electricity"]["meta"]["error"]
+
+
 def test_a_port_held_by_an_unrelated_process_is_never_signalled_on_either_engine(
     tmp_path: Path, electricity_binary: Path,
 ) -> None:

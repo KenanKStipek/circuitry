@@ -1999,11 +1999,6 @@ mod imp {
             })?;
             let pid = child.id();
             let (tx, rx) = tokio::sync::oneshot::channel();
-            std::thread::spawn(move || {
-                if let Ok(status) = child.wait() {
-                    let _ = tx.send(exit_code_of(&status));
-                }
-            });
             exit_rx = Some(rx);
             guard = Some(TeardownOnCancel {
                 armed: true,
@@ -2013,6 +2008,10 @@ mod imp {
                 grace,
             });
 
+            // Read the start time, which only exists while the child is
+            // unreaped, before spawning the thread that reaps it: a child
+            // that already exited is still a zombie (ps/`/proc` can still
+            // find it) until something calls `wait()` on it (#844).
             let outcome: Result<Dict, ToolError> = async {
                 let start_time = process_start_time_nb(pid).await?;
                 let Some(start_time) = start_time else {
@@ -2051,6 +2050,11 @@ mod imp {
                 Ok(rec)
             }
             .await;
+            std::thread::spawn(move || {
+                if let Ok(status) = child.wait() {
+                    let _ = tx.send(exit_code_of(&status));
+                }
+            });
             match outcome {
                 Ok(rec) => {
                     started = true;
@@ -3023,6 +3027,40 @@ mod imp {
             assert_eq!(get(raw, "running"), Some(&Value::from(false)));
             let err = result.stderr.unwrap();
             assert!(err.contains("not ready"), "{err}");
+        }
+
+        /// A command that has already exited by the time its pid would
+        /// be recorded must give the same report as any other exit
+        /// before `ready`, never the "vanished" error reserved for a
+        /// pid that truly can't be found (#844).
+        #[tokio::test]
+        async fn a_command_that_exits_at_once_reports_the_exit_before_ready() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = plugin(dir.path());
+            let name = format!("svc-exit-now-{}", std::process::id());
+            let result = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from(name.as_str())),
+                        ("command", Value::List(vec![Value::from("false")])),
+                        ("ready", Value::from(1)),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(!result.ok);
+            assert_eq!(result.value, Value::None);
+            let raw = result.raw.as_dict().unwrap();
+            assert_eq!(get(raw, "running"), Some(&Value::from(false)));
+            let err = result.stderr.unwrap();
+            assert!(
+                err.contains("exited with code 1 before it was ready"),
+                "{err}"
+            );
+            assert!(!err.contains("vanished"), "{err}");
         }
 
         #[tokio::test]
