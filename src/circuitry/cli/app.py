@@ -693,12 +693,18 @@ def _resolve_resume_state(
     trust_document: bool,
     library_registry: LibraryRegistry,
     remote_library_source: bool,
-) -> tuple[dict[str, Any], list[str], Path | None]:
+) -> tuple[dict[str, Any], list[str], Path | None, dict[Path, bytes] | None]:
     """The saved state ``--resume`` continues from, the args to replay
-    alongside it, and the file it came from (``None`` for a run-id, which
-    has no single file of its own) — with both safety checks (#270)
-    already applied. The caller uses the third value as the default
-    ``--out`` when it didn't name one itself (#270 F10).
+    alongside it, the file it came from (``None`` for a run-id, which has
+    no single file of its own), and the file-read cache its own document-
+    change check already built (``None`` when ``--force`` skipped that
+    check, or it failed to even read the document) — with both safety
+    checks (#270) already applied. The caller uses the third value as the
+    default ``--out`` when it didn't name one itself (#270 F10), and the
+    fourth as ``RunRequest.file_cache`` (#405): the document this check
+    found unchanged is the exact same one the run then loads, digests and
+    compiles, so neither reads it, or any prompt file it references, a
+    second time.
 
     Three sources, picked by what the caller gave:
 
@@ -716,6 +722,7 @@ def _resolve_resume_state(
     """
     replay_env_vars: list[str] = []
     resume_source_path: Path | None = None
+    resume_file_cache: dict[Path, bytes] | None = None
     if state_arg is not None:
         try:
             loaded = _read_state_file(state_arg)
@@ -819,24 +826,33 @@ def _resolve_resume_state(
         try:
             from .library_sources import confinement_root_for_document
 
-            current_orch = load_orchestration_file(orch_path)
+            # This check's own load/digest cycle (#405): kept, below, as
+            # `resume_file_cache` and handed to the run it starts, so the
+            # document this check reads and the one that run loads,
+            # digests and compiles are the exact same read, never two.
+            candidate_file_cache: dict[Path, bytes] = {}
+            current_orch = load_orchestration_file(orch_path, file_cache=candidate_file_cache)
             document_dir = orch_path.resolve().parent
+            confinement_root = confinement_root_for_document(
+                orch_path,
+                document_dir,
+                library_registry=library_registry,
+                is_cache_path=library_registry.is_cache_path(orch_path),
+                remote_library_source=remote_library_source,
+            )
             current_hash = document_content_digest(
                 orch_path,
                 current_orch,
-                confinement_root=confinement_root_for_document(
-                    orch_path,
-                    document_dir,
-                    library_registry=library_registry,
-                    is_cache_path=library_registry.is_cache_path(orch_path),
-                    remote_library_source=remote_library_source,
-                ),
+                confinement_root=confinement_root,
+                file_cache=candidate_file_cache,
             )
+            resume_file_cache = candidate_file_cache
         except Exception:
             # Unreadable (vanished since the check above) or unparseable —
             # either way the run itself fails moments later with a sharper
             # error; a hash that only guards a *future* --resume shouldn't
-            # block this one.
+            # block this one. No cache to hand the run either, then: it
+            # builds its own fresh and discovers the same problem itself.
             current_hash = None
         if current_hash is not None and current_hash != recorded_hash:
             # A state saved before #407 recorded the old algorithm's hash
@@ -845,7 +861,15 @@ def _resolve_resume_state(
             # without --force. The document could vanish between the read
             # above and this one; that's a no-match, not a crash.
             try:
-                legacy_matches = _legacy_document_sha256(orch_path) == recorded_hash
+                legacy_matches = (
+                    _legacy_document_sha256(
+                        orch_path,
+                        current_orch,
+                        confinement_root=confinement_root,
+                        file_cache=candidate_file_cache,
+                    )
+                    == recorded_hash
+                )
             except OSError:
                 legacy_matches = False
             if not legacy_matches:
@@ -882,7 +906,7 @@ def _resolve_resume_state(
                 "-e to resume, or rerun from scratch."
             )
 
-    return loaded, replay_env_vars, resume_source_path
+    return loaded, replay_env_vars, resume_source_path, resume_file_cache
 
 
 def _do_validate(
@@ -1447,9 +1471,15 @@ def run_cmd(
     resumed_state: dict[str, Any] | None = None
     resume_replay_env_vars: list[str] = []
     resume_default_out: Path | None = None
+    resume_file_cache: dict[Path, bytes] | None = None
     if resume:
         try:
-            resumed_state, resume_replay_env_vars, resume_default_out = _resolve_resume_state(
+            (
+                resumed_state,
+                resume_replay_env_vars,
+                resume_default_out,
+                resume_file_cache,
+            ) = _resolve_resume_state(
                 resume=resume,
                 force=force,
                 state_arg=state,
@@ -1576,6 +1606,10 @@ def run_cmd(
         orchestration_path=orch_path,
         state_path=state if initial_state is None else None,
         initial_state=initial_state,
+        # `--resume`'s own change check already read this document once
+        # (#405); seeding this run with it means that read and this run's
+        # own are the same read, not two.
+        file_cache=resume_file_cache,
         out_path=out,
         dry_run=dry_run,
         validate_only=False,

@@ -259,12 +259,29 @@ fn resolve_prompt_file(
         )));
     }
 
-    let bytes = std::fs::read(&resolved).map_err(|err| {
+    // Shared with the consent/resume digest (#405): this is the only
+    // on-disk read this file gets in the whole load/consent/compile cycle
+    // it belongs to -- `crate::file_cache::read_cached`'s own doc comment.
+    let bytes = crate::file_cache::read_cached(&resolved).map_err(|err| {
         CompileError(format!(
             "{field}: 'file' {} could not be read: {err}",
             repr_str(&path_str)
         ))
     })?;
+
+    // The bytes actually used, not just the metadata check above: a cache
+    // hit's bytes came from an earlier read (the digest walk's own, say)
+    // that never checked this limit at all -- `core/prompt_files.py::
+    // resolve_prompt_file`'s own second check.
+    let len = bytes.len() as u64;
+    if len > MAX_PROMPT_FILE_BYTES {
+        return Err(CompileError(format!(
+            "{field}: 'file' {} is {len} bytes, over the {MAX_PROMPT_FILE_BYTES}-byte \
+             limit for a prompt file.",
+            repr_str(&path_str)
+        )));
+    }
+
     let text = match std::str::from_utf8(&bytes) {
         Ok(text) => text.to_string(),
         Err(_) => {

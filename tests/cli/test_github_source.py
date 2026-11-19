@@ -18,6 +18,7 @@ import socket
 import urllib.parse
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -31,6 +32,7 @@ from circuitry.cli.library_sources import (
     LibraryRegistry,
     LibrarySourceError,
 )
+from circuitry.cli.runtime_shim import RunRequest, run
 
 runner = CliRunner()
 
@@ -363,6 +365,75 @@ def test_refresh_updates_on_new_sha_and_prunes_the_old_tree(
     assert (tmp_path / "cache" / "hub" / SHA_TWO / "added.yml").exists()
     assert not (tmp_path / "cache" / "hub" / SHA_ONE).exists()
     assert "added" in {e.name for e in source.list_entries()}
+
+
+def test_prompt_file_through_a_github_ref_survives_a_refresh_to_a_new_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A document fetched from a `github` library source can carry a
+    `{file: ...}` prompt source alongside it in the same cached tree
+    (#396/#405) -- and a refresh to a new commit picks up a changed prompt
+    file's new text the same way it would the orchestration YAML's own.
+    """
+    # A referenced prompt file needs an orchestration-shaped suffix to be
+    # fetched at all -- a `github` source's own tree walk only syncs
+    # `*.yml`/`*.yaml` (`FOLDER_SUFFIXES`) and the manifest, same as a
+    # `folder` source's own listing; this is that filter, not anything
+    # #405 changes, so the prompt file below is named to pass it.
+    tree = {
+        "library/brief.yml": (
+            "prompts:\n  brief: {file: voice.yaml}\n"
+            "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
+        ),
+        "library/voice.yaml": "First commit's brief.",
+    }
+    fake = FakeGitHub(tree=tree).install(monkeypatch)
+    cfg = CircuitryConfig(
+        runtime={
+            "library": {
+                "sources": [
+                    {
+                        "type": "github",
+                        "name": "hub",
+                        "repo": REPO,
+                        "path": "library/",
+                        "cache_dir": str(tmp_path / "cache"),
+                    }
+                ]
+            }
+        }
+    )
+    LibraryRegistry.from_config(cfg).refresh(source="hub")
+
+    root = tmp_path / "root.yml"
+    root.write_text(
+        "effects:\n  - type: use\n    name: u\n    ref: hub:brief\n", encoding="utf-8"
+    )
+
+    def _run() -> Any:
+        return run(
+            RunRequest(
+                orchestration_path=root,
+                state_path=None,
+                out_path=None,
+                dry_run=False,
+                validate_only=False,
+                config=cfg,
+                adapter=MagicMock(),
+            )
+        )
+
+    first = _run()
+    assert first.ok, first.error
+    assert first.state["prime"]["u"]["y"]["value"] == "First commit's brief."
+
+    fake.sha = SHA_TWO
+    fake.tree["library/voice.yaml"] = "Second commit's brief."
+    LibraryRegistry.from_config(cfg).refresh(source="hub")
+
+    second = _run()
+    assert second.ok, second.error
+    assert second.state["prime"]["u"]["y"]["value"] == "Second commit's brief."
 
 
 def test_refresh_recovers_when_cache_tree_is_deleted(

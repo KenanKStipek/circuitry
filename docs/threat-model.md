@@ -494,8 +494,7 @@ probe, a download). Before the first run of a document that did not come
 from the user's own disk — a `cof run-library`/`run_shared_orchestration`
 asset, a remote (refreshable, e.g. `github`) library source run by bare
 name (`cof run hub:entry`), or any `use: ref:` child, reached from *any*
-document, trusted or not — `circuitry.cli.document_consent.enforce_consent`
-works out, statically,
+document, trusted or not — the capability gate works out, statically,
 every capability the compiled document and its reachable `use` children need,
 and gates it: an interactive `cof run`/`cof run-library` lists them and asks
 y/N; anything else (MCP, REST, CI, no TTY) refuses outright, naming
@@ -578,16 +577,37 @@ now also carries that run's own `remote_library_source` classification
 through the stash, closing a second hole (also #337) where a replay skipped
 the gate the original run applied.
 
+**The separate-read race (#405).** The digest for the whole-document
+gate, the `document_hash` a run stamps at `runtime.last_run`, `cof
+trust`'s own recorded digest, a `--resume` change check, and the
+declared-prompt/template text compilation actually uses used to each read
+the document and every referenced prompt file with their own, independent
+call to the filesystem. A file edited in the window between one of those
+reads and compilation's — fast, but not zero, especially for a
+long-running document, a remote filesystem, or a `use: ref:` child whose
+consent is checked well before it is ever dispatched — was compiled and
+run with content nobody was asked to approve. Each of those surfaces now
+owns a cache for its own one load/consent/compile cycle — never a cache
+shared *across* cycles, which would just move the race rather than close
+it (a `use` effect re-dispatched later, say, must still see whatever is
+on disk *then*, not a stale read from the first time it ran): the digest
+and the compiled tree use the same bytes in every cycle.
+Implementation: [`src/circuitry/core/prompt_files.py`](../src/circuitry/core/prompt_files.py),
+[`src/circuitry/core/prompt_compose.py`](../src/circuitry/core/prompt_compose.py),
+[`src/circuitry/core/compiler.py`](../src/circuitry/core/compiler.py).
+
 ### 10. Prompt files (`{file: <path>}`)
 
 A declared prompt, a `prompt`/`yield` effect's `template`, or a message's
 `content` can name a file instead of carrying its text inline (#396). The
 file is read when the document is loaded and compiled — before any effect
-runs. Capability consent (§9) runs before that compile step, but its own
-digest (`document_content_digest`) reads every prompt file the raw,
-uncompiled document names, independently of the later compile — so a
-document that can name an arbitrary path could otherwise read anything the
-host process can: credentials, another project's source, `/etc/passwd`.
+runs. Capability consent (§9) runs before that compile step and resolves
+and confines every referenced path itself, sharing the same one-read-per-
+cycle cache §9 gives both callers (#405 above) — so this is never a second
+filesystem read, only the confinement check running a second time, once
+there and once at compile. Without it, a document that can name an
+arbitrary path could otherwise read anything the host process can:
+credentials, another project's source, `/etc/passwd`.
 
 **Mitigation.** The path is a literal relative path (no `{{ }}` — a path
 built at render time can never reach this; it is read at compile time, from

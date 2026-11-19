@@ -41,7 +41,12 @@ pub fn document_content_digest(
     document: &Value,
     confinement_root: &Path,
 ) -> Result<String, CompileError> {
-    let document_bytes = std::fs::read(resolved_path).map_err(|err| {
+    // Shared with the actual compile step and the document loader (#405):
+    // `crate::file_cache::read_cached` is the one on-disk read this
+    // document's bytes get in the whole load/consent/compile cycle they
+    // belong to, while a cache is active on this thread -- see its own doc
+    // comment.
+    let document_bytes = crate::file_cache::read_cached(resolved_path).map_err(|err| {
         CompileError(format!("could not read {}: {err}", resolved_path.display()))
     })?;
 
@@ -83,7 +88,7 @@ fn add_prompt_files(
     }
 
     for prompt_file in paths {
-        let data = std::fs::read(&prompt_file)?;
+        let data = crate::file_cache::read_cached(&prompt_file)?;
         let label = relative_label(&document_dir, &prompt_file);
         hasher.update(label.as_bytes());
         hasher.update((data.len() as u64).to_be_bytes());
@@ -103,12 +108,17 @@ fn add_prompt_files(
 /// so a state file an older release wrote still resumes without
 /// `--force`. COMPATIBILITY FALLBACK ONLY, same as the Python function
 /// this ports -- remove both together.
+///
+/// Reads through [`crate::file_cache::read_cached`], same as
+/// [`document_content_digest`]: this fallback runs in the same
+/// load/digest cycle, on the same cache, so it never reads a byte this
+/// cycle's digest or compile step didn't already read.
 pub fn legacy_document_sha256(
     resolved_path: &Path,
     document: &Value,
     confinement_root: &Path,
 ) -> io::Result<String> {
-    let document_bytes = std::fs::read(resolved_path)?;
+    let document_bytes = crate::file_cache::read_cached(resolved_path)?;
     let mut hasher = Sha256::new();
     hasher.update(&document_bytes);
 
@@ -129,7 +139,7 @@ pub fn legacy_document_sha256(
                 // A file that fails to read is skipped, not fatal --
                 // `_legacy_document_sha256`'s own per-file `except
                 // OSError: continue`.
-                if let Ok(data) = std::fs::read(&prompt_file) {
+                if let Ok(data) = crate::file_cache::read_cached(&prompt_file) {
                     hasher.update(&data);
                 }
             }

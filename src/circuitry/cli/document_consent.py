@@ -159,7 +159,11 @@ class RefChildRequirement:
 
 
 def ref_child_requirements(
-    orch: dict[str, Any], *, root_path: Path | None, runtime: dict[str, Any] | None
+    orch: dict[str, Any],
+    *,
+    root_path: Path | None,
+    runtime: dict[str, Any] | None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> list[RefChildRequirement]:
     """Every ``use: ref:`` child statically reachable from *orch*.
 
@@ -168,6 +172,15 @@ def ref_child_requirements(
     edge, which gets its own :class:`RefChildRequirement` computed over its
     *own* whole reachable subtree (so a ref child that itself pulls in
     further children is still fully covered).
+
+    *file_cache*, when given, is this one pre-scan's own cache (#405): every
+    child this walk loads and every digest it hashes for one, across this
+    whole call, come from the same bytes. It is never carried into the
+    later dispatch that actually runs a consented ``ref:`` child --
+    ``core.use.UseRuntime`` builds its own cache for that, by design
+    (#405's own per-dispatch rule), and re-checks consent there too
+    (``core.use`` around its own capability-gate call) rather than trusting
+    this pre-scan's verdict unconditionally.
     """
     from ..core.library_ref import LibraryRefError, build_registry, resolve_ref
     from ..core.prompt_compose import document_content_digest
@@ -182,7 +195,7 @@ def ref_child_requirements(
         for kind, value in collect_use_refs(node):
             # A `ref:` edge is resolved through `resolve_ref` directly, not
             # the plain-Path `resolve_reference` helper, to also get the
-            # library pin's `cache_path` — the confinement root a `{file:
+            # library pin's `cache_path` -- the confinement root a `{file:
             # ...}` prompt source in a remote (github) ref child must stay
             # inside, exactly the rule `core.use.UseRuntime._confinement_root_for`
             # gives it at run time (#396); the digest the two must agree on
@@ -214,9 +227,9 @@ def ref_child_requirements(
                 continue
             seen.add(key)
             try:
-                child_orch = load_orchestration_file(resolved)
+                child_orch = load_orchestration_file(resolved, file_cache=file_cache)
             except Exception:
-                # Unreadable or malformed — the run's own load of this same
+                # Unreadable or malformed -- the run's own load of this same
                 # child (`UseRuntime._load_child_orch`) reports it properly,
                 # respecting that child's own `on_error`/`validate:`; this
                 # static pre-scan just has nothing to add from it.
@@ -227,7 +240,10 @@ def ref_child_requirements(
                         label=key,
                         path=resolved,
                         digest=document_content_digest(
-                            resolved, child_orch, confinement_root=confinement_root
+                            resolved,
+                            child_orch,
+                            confinement_root=confinement_root,
+                            file_cache=file_cache,
                         ),
                         required=required_capabilities(
                             child_orch, root_path=resolved, runtime=runtime
@@ -235,7 +251,7 @@ def ref_child_requirements(
                     )
                 )
                 continue
-            # A path: edge stays this document's own content — keep walking
+            # A path: edge stays this document's own content -- keep walking
             # through it for a ref: child nested further in.
             visit(child_orch, resolved.parent)
 
@@ -294,6 +310,7 @@ def enforce_consent(
     store_path: Path,
     allow_capabilities: frozenset[str] | None,
     prompt: ConsentPrompt | None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> frozenset[str] | None:
     """The capability consent gate for one run, called once before it starts.
 
@@ -303,6 +320,18 @@ def enforce_consent(
     path-run or plain library-name document) skips straight to the ``ref:``
     children, which are independently in scope regardless of the parent's
     own trust.
+
+    *file_cache*, when given, is this gate's own cache (#405): hashing the
+    document and every ``ref:`` child here all come from the same bytes,
+    across this one call -- and, for the document itself, the exact same
+    bytes the caller's own later ``compile_orchestration`` call then
+    compiles (the caller threads the identical dict through both). A
+    ``ref:`` child's own bytes, read here only to compute its digest, are
+    never reused anywhere else: ``compile_orchestration`` never recurses
+    into a ``ref:`` child at all (that happens only at the child's own
+    later dispatch), and ``core.use.UseRuntime`` builds its own cache for
+    that dispatch rather than reusing this one, re-checking consent there
+    too.
 
     Returns the capability ceiling to install for this run
     (:func:`circuitry.capability_gate.install_capability_ceiling`): the
@@ -320,7 +349,9 @@ def enforce_consent(
             # one whose YAML changed.
             from ..core.prompt_compose import document_content_digest
 
-            digest = document_content_digest(orchestration_path, orch)
+            digest = document_content_digest(
+                orchestration_path, orch, file_cache=file_cache
+            )
             ceiling = resolve_consent(
                 str(orchestration_path),
                 digest,
@@ -332,7 +363,9 @@ def enforce_consent(
         else:
             ceiling = frozenset()
 
-    for child in ref_child_requirements(orch, root_path=orchestration_path, runtime=runtime):
+    for child in ref_child_requirements(
+        orch, root_path=orchestration_path, runtime=runtime, file_cache=file_cache
+    ):
         if not child.required:
             continue
         resolve_consent(
