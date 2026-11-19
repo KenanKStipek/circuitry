@@ -2952,6 +2952,8 @@ mod imp {
             let value = start_result.value.as_dict().unwrap();
             assert_eq!(get(value, "running"), Some(&Value::from(true)));
             assert_eq!(get(value, "already_running"), Some(&Value::from(false)));
+            assert!(get(value, "namespace").is_none());
+            assert!(get(start_result.raw.as_dict().unwrap(), "namespace").is_none());
             let pgid = value_as_i64(get(value, "pgid").unwrap()).unwrap() as u32;
             assert!(group_exists(pgid));
 
@@ -2988,6 +2990,8 @@ mod imp {
                 .unwrap();
             let stop_value = stop_result.value.as_dict().unwrap();
             assert_eq!(get(stop_value, "stopped"), Some(&Value::from(true)));
+            assert!(get(stop_value, "namespace").is_none());
+            assert!(get(stop_result.raw.as_dict().unwrap(), "namespace").is_none());
             assert!(!group_exists(pgid));
         }
 
