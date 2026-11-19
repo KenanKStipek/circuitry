@@ -12,6 +12,7 @@ must never bypass.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -46,35 +47,42 @@ def _mock_adapter(response: str = "mock reply") -> MagicMock:
 
 
 def _count_reads(monkeypatch: pytest.MonkeyPatch, *names: str) -> dict[str, int]:
-    """Patches ``io.open`` and ``builtins.open`` to count file-opens by
+    """Patches ``Path.open`` and ``builtins.open`` to count file-opens by
     name, for every name in *names* -- every other file opens normally,
     uncounted.
 
-    ``Path.read_text``/``Path.read_bytes`` both open through
-    ``Path.open``, which calls ``io.open`` (the same function object
-    ``builtins.open`` starts out bound to, but a distinct binding once
-    either is reassigned) -- patching both bindings with one wrapper is
-    the one chokepoint that catches a read made through either
-    ``Path`` method or a bare ``open(path)`` call, without double-
-    counting a single open.
+    ``Path.read_text``/``Path.read_bytes`` open through ``Path.open`` on
+    every supported Python, while what ``Path.open`` itself calls differs
+    (``io.open`` at call time on 3.11+, an accessor bound at import time
+    on 3.10), so ``Path.open`` is the one chokepoint for both ``Path``
+    methods; a bare ``open(path)`` goes through ``builtins.open``.
+    ``io.open`` stays unpatched, so a ``Path`` read is never counted
+    twice.
     """
     import builtins
-    import io
 
     counts = dict.fromkeys(names, 0)
-    real_open = io.open
+    real_path_open = Path.open
+    real_builtin_open = builtins.open
 
-    def fake_open(file: object, *args: object, **kwargs: object) -> object:
+    def count(file: object) -> None:
         try:
             name = Path(file).name  # type: ignore[arg-type]
         except TypeError:
             name = None
         if name in counts:
             counts[name] += 1
-        return real_open(file, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(io, "open", fake_open)
-    monkeypatch.setattr(builtins, "open", fake_open)
+    def fake_path_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        count(self)
+        return real_path_open(self, *args, **kwargs)
+
+    def fake_builtin_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        count(file)
+        return real_builtin_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fake_path_open)
+    monkeypatch.setattr(builtins, "open", fake_builtin_open)
     return counts
 
 
