@@ -696,7 +696,7 @@ def test_composing_prompts_example_passes_the_wizards_own_validator() -> None:
     assert match, "COMPOSING PROMPTS no longer has a 'prompts:' example to extract"
     indent = match.group(1)
     snippet = "\n".join(
-        line[len(indent) :] if line.startswith(indent) else line
+        line.removeprefix(indent)
         for line in match.group(0).splitlines()
     )
 

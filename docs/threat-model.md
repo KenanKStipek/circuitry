@@ -578,16 +578,35 @@ now also carries that run's own `remote_library_source` classification
 through the stash, closing a second hole (also #337) where a replay skipped
 the gate the original run applied.
 
+**The separate-read race (#405).** The digest `enforce_consent` hashes for
+the whole-document gate, the `document_hash` a run stamps at
+`runtime.last_run`, and the declared-prompt/template text compilation
+actually uses used to each read the document and every referenced prompt
+file with their own, independent call to the filesystem. A file edited in
+the window between the gate's own read and compilation's — fast, but not
+zero, especially for a long-running document, a remote filesystem, or a
+`use: ref:` child whose consent is checked well before it is ever
+dispatched — was compiled and run with content nobody was asked to
+approve. Every one of those callers now shares one file-read cache for the
+whole load/consent/compile cycle (`circuitry.core.prompt_files.
+FileReadCache`): each file is read from disk at most once, and the digest
+and the compiled effect tree are built from the exact same bytes.
+Implementation: [`src/circuitry/core/prompt_files.py`](../src/circuitry/core/prompt_files.py),
+[`src/circuitry/core/prompt_compose.py`](../src/circuitry/core/prompt_compose.py),
+[`src/circuitry/core/compiler.py`](../src/circuitry/core/compiler.py).
+
 ### 10. Prompt files (`{file: <path>}`)
 
 A declared prompt, a `prompt`/`yield` effect's `template`, or a message's
 `content` can name a file instead of carrying its text inline (#396). The
 file is read when the document is loaded and compiled — before any effect
-runs. Capability consent (§9) runs before that compile step, but its own
-digest (`document_content_digest`) reads every prompt file the raw,
-uncompiled document names, independently of the later compile — so a
-document that can name an arbitrary path could otherwise read anything the
-host process can: credentials, another project's source, `/etc/passwd`.
+runs. Capability consent (§9) runs before that compile step, and resolves
+and confines every referenced path itself (sharing the file-read cache §9
+now gives every caller in one load/consent/compile cycle with compilation,
+not a second filesystem read, but a path resolved and checked on its own —
+see #405 above) — so a document that can name an arbitrary path could
+otherwise read anything the host process can: credentials, another
+project's source, `/etc/passwd`.
 
 **Mitigation.** The path is a literal relative path (no `{{ }}` — a path
 built at render time can never reach this; it is read at compile time, from
