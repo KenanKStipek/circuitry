@@ -26,8 +26,11 @@ const NAME_MERGE_RUNTIME_KEYS: [&str; 1] = ["secrets"];
 /// `_CEILING_LIST_KEYS`: `(top_key, name, leaf_key)` triples the merge
 /// re-narrows to a host/document intersection after the ordinary merge,
 /// rather than letting either side simply replace the other's list.
-/// `service` gets the same ceiling as `shell` (#381).
-const CEILING_LIST_KEYS: [(&str, &str, &str); 2] = [
+/// `service` gets the same ceiling as `shell` (#381). `pub(crate)` so
+/// [`crate::effective_settings`]'s own ceiling notice reads the same
+/// list the merge itself uses, rather than keeping a second copy that
+/// could drift out of step with it.
+pub(crate) const CEILING_LIST_KEYS: [(&str, &str, &str); 2] = [
     ("plugins", "shell", "allowed_commands"),
     ("plugins", "service", "allowed_commands"),
 ];
