@@ -30,6 +30,15 @@ secret. Public repositories work with no token at all.
 
 Fetching uses the REST contents API over stdlib `urllib`, matching the
 convention set by `plugins/http.py` (no `requests` dependency).
+
+`refresh()` walks the subtree for `*.yml`/`*.yaml` orchestrations and the
+manifest, then fetches every prompt file one of those documents names with
+a `{file: <path>}` — `template`, `messages[].content`, declared `prompts:`
+(#837) — even when its own extension isn't `.yml`/`.yaml`, so a document
+that names, say, `voice.md` works the same way from a `github` source as it
+already does from a `folder` one. A fetched prompt file is never listed as
+a library entry — only `*.yml`/`*.yaml` files are. A reference outside the
+source's own `path` is refused rather than fetched.
 """
 
 from __future__ import annotations
@@ -38,13 +47,17 @@ import base64
 import http.client
 import json
 import os
+import posixpath
 import shutil
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import yaml  # type: ignore[import-untyped]
 
 from .. import http_conventions
 from .library_sources import (
@@ -274,16 +287,20 @@ class GitHubSource:
     def _download_subtree(self, sha: str) -> dict[str, bytes]:
         """Walk the contents API from `path`, returning `{relpath: bytes}`."""
         files: dict[str, bytes] = {}
-        self._walk(self.path, sha=sha, files=files)
+        item_paths: dict[str, str] = {}
+        self._walk(self.path, sha=sha, files=files, item_paths=item_paths)
         if not files:
             where = f"{self.repo}@{sha[:7]}" + (f":{self.path}" if self.path else "")
             raise LibraryFetchError(
                 f"Library source {self.name!r}: no orchestrations (*.yml / *.yaml) "
                 f"found under {where}. Check the source's 'path'."
             )
+        self._fetch_referenced_prompt_files(sha=sha, files=files, item_paths=item_paths)
         return files
 
-    def _walk(self, subpath: str, *, sha: str, files: dict[str, bytes]) -> None:
+    def _walk(
+        self, subpath: str, *, sha: str, files: dict[str, bytes], item_paths: dict[str, str]
+    ) -> None:
         listing = self._contents(subpath, sha=sha)
         if isinstance(listing, dict):
             # The contents API returns an object (not an array) when `path`
@@ -291,7 +308,9 @@ class GitHubSource:
             item = listing
             name = str(item.get("name") or "")
             if _is_wanted(name):
-                files[_safe_relative_name(name)] = self._file_bytes(item, sha=sha)
+                rel = _safe_relative_name(name)
+                files[rel] = self._file_bytes(item, sha=sha)
+                item_paths[rel] = str(item.get("path") or subpath)
             return
 
         for item in listing:
@@ -300,10 +319,90 @@ class GitHubSource:
             item_type = str(item.get("type") or "")
             item_path = str(item.get("path") or "")
             if item_type == "dir":
-                self._walk(item_path, sha=sha, files=files)
+                self._walk(item_path, sha=sha, files=files, item_paths=item_paths)
             elif item_type == "file" and _is_wanted(str(item.get("name") or "")):
                 rel = _relative_to(self.path, item_path)
                 files[rel] = self._file_bytes(item, sha=sha)
+                item_paths[rel] = item_path
+
+    def _fetch_referenced_prompt_files(
+        self, *, sha: str, files: dict[str, bytes], item_paths: dict[str, str]
+    ) -> None:
+        """Fetch every ``{file: <path>}`` prompt source a cached document
+        names — ``template``, ``messages[].content`` and declared
+        ``prompts:`` — that isn't already an orchestration file the walk
+        above synced (#837). Uses the exact same walk
+        ``core.prompt_compose.document_content_digest`` hashes
+        (:func:`circuitry.core.prompt_compose.iter_referenced_prompt_file_refs`),
+        so the two can't drift.
+
+        Confined to the source's own tree, exactly like a local document's
+        own ``{file: ...}`` references: a relative path is resolved against
+        the *referencing* document's own directory inside the cached tree,
+        via the identical confinement check a run applies
+        (``core.prompt_files.resolve_prompt_file_path``), performed here
+        against an empty scratch directory that mirrors the cache's layout
+        — no actual disk I/O is needed to validate a path that doesn't
+        exist yet. A reference that would escape the tree is refused, with
+        that check's own message, rather than silently skipped or fetched
+        anyway.
+        """
+        from ..core.prompt_compose import iter_referenced_prompt_file_refs
+        from ..core.prompt_files import (
+            MAX_PROMPT_FILE_BYTES,
+            PromptFileError,
+            resolve_prompt_file_path,
+        )
+
+        yaml_files = [rel for rel in list(files) if rel.endswith(FOLDER_SUFFIXES)]
+        if not yaml_files:
+            return
+
+        with tempfile.TemporaryDirectory(prefix="circuitry-github-source-") as tmp:
+            root = Path(tmp).resolve(strict=False)
+            for rel in yaml_files:
+                try:
+                    orch = yaml.safe_load(files[rel].decode("utf-8"))
+                except (UnicodeDecodeError, yaml.YAMLError):
+                    continue
+                if not isinstance(orch, dict):
+                    continue
+
+                document_dir = root / Path(rel).parent
+                doc_repo_dir = posixpath.dirname(item_paths[rel])
+                for ref in iter_referenced_prompt_file_refs(orch):
+                    try:
+                        resolved = resolve_prompt_file_path(
+                            ref, document_dir=document_dir, confinement_root=root, field="file"
+                        )
+                    except PromptFileError as exc:
+                        raise LibraryFetchError(
+                            f"Library source {self.name!r}: {rel} names a prompt {exc}"
+                        ) from exc
+                    prompt_rel = resolved.relative_to(root).as_posix()
+                    if prompt_rel in files:
+                        continue
+
+                    item_path = posixpath.normpath(posixpath.join(doc_repo_dir, ref))
+                    blob = self._fetch_prompt_blob(item_path, sha=sha)
+                    if len(blob) > MAX_PROMPT_FILE_BYTES:
+                        raise LibraryFetchError(
+                            f"Library source {self.name!r}: prompt file {prompt_rel!r} is "
+                            f"{len(blob)} bytes, over the {MAX_PROMPT_FILE_BYTES}-byte limit "
+                            "for a prompt file."
+                        )
+                    files[prompt_rel] = blob
+                    item_paths[prompt_rel] = item_path
+
+    def _fetch_prompt_blob(self, item_path: str, *, sha: str) -> bytes:
+        """One prompt file's bytes, fetched by its exact repository path."""
+        payload = self._contents(item_path, sha=sha)
+        if not isinstance(payload, dict):
+            raise LibraryFetchError(
+                f"Library source {self.name!r}: prompt file {item_path!r} is a "
+                f"directory, not a file, at {self.repo}@{sha[:7]}."
+            )
+        return self._file_bytes(payload, sha=sha)
 
     def _contents(self, subpath: str, *, sha: str) -> Any:
         suffix = f"/{_quote_path(subpath)}" if subpath else ""

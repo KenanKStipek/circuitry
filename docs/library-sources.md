@@ -118,8 +118,15 @@ implicit fetch, so a run can never stall on a network call or silently pick up
 a different version of an orchestration than the one you listed.
 
 Refresh resolves `ref` → commit SHA and downloads the subtree's `*.yml` /
-`*.yaml` files (plus an optional `manifest.json`) through the REST contents API
-into:
+`*.yaml` files (plus an optional `manifest.json`) through the REST contents API,
+then fetches every prompt file one of those documents names with a
+`{file: <path>}` — a `template`, a `messages[].content`, a declared
+`prompts:` entry — even when its own extension isn't `.yml`/`.yaml` (a
+`voice.md` alongside the orchestration that reads it, say). A reference
+outside the source's own `path` is refused rather than fetched, the same
+confinement rule a local document's `{file: ...}` applies. A fetched prompt
+file is never listed as a library entry; only `*.yml`/`*.yaml` files are.
+Everything lands into:
 
 ```
 ~/.cache/circuitry/library/<source>/<sha>/…

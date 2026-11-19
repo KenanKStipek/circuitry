@@ -372,20 +372,17 @@ def test_prompt_file_through_a_github_ref_survives_a_refresh_to_a_new_commit(
 ) -> None:
     """A document fetched from a `github` library source can carry a
     `{file: ...}` prompt source alongside it in the same cached tree
-    (#396/#405) -- and a refresh to a new commit picks up a changed prompt
-    file's new text the same way it would the orchestration YAML's own.
+    (#396/#405/#837) -- a prompt file whose extension isn't `.yml`/`.yaml`
+    is fetched too -- and a refresh to a new commit picks up a changed
+    prompt file's new text the same way it would the orchestration YAML's
+    own.
     """
-    # A referenced prompt file needs an orchestration-shaped suffix to be
-    # fetched at all -- a `github` source's own tree walk only syncs
-    # `*.yml`/`*.yaml` (`FOLDER_SUFFIXES`) and the manifest, same as a
-    # `folder` source's own listing; this is that filter, not anything
-    # #405 changes, so the prompt file below is named to pass it.
     tree = {
         "library/brief.yml": (
-            "prompts:\n  brief: {file: voice.yaml}\n"
+            "prompts:\n  brief: {file: voice.md}\n"
             "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
         ),
-        "library/voice.yaml": "First commit's brief.",
+        "library/voice.md": "First commit's brief.",
     }
     fake = FakeGitHub(tree=tree).install(monkeypatch)
     cfg = CircuitryConfig(
@@ -428,12 +425,98 @@ def test_prompt_file_through_a_github_ref_survives_a_refresh_to_a_new_commit(
     assert first.state["prime"]["u"]["y"]["value"] == "First commit's brief."
 
     fake.sha = SHA_TWO
-    fake.tree["library/voice.yaml"] = "Second commit's brief."
+    fake.tree["library/voice.md"] = "Second commit's brief."
     LibraryRegistry.from_config(cfg).refresh(source="hub")
 
     second = _run()
     assert second.ok, second.error
     assert second.state["prime"]["u"]["y"]["value"] == "Second commit's brief."
+
+
+def test_a_fetched_prompt_file_is_not_listed_as_a_library_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = {
+        "library/brief.yml": (
+            "prompts:\n  brief: {file: voice.md}\n"
+            "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
+        ),
+        "library/voice.md": "Be warm.",
+    }
+    FakeGitHub(tree=tree).install(monkeypatch)
+    source = _source(tmp_path)
+    source.refresh()
+
+    assert (tmp_path / "cache" / "hub" / SHA_ONE / "voice.md").read_text("utf-8") == "Be warm."
+    assert [e.name for e in source.list_entries()] == ["brief"]
+
+
+def test_refresh_refuses_a_prompt_file_reference_that_escapes_the_source_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = {
+        "library/brief.yml": (
+            "prompts:\n  brief: {file: ../../etc/passwd}\n"
+            "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
+        ),
+    }
+    FakeGitHub(tree=tree).install(monkeypatch)
+
+    with pytest.raises(LibraryFetchError, match="outside the project"):
+        _source(tmp_path).refresh()
+
+
+def test_refresh_asks_for_consent_again_after_a_referenced_prompt_file_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Capability consent is recorded by a document's content digest, which
+    already covers every prompt file it names (#396) -- so a `github`
+    source's own refresh, which re-fetches a changed prompt file, makes a
+    `ref:` child relying on it ask again, the same as an edited document on
+    local disk would.
+    """
+    from circuitry.cli.document_consent import ref_child_requirements
+
+    tree = {
+        "library/brief.yml": (
+            "prompts:\n  brief: {file: voice.md}\n"
+            "effects:\n  - type: tool\n    name: t\n    provider: shell\n"
+        ),
+        "library/voice.md": "First commit's brief.",
+    }
+    fake = FakeGitHub(tree=tree).install(monkeypatch)
+    runtime = {
+        "library": {
+            "sources": [
+                {
+                    "type": "github",
+                    "name": "hub",
+                    "repo": REPO,
+                    "path": "library/",
+                    "cache_dir": str(tmp_path / "cache"),
+                }
+            ]
+        }
+    }
+    LibraryRegistry.from_runtime(runtime).refresh(source="hub")
+
+    root_path = tmp_path / "root.yml"
+    root_path.write_text(
+        "effects:\n  - type: use\n    name: u\n    ref: hub:brief\n", encoding="utf-8"
+    )
+    root = {"effects": [{"type": "use", "name": "u", "ref": "hub:brief"}]}
+
+    reqs = ref_child_requirements(root, root_path=root_path, runtime=runtime)
+    assert len(reqs) == 1
+    assert reqs[0].required == {"shell"}
+    first_digest = reqs[0].digest
+
+    fake.sha = SHA_TWO
+    fake.tree["library/voice.md"] = "Second commit's brief."
+    LibraryRegistry.from_runtime(runtime).refresh(source="hub")
+
+    reqs_after = ref_child_requirements(root, root_path=root_path, runtime=runtime)
+    assert reqs_after[0].digest != first_digest
 
 
 def test_refresh_recovers_when_cache_tree_is_deleted(
