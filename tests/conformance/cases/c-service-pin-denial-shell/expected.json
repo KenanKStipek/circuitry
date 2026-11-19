@@ -1,0 +1,3 @@
+{
+  "error": "prime.result: service: shell: true needs 'sh' in the host's runtime.plugins.service.allowed_commands pin ['python3']."
+}

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #381",
+  "description": "A host-level `runtime.plugins.service.allowed_commands` pin refuses an argv command whose `command[0]` is not in it, before anything happens: no state directory, no port claim, no process. The denial names the setting and the pin.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}
