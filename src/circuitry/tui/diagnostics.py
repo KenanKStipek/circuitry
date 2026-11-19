@@ -505,15 +505,27 @@ def validate_report(
         from ..core.prompt_files import default_project_root
 
         _document_dir = path.resolve().parent
-        compile_orchestration(
+        _confinement_root = default_project_root(_document_dir)
+        _root_def = compile_orchestration(
             orch=orch,
             root_name="prime",
             document_dir=_document_dir,
-            confinement_root=default_project_root(_document_dir),
+            confinement_root=_confinement_root,
             trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
         )
     except Exception as exc:
         issues.append(ValidationIssue("compile", str(exc)))
+    else:
+        from ..core.prompt_compose import tree_sibling_warnings
+
+        warnings = warnings + tuple(
+            tree_sibling_warnings(
+                orch,
+                document_dir=_document_dir,
+                confinement_root=_confinement_root,
+                declared=_root_def.prompts,
+            )
+        )
 
     try:
         cycle = detect_cycles(

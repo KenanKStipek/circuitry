@@ -245,6 +245,22 @@ effects:
 
 `yield` is the same idea as `prompt` with no model call — a template rendered once and stored, for building a value you want to reuse rather than ask a model for. Unlike `inputs:`, this never crosses a `use` boundary: a child document sees only its own declared prompts. See [Prompt composition](../orchestration-reference.md#prompt-composition) in the reference for the full rule, including prompt files (`{file: <path>}`) for a passage worth keeping in its own file.
 
+**A `{{> name}}` naming a `flow: tree` sibling has no guaranteed order.** Tree children dispatch concurrently, so a reference from one to another renders empty whenever the named one has not finished yet — `cof check` warns, naming the reference and the dynamic they share:
+
+```yaml
+# ⚠ validates with a warning — draft and summary are flow: tree siblings
+flow: tree
+effects:
+  - type: yield
+    name: draft
+    template: "A plain draft of the announcement."
+  - type: yield
+    name: summary
+    template: "One line: {{> draft}}"
+```
+
+The fix is the same as any other ordering problem: move `summary` after `draft` in a `flow: chain` dynamic (the default), or reference something that already finished in an *enclosing* chain — never a sibling (or anything nested under one) inside the same tree. If that chain dynamic has a name, the reference has to become dotted too (`{{> that_dynamic.draft}}`) — a named dynamic's own children are never bare-visible, even to a sibling inside the very same dynamic; only an unnamed one leaves them reachable bare, the way they are at the document's own top level above.
+
 ## Anti-patterns
 
 **Passing state by reaching.** A `ref` pointing at a state path, or a child template that expects `{{prime.<parent_effect>.value}}`. The only door is `inputs:`.

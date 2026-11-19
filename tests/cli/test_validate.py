@@ -13,6 +13,27 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
     return path
 
 
+def test_validate_warns_about_a_flow_tree_sibling_reference(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "tree_sibling.yml",
+        """
+flow: tree
+effects:
+  - type: yield
+    name: a
+    template: "hello"
+  - type: yield
+    name: b
+    template: "{{> a}}"
+""".strip()
+        + "\n",
+    )
+    result = validate(path)
+    assert result["ok"] is True
+    assert any("flow: tree" in warning for warning in result["warnings"])
+
+
 def test_validate_ok_for_valid_orchestration(tmp_path: Path) -> None:
     path = _write(
         tmp_path,
