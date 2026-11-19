@@ -11,7 +11,6 @@ must never bypass.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -48,7 +47,7 @@ def _mock_adapter(response: str = "mock reply") -> MagicMock:
 def _count_reads(monkeypatch: pytest.MonkeyPatch, *names: str) -> dict[str, int]:
     """Patches ``Path.read_bytes`` to count calls by file name, for every
     name in *names* -- every other file reads normally, uncounted."""
-    counts = {name: 0 for name in names}
+    counts = dict.fromkeys(names, 0)
     real_read_bytes = Path.read_bytes
 
     def fake_read_bytes(self: Path) -> bytes:
