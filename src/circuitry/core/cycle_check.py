@@ -122,7 +122,7 @@ def resolve_reference(
     return library_lookup(value)
 
 
-def load_orch(path: Path) -> dict[str, Any]:
+def load_orch(path: Path, *, file_cache: dict[Path, bytes] | None = None) -> dict[str, Any]:
     """Parse an orchestration file, treating unreadable content as empty.
 
     Deliberately `yaml.safe_load`, not the run's own loader -- a `use`
@@ -131,15 +131,24 @@ def load_orch(path: Path) -> dict[str, Any]:
     one (#415); the cycle check reads ahead of that rejection, last-value-
     wins like plain YAML, rather than let a document hide a cycle behind a
     parse error the run hasn't reached yet.
+
+    *file_cache*, when given, is `cof check`'s own cache (#405): the same
+    bytes a caller sharing it elsewhere already read for this path, not a
+    second read.
     """
+    from .prompt_files import read_file_cached
+
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        raw = read_file_cached(path, file_cache).decode("utf-8")
+        data = yaml.safe_load(raw.replace("\r\n", "\n").replace("\r", "\n"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def _load_path_child_orch(path: Path) -> dict[str, Any]:
+def _load_path_child_orch(
+    path: Path, *, file_cache: dict[Path, bytes] | None = None
+) -> dict[str, Any]:
     """Parse a `use: path:`/`orchestration:` child the way the run loads it
     (`cli.orchestration_loader.load_orchestration_file`, which also handles
     `.json`/`.toon`), for :func:`iter_use_path_children` -- unlike
@@ -149,11 +158,14 @@ def _load_path_child_orch(path: Path) -> dict[str, Any]:
     support, and its duplicate-key rejection, matters more here than
     tolerating what the run would refuse: a child the run can't load names
     no secrets either, so it's skipped exactly like an unresolvable path.
+
+    *file_cache*, when given, is `cof check`'s own cache (#405), shared the
+    same way :func:`load_orch` shares it.
     """
     from ..cli.orchestration_loader import load_orchestration_file
 
     try:
-        data = load_orchestration_file(path)
+        data = load_orchestration_file(path, file_cache=file_cache)
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
@@ -224,6 +236,7 @@ def iter_use_path_children(
     *,
     root_path: Path | None = None,
     runtime: dict[str, Any] | None = None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> list[tuple[str, dict[str, Any], Path | None]]:
     """Every orchestration reachable from root_orch by following only
     `path:`/legacy `orchestration:` `use` edges, recursively.
@@ -265,7 +278,7 @@ def iter_use_path_children(
             if resolved is None or str(resolved) in seen:
                 continue
             seen.add(str(resolved))
-            child = _load_path_child_orch(resolved)
+            child = _load_path_child_orch(resolved, file_cache=file_cache)
             out.append((str(resolved), child, resolved.parent))
             visit(child, resolved.parent)
 
@@ -362,6 +375,7 @@ def check_use_path_children(
     trusted: bool = False,
     runtime: dict[str, Any] | None = None,
     known_groups: frozenset[str] = frozenset(),
+    file_cache: dict[Path, bytes] | None = None,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Every `use: path:`/legacy `orchestration:` child of *root_orch*,
     recursively, compiled the way a run of the root would compile it --
@@ -418,6 +432,12 @@ def check_use_path_children(
     own cached tree (``lib.cache_path``) rather than the project
     containing the cache -- the same boundary
     `UseRuntime._confinement_root_for` gives a remote-pinned child.
+
+    *file_cache*, when given, is `cof check`'s own cache (#405): a child's
+    bytes, and any `{file: ...}` prompt source it declares, are read from
+    disk at most once across every one of this walk's (up to four) visits
+    to it, and shared with :func:`detect_cycles`'/:func:`iter_use_path_
+    children`'s own reads of the same path in the same check.
 
     The library registry (only ever needed for that legacy fallback) is
     built lazily, on the first child that actually needs it -- building
@@ -546,7 +566,7 @@ def check_use_path_children(
             seen.add(seen_key)
 
             try:
-                child_orch = load_orchestration_file(resolved)
+                child_orch = load_orchestration_file(resolved, file_cache=file_cache)
             except Exception as exc:
                 report(effect_tolerant, key, str(exc))
                 continue
@@ -567,6 +587,7 @@ def check_use_path_children(
             child_document_dir = resolved.parent
             try:
                 child_def = compile_orchestration(
+                    file_cache=file_cache,
                     orch=child_orch,
                     root_name="prime",
                     document_dir=child_document_dir,
@@ -607,6 +628,7 @@ def detect_cycles(
     *,
     root_path: Path | None = None,
     runtime: dict[str, Any] | None = None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> list[str] | None:
     """Walk the static `use:` graph from root_orch.
 
@@ -617,6 +639,10 @@ def detect_cycles(
     used both as a node identity for the root and to scope parent-relative paths.
     `runtime` is the resolved runtime config; its `library.sources` decide which
     sources `ref:` edges may traverse (curation-only when omitted).
+
+    *file_cache*, when given, is `cof check`'s/the run's own cache (#405):
+    a `path:` child this walk reads shares it with the other reads of the
+    same cycle, rather than reading it again.
     """
     from .library_ref import build_registry
 
@@ -626,7 +652,7 @@ def detect_cycles(
     def load(path: Path) -> dict[str, Any]:
         key = str(path)
         if key not in cache:
-            cache[key] = load_orch(path)
+            cache[key] = load_orch(path, file_cache=file_cache)
         return cache[key]
 
     # Three-color DFS: 0=unvisited, 1=on-stack, 2=done.

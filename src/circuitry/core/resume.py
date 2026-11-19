@@ -28,6 +28,7 @@ saved node took when its condition selects it again (#573). See
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -41,7 +42,13 @@ ResumeMode = Literal["continue", "restart"]
 RESUME_MODES: tuple[ResumeMode, ...] = ("continue", "restart")
 
 
-def _legacy_document_sha256(path: Path) -> str:
+def _legacy_document_sha256(
+    path: Path,
+    orch: Mapping[str, Any] | None = None,
+    *,
+    confinement_root: Path | None = None,
+    file_cache: dict[Path, bytes] | None = None,
+) -> str:
     """The pre-#407 `document_hash` algorithm: *path*'s own bytes, then
     every referenced prompt file's bytes (sorted, no path label, no
     length) — every release before #407 wrote this to
@@ -54,31 +61,55 @@ def _legacy_document_sha256(path: Path) -> str:
     release still resumes without `--force`. COMPATIBILITY FALLBACK ONLY:
     keep this, and the fallback call, through at least the first tagged
     release after this one, then remove both.
+
+    *orch*, *confinement_root* and *file_cache*, when given, are the same
+    already-parsed document and load/digest cycle's cache the caller's own
+    `document_content_digest` call just used (#405) — this fallback reads
+    the exact same bytes that call did, never a second, possibly
+    different, read of the document or its prompt files. With neither
+    given (a standalone call, e.g. a test building a fixture hash), it
+    parses *path* itself, with no cache.
     """
+    from .prompt_files import default_project_root, read_file_cached
+
     hasher = hashlib.sha256()
-    hasher.update(path.read_bytes())
-    for prompt_file in sorted(set(_referenced_prompt_files(path))):
+    hasher.update(read_file_cached(path, file_cache))
+    document_dir = path.resolve().parent
+    root = (
+        confinement_root
+        if confinement_root is not None
+        else default_project_root(document_dir)
+    )
+    for prompt_file in sorted(
+        set(_referenced_prompt_files(path, orch, document_dir=document_dir, confinement_root=root))
+    ):
         try:
-            hasher.update(prompt_file.read_bytes())
+            hasher.update(read_file_cached(prompt_file, file_cache))
         except OSError:
             continue
     return hasher.hexdigest()
 
 
-def _referenced_prompt_files(path: Path) -> list[Path]:
+def _referenced_prompt_files(
+    path: Path,
+    orch: Mapping[str, Any] | None,
+    *,
+    document_dir: Path,
+    confinement_root: Path,
+) -> list[Path]:
     try:
         from .prompt_compose import referenced_prompt_file_paths
-        from .prompt_files import default_project_root
         from .yaml_load import load_yaml
 
-        orch = load_yaml(path.read_text(encoding="utf-8"))
+        if orch is None:
+            parsed = load_yaml(path.read_text(encoding="utf-8"))
+            orch = parsed if isinstance(parsed, dict) else None
         if not isinstance(orch, dict):
             return []
-        document_dir = path.resolve().parent
         return referenced_prompt_file_paths(
             orch,
             document_dir=document_dir,
-            confinement_root=default_project_root(document_dir),
+            confinement_root=confinement_root,
         )
     except Exception:
         return []

@@ -173,13 +173,14 @@ def ref_child_requirements(
     *own* whole reachable subtree (so a ref child that itself pulls in
     further children is still fully covered).
 
-    *file_cache*, when given, is every child's single on-disk read for its
-    whole load/consent/compile cycle (#405): the caller's own
-    ``runtime_config`` dict's own cache, when passed through here, is the
-    very one ``core.use.UseRuntime`` reads a ref child through later at
-    dispatch, so this pre-scan's own read of it is never repeated once the
-    child actually runs -- its compile step sees the exact bytes this
-    digest hashed, not a second, possibly different, read.
+    *file_cache*, when given, is this one pre-scan's own cache (#405): every
+    child this walk loads and every digest it hashes for one, across this
+    whole call, come from the same bytes. It is never carried into the
+    later dispatch that actually runs a consented ``ref:`` child --
+    ``core.use.UseRuntime`` builds its own cache for that, by design
+    (#405's own per-dispatch rule), and re-checks consent there too
+    (``core.use`` around its own capability-gate call) rather than trusting
+    this pre-scan's verdict unconditionally.
     """
     from ..core.library_ref import LibraryRefError, build_registry, resolve_ref
     from ..core.prompt_compose import document_content_digest
@@ -320,13 +321,17 @@ def enforce_consent(
     children, which are independently in scope regardless of the parent's
     own trust.
 
-    *file_cache*, when given, is this document's (and every ``ref:``
-    child's) single on-disk read for its whole load/consent/compile cycle
-    (#405): the caller's own ``runtime_config``-carried cache, threaded
-    through here, is exactly the one the caller's later
-    ``compile_orchestration``/``core.use.UseRuntime`` reads through, so
-    nothing this gate hashes is ever read from disk a second time once it
-    has decided.
+    *file_cache*, when given, is this gate's own cache (#405): hashing the
+    document and every ``ref:`` child here all come from the same bytes,
+    across this one call -- and, for the document itself, the exact same
+    bytes the caller's own later ``compile_orchestration`` call then
+    compiles (the caller threads the identical dict through both). A
+    ``ref:`` child's own bytes, read here only to compute its digest, are
+    never reused anywhere else: ``compile_orchestration`` never recurses
+    into a ``ref:`` child at all (that happens only at the child's own
+    later dispatch), and ``core.use.UseRuntime`` builds its own cache for
+    that dispatch rather than reusing this one, re-checking consent there
+    too.
 
     Returns the capability ceiling to install for this run
     (:func:`circuitry.capability_gate.install_capability_ceiling`): the

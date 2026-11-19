@@ -987,7 +987,10 @@ def run(req: RunRequest) -> RunResult:
         from ..core.cycle_check import detect_cycles
 
         cycle = detect_cycles(
-            orch, root_path=req.orchestration_path, runtime=effective.runtime
+            orch,
+            root_path=req.orchestration_path,
+            runtime=effective.runtime,
+            file_cache=file_cache,
         )
         if cycle is not None:
             raise ValueError(f"Cycle: {' → '.join(cycle)}")
@@ -1103,9 +1106,13 @@ def run(req: RunRequest) -> RunResult:
                 req.config,
                 skip_adapter_check=req.adapter is not None,
                 runtime=preflight_runtime,
+                file_cache=file_cache,
             )
             hard_results, soft_results = classify_preflight_results(
-                req.orchestration_path, preflight_results, preflight_runtime
+                req.orchestration_path,
+                preflight_results,
+                preflight_runtime,
+                file_cache=file_cache,
             )
             preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
@@ -1620,6 +1627,7 @@ def _use_path_child_check_errors(
     trusted: bool,
     runtime: dict[str, Any] | None,
     known_groups: frozenset[str] = frozenset(),
+    file_cache: dict[Path, bytes] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Every `use: path:`/legacy `orchestration:` child of *orch* that fails
     to resolve, parse, validate or compile, recursively (#832), as one
@@ -1630,6 +1638,9 @@ def _use_path_child_check_errors(
     ``(errors, warnings)`` -- a failure whose own `use` effect tolerates it
     (`on_error: skip`/`continue`) lands in *warnings* instead, the same way
     a soft adapter dependency already does (`classify_preflight_results`).
+
+    *file_cache*, when given, is `cof check`'s own cache (#405), passed
+    straight through to :func:`check_use_path_children`.
     """
     from ..core.cycle_check import check_use_path_children
 
@@ -1640,6 +1651,7 @@ def _use_path_child_check_errors(
         trusted=trusted,
         runtime=runtime,
         known_groups=known_groups,
+        file_cache=file_cache,
     )
 
     def render(pairs: list[tuple[str, str]]) -> list[str]:
@@ -1656,6 +1668,7 @@ def _use_path_child_secrets(
     orchestration_path: Path,
     trusted: bool,
     runtime: dict[str, Any] | None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> dict[str, list[str]]:
     """Every secret a `use: path:` child of *orch* names anywhere in its own
     tree, recursively (#611), by name: the resolved path of every child that
@@ -1680,7 +1693,7 @@ def _use_path_child_secrets(
 
     by_name: dict[str, list[str]] = {}
     for label, child_orch, parent_dir in iter_use_path_children(
-        orch, root_path=orchestration_path, runtime=runtime
+        orch, root_path=orchestration_path, runtime=runtime, file_cache=file_cache
     ):
         try:
             child_def = compile_orchestration(
@@ -1691,6 +1704,7 @@ def _use_path_child_secrets(
                     default_project_root(parent_dir) if parent_dir is not None else parent_dir
                 ),
                 trusted=trusted,
+                file_cache=file_cache,
             )
         except Exception:
             continue
@@ -1861,6 +1875,7 @@ def validate(
             orchestration_path=orchestration_path,
             trusted=trusted,
             runtime=config.runtime if config is not None else None,
+            file_cache=file_cache,
         )
         named_secrets = sorted({*root_named_secrets, *child_secret_labels})
         secret_children = {
@@ -1944,6 +1959,7 @@ def validate(
             orch,
             root_path=orchestration_path,
             runtime=(config.runtime if config is not None else None),
+            file_cache=file_cache,
         )
         if cycle is not None:
             return {
@@ -1969,6 +1985,7 @@ def validate(
             trusted=trusted,
             runtime=merged_runtime,
             known_groups=frozenset(groups),
+            file_cache=file_cache,
         )
         if child_check_errors:
             return {
@@ -1990,9 +2007,13 @@ def validate(
                 config,
                 skip_adapter_check=skip_adapter_check,
                 runtime=preflight_runtime,
+                file_cache=file_cache,
             )
             hard_results, soft_results = classify_preflight_results(
-                orchestration_path, preflight_results, preflight_runtime
+                orchestration_path,
+                preflight_results,
+                preflight_runtime,
+                file_cache=file_cache,
             )
             preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
@@ -2040,6 +2061,7 @@ def preflight(
     *,
     skip_adapter_check: bool = False,
     runtime: dict[str, Any] | None = None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> list[tuple[str, CheckResult]]:
     """Walk an orchestration's referenced extensions and call ``check()`` on
     each. Returns an ordered list of ``(label, CheckResult)`` tuples.
@@ -2067,8 +2089,12 @@ def preflight(
 
     *runtime*: the runtime config adapters and tools are built from, when it
     is not ``config.runtime``: see :func:`with_document_aliases`.
+
+    *file_cache*, when given, is the calling cycle's own cache (#405): the
+    same document bytes the gate digested and compile read, not a second
+    read of the same file.
     """
-    orch = load_orchestration_file(orchestration_path)
+    orch = load_orchestration_file(orchestration_path, file_cache=file_cache)
     adapter_refs, tool_refs = walk_orchestration_refs(orch)
     checked_adapter_refs = (
         walk_orchestration_refs(orch, include_document_adapter=False)[0]
@@ -2240,6 +2266,8 @@ def classify_preflight_results(
     orchestration_path: Path,
     results: list[tuple[str, CheckResult]],
     runtime: dict[str, Any] | None = None,
+    *,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> tuple[list[tuple[str, CheckResult]], list[tuple[str, CheckResult]]]:
     """Split raw ``preflight()`` results into ``(hard, soft)``.
 
@@ -2252,8 +2280,11 @@ def classify_preflight_results(
     hard: an adapter that doesn't exist is a configuration mistake, not a
     missing credential the run can degrade past. An alias
     (``runtime.adapters.<alias>.adapter``) in *runtime* is known when it builds.
+
+    *file_cache*, when given, is the calling cycle's own cache (#405): the
+    same document bytes ``preflight()`` itself just read, not a second read.
     """
-    orch = load_orchestration_file(orchestration_path)
+    orch = load_orchestration_file(orchestration_path, file_cache=file_cache)
     usages = collect_adapter_usages(orch)
     hard: list[tuple[str, CheckResult]] = []
     soft: list[tuple[str, CheckResult]] = []

@@ -20,6 +20,7 @@ pytest.importorskip("typer")
 from typer.testing import CliRunner
 
 from circuitry.cli.app import app
+from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run, validate
 from circuitry.core.prompt_files import MAX_PROMPT_FILE_BYTES
 
@@ -45,17 +46,35 @@ def _mock_adapter(response: str = "mock reply") -> MagicMock:
 
 
 def _count_reads(monkeypatch: pytest.MonkeyPatch, *names: str) -> dict[str, int]:
-    """Patches ``Path.read_bytes`` to count calls by file name, for every
-    name in *names* -- every other file reads normally, uncounted."""
+    """Patches ``io.open`` and ``builtins.open`` to count file-opens by
+    name, for every name in *names* -- every other file opens normally,
+    uncounted.
+
+    ``Path.read_text``/``Path.read_bytes`` both open through
+    ``Path.open``, which calls ``io.open`` (the same function object
+    ``builtins.open`` starts out bound to, but a distinct binding once
+    either is reassigned) -- patching both bindings with one wrapper is
+    the one chokepoint that catches a read made through either
+    ``Path`` method or a bare ``open(path)`` call, without double-
+    counting a single open.
+    """
+    import builtins
+    import io
+
     counts = dict.fromkeys(names, 0)
-    real_read_bytes = Path.read_bytes
+    real_open = io.open
 
-    def fake_read_bytes(self: Path) -> bytes:
-        if self.name in counts:
-            counts[self.name] += 1
-        return real_read_bytes(self)
+    def fake_open(file: object, *args: object, **kwargs: object) -> object:
+        try:
+            name = Path(file).name  # type: ignore[arg-type]
+        except TypeError:
+            name = None
+        if name in counts:
+            counts[name] += 1
+        return real_open(file, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    monkeypatch.setattr(io, "open", fake_open)
+    monkeypatch.setattr(builtins, "open", fake_open)
     return counts
 
 
@@ -64,8 +83,9 @@ def test_cof_check_reads_the_document_and_its_prompt_file_once(
 ) -> None:
     """`cof check`'s own load/compile cycle (#405): the orchestration YAML
     and a prompt file it references must each be read from disk exactly
-    once, not once for the document's own parse and again for the
-    compile step's `{file: ...}` resolution.
+    once, not once for the document's own parse, again for preflight
+    (only run here because a config is passed, exactly like a real `cof
+    check`), and again for the compile step's `{file: ...}` resolution.
     """
     _write(tmp_path / "brief.md", "Say hi.")
     orch_path = _write(
@@ -75,7 +95,7 @@ def test_cof_check_reads_the_document_and_its_prompt_file_once(
     )
     counts = _count_reads(monkeypatch, "chain.yml", "brief.md")
 
-    report = validate(orch_path)
+    report = validate(orch_path, config=CircuitryConfig())
 
     assert report["ok"], report["errors"]
     assert counts == {"chain.yml": 1, "brief.md": 1}
@@ -164,17 +184,8 @@ def test_resume_change_check_and_the_run_it_starts_share_one_read(tmp_path: Path
     first = runner.invoke(app, ["run", str(orch_path), "--out", str(out), "--skip-preflight"])
     assert first.exit_code == 0, first.stdout
 
-    reads: list[int] = []
-    real_read_bytes = Path.read_bytes
-
-    def fake_read_bytes(self: Path) -> bytes:
-        data = real_read_bytes(self)
-        if self.name == "chain.yml":
-            reads.append(1)
-        return data
-
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(Path, "read_bytes", fake_read_bytes)
+        counts = _count_reads(mp, "chain.yml")
         resumed = runner.invoke(
             app,
             [
@@ -189,7 +200,65 @@ def test_resume_change_check_and_the_run_it_starts_share_one_read(tmp_path: Path
         )
 
     assert resumed.exit_code == 0, resumed.stdout
-    assert len(reads) == 1, f"chain.yml was read {len(reads)} times across the resume cycle"
+    assert counts == {"chain.yml": 1}, (
+        f"chain.yml was read {counts['chain.yml']} times across the resume cycle"
+    )
+
+
+def test_resume_legacy_fallback_reads_the_document_and_its_prompt_file_once(
+    tmp_path: Path,
+) -> None:
+    """The legacy-hash fallback (#405) is part of the same cycle as the
+    change check it falls back from: a saved state carrying a pre-#407
+    hash makes `_resolve_resume_state` fall back to
+    `core.resume._legacy_document_sha256` -- which must read the exact
+    same bytes `document_content_digest` just did, from the same
+    `candidate_file_cache`, not a second read of either the document or
+    its referenced prompt file.
+    """
+    from circuitry.core.resume import _legacy_document_sha256
+
+    _write(tmp_path / "brief.md", "Say hi.")
+    orch_path = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  brief: {file: brief.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n",
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch_path), "--out", str(out), "--skip-preflight"])
+    assert first.exit_code == 0, first.stdout
+
+    import json
+
+    state = json.loads(out.read_text(encoding="utf-8"))
+    legacy_hash = _legacy_document_sha256(orch_path)
+    # The two algorithms must actually diverge here (a referenced prompt
+    # file is exactly where they do) -- otherwise this fixture would
+    # never exercise the fallback at all.
+    assert legacy_hash != state["runtime"]["last_run"]["document_hash"]
+    state["runtime"]["last_run"]["document_hash"] = legacy_hash
+    out.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.MonkeyPatch.context() as mp:
+        counts = _count_reads(mp, "chain.yml", "brief.md")
+        resumed = runner.invoke(
+            app,
+            [
+                "run",
+                str(orch_path),
+                "--state",
+                str(out),
+                "--resume",
+                "x",
+                "--skip-preflight",
+            ],
+        )
+
+    assert resumed.exit_code == 0, resumed.stdout
+    assert counts == {"chain.yml": 1, "brief.md": 1}, (
+        f"read {counts} times across the resume cycle's legacy fallback"
+    )
 
 
 def test_run_rejects_a_prompt_file_over_the_byte_limit_even_once_cached(

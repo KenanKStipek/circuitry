@@ -833,16 +833,17 @@ def _resolve_resume_state(
             candidate_file_cache: dict[Path, bytes] = {}
             current_orch = load_orchestration_file(orch_path, file_cache=candidate_file_cache)
             document_dir = orch_path.resolve().parent
+            confinement_root = confinement_root_for_document(
+                orch_path,
+                document_dir,
+                library_registry=library_registry,
+                is_cache_path=library_registry.is_cache_path(orch_path),
+                remote_library_source=remote_library_source,
+            )
             current_hash = document_content_digest(
                 orch_path,
                 current_orch,
-                confinement_root=confinement_root_for_document(
-                    orch_path,
-                    document_dir,
-                    library_registry=library_registry,
-                    is_cache_path=library_registry.is_cache_path(orch_path),
-                    remote_library_source=remote_library_source,
-                ),
+                confinement_root=confinement_root,
                 file_cache=candidate_file_cache,
             )
             resume_file_cache = candidate_file_cache
@@ -860,7 +861,15 @@ def _resolve_resume_state(
             # without --force. The document could vanish between the read
             # above and this one; that's a no-match, not a crash.
             try:
-                legacy_matches = _legacy_document_sha256(orch_path) == recorded_hash
+                legacy_matches = (
+                    _legacy_document_sha256(
+                        orch_path,
+                        current_orch,
+                        confinement_root=confinement_root,
+                        file_cache=candidate_file_cache,
+                    )
+                    == recorded_hash
+                )
             except OSError:
                 legacy_matches = False
             if not legacy_matches:
