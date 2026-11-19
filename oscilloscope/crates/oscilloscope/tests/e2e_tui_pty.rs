@@ -3244,16 +3244,23 @@ fn history_across_four_runs_shows_usual_tokens_and_a_deviation() {
             ],
         );
         wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+        // This loop runs three full `osi` lifetimes back to back, each
+        // with its own real `cof` run (a prompt, a 2s sleep tool, a
+        // second prompt) -- under heavy contention (parallel e2e
+        // tests sharing few CPUs) a single one of those three can
+        // legitimately take much longer than the happy-path 30s this
+        // used to allow, so both waits below give it more room than a
+        // one-shot test needs.
         wait_for_run_end(
             &out_dir.path().join("events.jsonl"),
-            Duration::from_secs(30),
+            Duration::from_secs(90),
         );
         // A tick for the TUI's own redraw loop to observe the ended
         // state and let `HistoryHandle::write` fire before `q` tears
         // the whole process down.
         std::thread::sleep(Duration::from_millis(500));
         send_bytes(&mut master, b"q");
-        let status = wait_with_timeout(child, Duration::from_secs(30));
+        let status = wait_with_timeout(child, Duration::from_secs(90));
         assert!(
             status.success(),
             "history run {i} should exit 0, got {status:?}"
