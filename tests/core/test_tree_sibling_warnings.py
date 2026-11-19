@@ -83,6 +83,9 @@ def test_an_enclosing_container_that_already_finished_is_fine() -> None:
 
 
 def test_tree_siblings_inside_a_nested_dynamic_still_warn() -> None:
+    """A named ``dynamic``'s own children are never bare-visible, even to
+    each other -- only the dotted form reaches a sibling in the same
+    ``dynamic`` (``check_prompt_composition``'s own scope model)."""
     orch = {
         "flow": "chain",
         "effects": [
@@ -93,7 +96,7 @@ def test_tree_siblings_inside_a_nested_dynamic_still_warn() -> None:
                 "flow": "tree",
                 "effects": [
                     {"type": "yield", "name": "b", "template": "{{> a}}"},
-                    {"type": "yield", "name": "c", "template": "{{> b}}"},
+                    {"type": "yield", "name": "c", "template": "{{> wrapper.b}}"},
                 ],
             },
         ],
@@ -101,8 +104,55 @@ def test_tree_siblings_inside_a_nested_dynamic_still_warn() -> None:
     warnings = tree_sibling_warnings(orch)
     assert len(warnings) == 1
     assert "effects[1].effects[1]" in warnings[0]
-    assert "'b'" in warnings[0]
+    assert "'wrapper.b'" in warnings[0]
     assert "wrapper" in warnings[0]
+
+
+def test_a_bare_reference_resolves_to_the_outer_scope_not_a_same_named_inner_one() -> None:
+    """A bare ``{{> a}}`` inside a named ``dynamic`` never resolves to that
+    ``dynamic``'s own ``a`` -- even when one exists -- because a
+    ``dynamic``'s children are never bare-visible, period. It resolves to
+    the outer, already-registered ``a`` instead, exactly as
+    ``check_prompt_composition`` would resolve it."""
+    orch = {
+        "effects": [
+            {"type": "yield", "name": "a", "template": "hi"},
+            {
+                "type": "dynamic",
+                "name": "w",
+                "flow": "tree",
+                "effects": [
+                    {"type": "yield", "name": "a", "template": "x"},
+                    {"type": "yield", "name": "b", "template": "{{> a}}"},
+                ],
+            },
+        ],
+    }
+    assert tree_sibling_warnings(orch) == []
+
+
+def test_the_same_reused_name_warns_when_the_outer_scope_is_the_tree_one() -> None:
+    """The mirror of the case above: when the *outer* scope is the
+    ``flow: tree`` one, a bare reference resolving to the outer effect (not
+    the inner, same-named one) still diverges through it."""
+    orch = {
+        "flow": "tree",
+        "effects": [
+            {"type": "yield", "name": "a", "template": "hi"},
+            {
+                "type": "dynamic",
+                "name": "w",
+                "flow": "chain",
+                "effects": [
+                    {"type": "yield", "name": "a", "template": "x"},
+                    {"type": "yield", "name": "b", "template": "{{> a}}"},
+                ],
+            },
+        ],
+    }
+    warnings = tree_sibling_warnings(orch)
+    assert len(warnings) == 1
+    assert "effects[1].effects[1]" in warnings[0]
 
 
 def test_dotted_reference_into_a_named_dynamics_child_also_warns() -> None:
@@ -205,3 +255,109 @@ def test_unresolved_names_are_silently_skipped_not_our_job() -> None:
 
 def test_non_mapping_orch_returns_no_warnings() -> None:
     assert tree_sibling_warnings([]) == []  # type: ignore[arg-type]
+
+
+def test_a_reflectors_own_flow_tree_children_warn_too() -> None:
+    """A ``reflector``'s inner ``effects`` dispatch by its own ``flow``
+    exactly like a ``dynamic``'s (``core.compiler``'s own
+    ``inner_dynamic``) -- its children stay bare-visible to each other
+    (not scope-introducing), so a bare reference is what the warning
+    actually fires on."""
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "plan",
+                "flow": "tree",
+                "effects": [
+                    {"type": "yield", "name": "a", "template": "hello"},
+                    {"type": "yield", "name": "b", "template": "{{> a}}"},
+                ],
+            }
+        ]
+    }
+    warnings = tree_sibling_warnings(orch)
+    assert len(warnings) == 1
+    assert "effects[0].effects[1]" in warnings[0]
+    assert "reflector" in warnings[0]
+
+
+def test_a_reflectors_own_children_stay_bare_visible_at_its_own_level() -> None:
+    """Unlike a ``dynamic``, a ``reflector`` is not in
+    ``_SCOPE_INTRODUCING_TYPES`` -- its children are reached bare, from a
+    sibling at the reflector's own level, the same transparent treatment
+    ``check_prompt_composition`` already gives them."""
+    orch = {
+        "flow": "tree",
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "plan",
+                "effects": [{"type": "yield", "name": "a", "template": "hello"}],
+            },
+            {"type": "yield", "name": "after", "template": "{{> a}}"},
+        ]
+    }
+    warnings = tree_sibling_warnings(orch)
+    assert len(warnings) == 1
+    assert "effects[1]" in warnings[0]
+
+
+def test_strategy_is_honored_as_a_flow_alias_for_tree() -> None:
+    orch = {
+        "strategy": "tree",
+        "effects": [
+            {"type": "yield", "name": "a", "template": "hello"},
+            {"type": "yield", "name": "b", "template": "{{> a}}"},
+        ],
+    }
+    warnings = tree_sibling_warnings(orch)
+    assert len(warnings) == 1
+
+
+def test_an_empty_effects_list_falls_through_to_steps() -> None:
+    """``effects: []`` is falsy, so it falls through to ``steps`` -- the
+    same truthy ``or`` the compiler itself resolves ``effects``/``steps``
+    with, not an ``is not None`` check."""
+    orch = {
+        "flow": "tree",
+        "effects": [],
+        "steps": [
+            {"type": "yield", "name": "a", "template": "hello"},
+            {"type": "yield", "name": "b", "template": "{{> a}}"},
+        ],
+    }
+    warnings = tree_sibling_warnings(orch)
+    assert len(warnings) == 1
+
+
+def test_a_reference_reached_only_through_a_declared_prompt_still_warns() -> None:
+    """``{{> intro}}``'s own text names a tree sibling (``{{> a}}``) --
+    followed transitively, and checked against the *including* effect's
+    own position, the same position ``_expand`` splices it into."""
+    orch = {
+        "flow": "tree",
+        "effects": [
+            {"type": "yield", "name": "a", "template": "hello"},
+            {"type": "yield", "name": "b", "template": "{{> intro}}"},
+        ],
+    }
+    declared = {"intro": "before: {{> a}}"}
+    warnings = tree_sibling_warnings(orch, declared=declared)
+    assert len(warnings) == 1
+    assert "effects[1]" in warnings[0]
+    assert "'a'" in warnings[0]
+
+
+def test_a_reference_reached_only_through_a_declared_prompt_is_quiet_without_declared() -> None:
+    """Without *declared*, the indirection through ``intro`` is invisible --
+    ``intro`` itself is not an effect, so the bare ``{{> intro}}`` just
+    never resolves to anything this check tracks."""
+    orch = {
+        "flow": "tree",
+        "effects": [
+            {"type": "yield", "name": "a", "template": "hello"},
+            {"type": "yield", "name": "b", "template": "{{> intro}}"},
+        ],
+    }
+    assert tree_sibling_warnings(orch) == []

@@ -375,13 +375,20 @@ _COMPOSABLE_SCALAR_FIELDS = ("template", "prompt", "inline", "params_json")
 
 
 def _resolve_file_field_text(
-    value: Any, *, document_dir: Path | None, confinement_root: Path | None
+    value: Any,
+    *,
+    document_dir: Path | None,
+    confinement_root: Path | None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> str | None:
     """*value*'s text, if it is a ``{file: ...}`` this document can read —
     best-effort, same swallow-and-skip precedent as
     :func:`referenced_prompt_file_paths`: a genuine ``file:`` violation is
     ``compile_declared_prompts``/the effect's own compile step's to raise,
-    with the field name this best-effort scan has lost.
+    with the field name this best-effort scan has lost. *file_cache*, when
+    given, is the single on-disk read the file gets in its whole
+    load/consent/compile/check cycle (#405) — shared with whatever already
+    primed it (:func:`compile_declared_prompts`, ``compile_orchestration``).
     """
     if document_dir is None or confinement_root is None:
         return None
@@ -399,6 +406,7 @@ def _resolve_file_field_text(
             document_dir=document_dir,
             confinement_root=confinement_root,
             field="file",
+            file_cache=file_cache,
         )
     except PromptFileError:
         return None
@@ -409,6 +417,7 @@ def _iter_composable_strings(
     *,
     document_dir: Path | None = None,
     confinement_root: Path | None = None,
+    file_cache: dict[Path, bytes] | None = None,
 ) -> list[str]:
     """Every string in *effect* that ``{{> name}}`` composition actually sees.
 
@@ -427,7 +436,10 @@ def _iter_composable_strings(
             found.append(value)
         elif field == "template":
             file_text = _resolve_file_field_text(
-                value, document_dir=document_dir, confinement_root=confinement_root
+                value,
+                document_dir=document_dir,
+                confinement_root=confinement_root,
+                file_cache=file_cache,
             )
             if file_text is not None:
                 found.append(file_text)
@@ -441,7 +453,10 @@ def _iter_composable_strings(
                 found.append(content)
             else:
                 file_text = _resolve_file_field_text(
-                    content, document_dir=document_dir, confinement_root=confinement_root
+                    content,
+                    document_dir=document_dir,
+                    confinement_root=confinement_root,
+                    file_cache=file_cache,
                 )
                 if file_text is not None:
                     found.append(file_text)
@@ -699,12 +714,14 @@ def _is_tree_flow(value: Any) -> bool:
     return str(value or "").strip().lower() in ("tree", "tree_of_thought", "tot")
 
 
-def _tree_container_label(*, effect_path: str | None, name: str | None) -> str:
+def _tree_container_label(
+    *, effect_path: str | None, name: str | None, kind: str = "dynamic"
+) -> str:
     if effect_path is None:
         return "the document's own top-level 'flow: tree'"
     if name:
-        return f"the 'flow: tree' dynamic '{name}' ('{effect_path}')"
-    return f"the 'flow: tree' dynamic at '{effect_path}'"
+        return f"the 'flow: tree' {kind} '{name}' ('{effect_path}')"
+    return f"the 'flow: tree' {kind} at '{effect_path}'"
 
 
 def _tree_divergence(
@@ -736,49 +753,124 @@ def _tree_divergence(
     return None
 
 
+def _effects_or_steps(container: Mapping[str, Any]) -> Any:
+    """``effects``, falling back to ``steps`` by truthiness, then an empty
+    list -- exactly ``core.compiler``'s own ``effect.get("effects") or
+    effect.get("steps") or []`` (an ``effects: []`` falls through to
+    ``steps`` there, unlike an ``is not None`` check)."""
+    return container.get("effects") or container.get("steps") or []
+
+
+def _effect_references(text: str, *, declared: Mapping[str, str]) -> set[str]:
+    """Every effect name a ``{{> name}}`` tag in *text* ultimately names,
+    expanding through declared prompts transitively the same way
+    :func:`_expand` splices them at render time: a reference reached only
+    through one or more ``prompts:`` entries still lands, once spliced, at
+    the position of the effect whose own template/message included the
+    first ``{{> name}}`` -- never at the declared prompt's own (it has
+    none). Declared-prompt cycles are already :func:`check_prompt_composition`'s
+    own error, raised at compile time before this ever runs; *seen* here is
+    just the ordinary recursion-safety a caller that skipped that check
+    would still need.
+    """
+    names: set[str] = set()
+    seen: set[str] = set()
+
+    def expand(current: str) -> None:
+        for name in partial_references(current):
+            if not _NAME_SHAPE.match(name):
+                continue
+            head = name.split(".", 1)[0]
+            if head in declared:
+                if head not in seen:
+                    seen.add(head)
+                    expand(declared[head])
+                continue
+            names.add(name)
+
+    expand(text)
+    return names
+
+
 def tree_sibling_warnings(
     orch: Mapping[str, Any],
     *,
     document_dir: Path | None = None,
     confinement_root: Path | None = None,
+    file_cache: dict[Path, bytes] | None = None,
+    declared: Mapping[str, str] | None = None,
 ) -> list[str]:
     """``cof check`` advisories for a ``{{> name}}`` that names an effect
-    which cannot be guaranteed to have run yet, because it sits — or the
-    reference itself sits — somewhere a ``flow: tree`` container dispatches
+    which cannot be guaranteed to have run yet, because it sits -- or the
+    reference itself sits -- somewhere a ``flow: tree`` container dispatches
     with no fixed order among its own members (#405).
 
     Unlike :func:`check_prompt_composition`'s errors, a reference this finds
     nothing wrong with still compiles and still runs the same either way:
     this is advisory only, the same kind lint.py's own warnings are. A
     reference it has nothing to say about may still be a genuine miss (an
-    untaken ``if`` branch, one later in a ``flow: chain`` list) — those
+    untaken ``if`` branch, one later in a ``flow: chain`` list) -- those
     render ``""`` at run time regardless, exactly as documented
     (:func:`_resolve_effect_text`); this only names the subset caused by
     ``flow: tree`` ordering specifically, since that is the one case no
     amount of reading the document top-to-bottom tells you about.
 
-    Only effect-to-effect references are checked — a declared prompt's own
-    text can be spliced into more than one place, so it has no single
-    position to check this against; :func:`check_prompt_composition` already
-    resolves its own references just the same regardless.
+    A bare ``{{> name}}`` is resolved with the exact scope chain
+    :func:`check_prompt_composition`'s own ``check_name`` uses, not a flat,
+    whole-document namespace: innermost scope first (a named ``if``'s own
+    branch -- shared between its ``then`` and ``else``, never threaded back
+    up past it), then the document root. A named ``dynamic``'s (or
+    ``reflector``'s) children are never in that chain at all, even from a
+    sibling in the same container (``core.dynamic``'s own ``ctx`` never
+    rebinds per container) -- only the dotted form
+    (``{{> container_name.child}}``) reaches them, resolved from the
+    document root regardless of where the reference itself sits, the same
+    as :func:`check_prompt_composition`. Reusing a name in two unrelated
+    scopes (a root effect and an unrelated ``dynamic``'s own child, say) is
+    valid, and each occurrence resolves independently -- exactly like
+    running the document would.
+
+    A reference reached only through a declared prompt (``{{> intro}}``
+    where ``intro``'s own text contains ``{{> a}}``) is followed
+    transitively (:func:`_effect_references`) and checked against the
+    *including* effect's own position -- :func:`_expand` splices a declared
+    prompt's text into whichever effect's template referenced it, and
+    resolves that text's own ``{{> name}}`` tags against that same effect's
+    ``ctx``, so that is the one position this divergence check has to
+    offer regardless of how many declared prompts the reference passed
+    through to get there.
 
     A ``loop``'s own ``flow`` is not tracked here at all: its ``body``
     dispatches sequentially within one pass regardless (``LoopRuntime``'s
-    own per-pass dispatch is a plain ``for`` loop over ``self.defn.body``) —
+    own per-pass dispatch is a plain ``for`` loop over ``self.defn.body``) --
     ``flow: tree`` on a loop only changes whether *different passes* run
     concurrently, and a pass has no name of its own a ``{{> name}}`` could
-    single out — only its own body steps do, always bare-bound to "this
+    single out -- only its own body steps do, always bare-bound to "this
     pass" by ``core.loop``'s own context override, never to another one. A
     loop nested inside a ``flow: tree`` dynamic is still flagged like any
-    other effect, through that dynamic's own flow, not the loop's.
+    other effect, through that dynamic's own flow, not the loop's. A
+    ``reflector``'s own ``effects`` dispatch by its own ``flow``/``strategy``
+    exactly like a ``dynamic``'s (``core.compiler``'s own ``inner_dynamic``),
+    so they are walked and flagged the same way; its children stay
+    bare-visible at the level the reflector itself sits, the same
+    "transparent to bare lookup" treatment :func:`check_prompt_composition`
+    already gives them (not in ``_SCOPE_INTRODUCING_TYPES``).
     """
     if not isinstance(orch, Mapping):
         return []
 
+    declared = declared or {}
     list_flow: dict[int, Literal["chain", "tree"]] = {}
     list_label: dict[int, str] = {}
-    positions: dict[str, tuple[tuple[int, int], ...]] = {}
-    pending: list[tuple[tuple[tuple[int, int], ...], str, str]] = []
+    dotted_positions: dict[str, tuple[tuple[int, int], ...]] = {}
+    pending: list[
+        tuple[
+            tuple[tuple[int, int], ...],
+            str,
+            str,
+            tuple[dict[str, tuple[tuple[int, int], ...]], ...],
+        ]
+    ] = []
     list_ids = itertools.count()
 
     def walk(
@@ -789,6 +881,8 @@ def tree_sibling_warnings(
         label: str,
         container_path: str,
         prefix: str,
+        out: dict[str, tuple[tuple[int, int], ...]],
+        bare_chain: tuple[dict[str, tuple[tuple[int, int], ...]], ...],
     ) -> None:
         if not isinstance(effects, list):
             return
@@ -805,45 +899,64 @@ def tree_sibling_warnings(
             etype = str(effect.get("type") or "").strip().lower()
 
             if name and _effect_is_text_producing(etype, effect):
-                positions[name] = here
+                out[name] = here
                 if prefix:
-                    positions[f"{prefix}{name}"] = here
+                    dotted_positions[f"{prefix}{name}"] = here
 
             for text in _iter_composable_strings(
-                effect, document_dir=document_dir, confinement_root=confinement_root
+                effect,
+                document_dir=document_dir,
+                confinement_root=confinement_root,
+                file_cache=file_cache,
             ):
                 pending.extend(
-                    (here, effect_path, ref)
-                    for ref in sorted(partial_references(text))
-                    if _NAME_SHAPE.match(ref)
+                    (here, effect_path, ref, bare_chain)
+                    for ref in sorted(_effect_references(text, declared=declared))
                 )
 
             child_prefix = prefix
+            child_out = out
+            child_bare_chain = bare_chain
             if name and etype in _SCOPE_INTRODUCING_TYPES:
                 child_prefix = f"{prefix}{name}."
+                child_out = {}
+                if etype == "if":
+                    child_bare_chain = (*bare_chain, child_out)
 
-            if etype == "dynamic":
+            if etype in ("dynamic", "reflector"):
+                # A reflector is never in `_SCOPE_INTRODUCING_TYPES`, so
+                # `child_prefix`/`child_out`/`child_bare_chain` above are
+                # already just `prefix`/`out`/`bare_chain` unchanged for one
+                # -- its own children stay bare-visible at the level the
+                # reflector itself sits, the same as a loop's body.
                 child_flow: Literal["chain", "tree"] = (
-                    "tree" if _is_tree_flow(effect.get("flow")) else "chain"
+                    "tree"
+                    if _is_tree_flow(effect.get("flow") or effect.get("strategy"))
+                    else "chain"
                 )
                 walk(
-                    effect.get("effects")
-                    if effect.get("effects") is not None
-                    else effect.get("steps"),
+                    _effects_or_steps(effect),
                     parent_path=here,
                     flow=child_flow,
-                    label=_tree_container_label(effect_path=effect_path, name=name),
+                    label=_tree_container_label(
+                        effect_path=effect_path, name=name, kind=etype
+                    ),
                     container_path=f"{effect_path}.effects",
                     prefix=child_prefix,
+                    out=child_out,
+                    bare_chain=child_bare_chain,
                 )
-                walk(
-                    effect.get("finally"),
-                    parent_path=here,
-                    flow="chain",
-                    label="",
-                    container_path=f"{effect_path}.finally",
-                    prefix=child_prefix,
-                )
+                if etype == "dynamic":
+                    walk(
+                        effect.get("finally"),
+                        parent_path=here,
+                        flow="chain",
+                        label="",
+                        container_path=f"{effect_path}.finally",
+                        prefix=child_prefix,
+                        out=child_out,
+                        bare_chain=child_bare_chain,
+                    )
             elif etype == "loop":
                 walk(
                     effect.get("body"),
@@ -852,6 +965,8 @@ def tree_sibling_warnings(
                     label="",
                     container_path=f"{effect_path}.body",
                     prefix=child_prefix,
+                    out=child_out,
+                    bare_chain=child_bare_chain,
                 )
             elif etype in ("if", "conditional"):
                 walk(
@@ -861,6 +976,8 @@ def tree_sibling_warnings(
                     label="",
                     container_path=f"{effect_path}.then",
                     prefix=child_prefix,
+                    out=child_out,
+                    bare_chain=child_bare_chain,
                 )
                 walk(
                     effect.get("else"),
@@ -869,18 +986,23 @@ def tree_sibling_warnings(
                     label="",
                     container_path=f"{effect_path}.else",
                     prefix=child_prefix,
+                    out=child_out,
+                    bare_chain=child_bare_chain,
                 )
 
+    root_out: dict[str, tuple[tuple[int, int], ...]] = {}
     root_flow: Literal["chain", "tree"] = (
         "tree" if _is_tree_flow(orch.get("flow") or orch.get("strategy")) else "chain"
     )
     walk(
-        orch.get("effects") if orch.get("effects") is not None else orch.get("steps"),
+        _effects_or_steps(orch),
         parent_path=(),
         flow=root_flow,
         label=_tree_container_label(effect_path=None, name=None),
         container_path="effects",
         prefix="",
+        out=root_out,
+        bare_chain=(root_out,),
     )
     walk(
         orch.get("finally"),
@@ -889,22 +1011,30 @@ def tree_sibling_warnings(
         label="",
         container_path="finally",
         prefix="",
+        out=root_out,
+        bare_chain=(root_out,),
     )
 
     warnings: set[str] = set()
-    for source_path, where, name in pending:
-        target_path = positions.get(name)
+    for source_path, where, name, bare_chain in pending:
+        if "." in name:
+            target_path = dotted_positions.get(name)
+        else:
+            target_path = None
+            for scope in reversed(bare_chain):
+                if name in scope:
+                    target_path = scope[name]
+                    break
         if target_path is None or target_path == source_path:
             continue
         divergence = _tree_divergence(source_path, target_path)
         if divergence is None or list_flow.get(divergence) != "tree":
             continue
         warnings.add(
-            f"{where}: '{{{{> {name}}}}}' names '{name}', inside "
-            f"{list_label[divergence]} as this reference — tree children "
-            "dispatch in no fixed order, so this can render '' whenever "
-            f"'{name}' has not completed yet. No warning for 'flow: chain', "
-            "where order is defined."
+            f"{where}: '{{{{> {name}}}}}' names '{name}', and both it and "
+            f"this reference sit inside {list_label[divergence]} — tree "
+            "children dispatch in no fixed order, so this can render '' "
+            f"whenever '{name}' has not completed yet."
         )
     return sorted(warnings)
 

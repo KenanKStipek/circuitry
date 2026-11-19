@@ -1144,7 +1144,11 @@ def run(req: RunRequest) -> RunResult:
             warnings.extend(unknown_key_warnings(orch))
             warnings.extend(
                 tree_sibling_warnings(
-                    orch, document_dir=_document_dir, confinement_root=_confinement_root
+                    orch,
+                    document_dir=_document_dir,
+                    confinement_root=_confinement_root,
+                    file_cache=file_cache,
+                    declared=root_def.prompts,
                 )
             )
             state["runtime"]["last_run"]["completed_at"] = _now_iso()
@@ -1868,7 +1872,11 @@ def validate(
         from ..core.prompt_compose import tree_sibling_warnings
 
         lint_warnings += tree_sibling_warnings(
-            orch, document_dir=_document_dir, confinement_root=_confinement_root
+            orch,
+            document_dir=_document_dir,
+            confinement_root=_confinement_root,
+            file_cache=file_cache,
+            declared=root_def.prompts,
         )
         # The secrets the document names (#598), for `cof check` to list;
         # compiling already refused them in a limited document.

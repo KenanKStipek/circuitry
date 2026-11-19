@@ -506,7 +506,7 @@ def validate_report(
 
         _document_dir = path.resolve().parent
         _confinement_root = default_project_root(_document_dir)
-        compile_orchestration(
+        _root_def = compile_orchestration(
             orch=orch,
             root_name="prime",
             document_dir=_document_dir,
@@ -520,7 +520,10 @@ def validate_report(
 
         warnings = warnings + tuple(
             tree_sibling_warnings(
-                orch, document_dir=_document_dir, confinement_root=_confinement_root
+                orch,
+                document_dir=_document_dir,
+                confinement_root=_confinement_root,
+                declared=_root_def.prompts,
             )
         )
 
