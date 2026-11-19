@@ -935,6 +935,49 @@ pub fn screen_grid_fg(bytes: &[u8], cols: usize, rows: usize) -> Vec<Vec<Option<
     grid
 }
 
+/// The slave device path of the pty whose master is *master_fd*.
+///
+/// `ptsname` returns a pointer into one static buffer shared by every
+/// thread in the process (POSIX leaves it non-reentrant), and `cargo
+/// test` runs these tests on parallel threads. Without the lock, a
+/// second [`open_pty`] running at the same moment can overwrite that
+/// buffer before this call copies it out, handing this test the other
+/// test's slave path. Its osi then draws on the other test's pty,
+/// this test's master never sees a byte, and osi exits 129 with a
+/// lost terminal as soon as that other test closes its own master
+/// (issue #825). On Linux the result is also checked against the
+/// kernel's own pty number for this master.
+fn pty_slave_path(master_fd: libc::c_int) -> String {
+    static PTSNAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let path = {
+        let _guard = PTSNAME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let slave_name = unsafe { libc::ptsname(master_fd) };
+        assert!(!slave_name.is_null(), "ptsname failed");
+        unsafe { std::ffi::CStr::from_ptr(slave_name) }
+            .to_str()
+            .expect("ptsname is valid UTF-8")
+            .to_string()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let mut number: libc::c_uint = 0;
+        assert_eq!(
+            unsafe { libc::ioctl(master_fd, libc::TIOCGPTN as _, &mut number) },
+            0,
+            "ioctl TIOCGPTN failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(
+            path,
+            format!("/dev/pts/{number}"),
+            "ptsname disagrees with this master's own pty number"
+        );
+    }
+    path
+}
+
 /// Opens a fresh pty pair, unlocked and granted, ready for a child to
 /// use its slave side as its controlling stdio. Returns the master
 /// (kept open for the caller's own lifetime; its own `Drop` closes it)
@@ -963,12 +1006,7 @@ pub fn open_pty() -> (File, PathBuf) {
         "fcntl F_SETFD FD_CLOEXEC failed"
     );
 
-    let slave_name = unsafe { libc::ptsname(master_fd) };
-    assert!(!slave_name.is_null(), "ptsname failed");
-    let slave_path = unsafe { std::ffi::CStr::from_ptr(slave_name) }
-        .to_str()
-        .expect("ptsname is valid UTF-8")
-        .to_string();
+    let slave_path = pty_slave_path(master_fd);
 
     // A freshly opened pty's own window size defaults to 0x0 until
     // something sets it -- crossterm's own `terminal::size()` reads
