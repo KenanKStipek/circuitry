@@ -1439,6 +1439,53 @@ mod imp {
         }
     }
 
+    /// Owns a just-spawned child for as long as something might
+    /// still need a synchronous, nonblocking check of whether it has
+    /// exited (`ChildGuard::poll`, `ServicePlugin._wait_ready`'s own
+    /// `proc.poll()`). Dropped while the child may still be running
+    /// -- cancellation, or `wait_ready` giving up on it one way or
+    /// another -- `Drop` still reaps it: a `std::process::Child`
+    /// dropped without `wait()` would otherwise leave a zombie
+    /// behind for good, since nothing else ever waits on this exact
+    /// handle (#844).
+    struct ChildGuard(Option<std::process::Child>);
+
+    impl ChildGuard {
+        fn new(child: std::process::Child) -> Self {
+            Self(Some(child))
+        }
+
+        /// `proc.poll()`: a nonblocking check, never blocking the
+        /// runtime thread. `Ok(None)` while still None, `Some(None)`
+        /// once exited but the code could not be read -- `try_wait`
+        /// reaps the child on this very call, so there is nothing
+        /// further to wait on once it returns `Ok(Some(_))`.
+        fn poll(&mut self) -> Option<Option<i32>> {
+            let child = self.0.as_mut()?;
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.0 = None;
+                    Some(Some(exit_code_of(&status)))
+                }
+                Ok(None) => None,
+                Err(_) => {
+                    self.0 = None;
+                    Some(None)
+                }
+            }
+        }
+    }
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.0.take() {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+        }
+    }
+
     /// Teardown/stop work this process displaced -- a [`TeardownOnCancel`]
     /// drop, or [`stop_internal`]'s own locked section -- spawned onto
     /// the runtime rather than run inline or awaited to completion, so
@@ -1596,26 +1643,24 @@ mod imp {
         (!group_exists_nb(pgid).await, sent)
     }
 
-    /// `ServicePlugin._wait_ready`. *exit_rx* is `Some` only for a
-    /// service this very call started (a oneshot the leader's reaper
-    /// thread fires on exit, carrying `proc.returncode`'s own
-    /// convention); `None` for a service an earlier call started, which
-    /// polls [`group_exists`] instead -- same split as cof's own
-    /// *proc* being `None`/not.
+    /// `ServicePlugin._wait_ready`. *child* is `Some` only for a
+    /// service this very call started, and its first check every
+    /// loop is a synchronous, nonblocking poll of it -- `proc.poll()`
+    /// in cof's own `_wait_ready`, before any readiness probe, and
+    /// for a `start` with no `ready` the only check at all. `None`
+    /// for a service an earlier call started, which polls
+    /// [`group_exists`] instead -- same split as cof's own *proc*
+    /// being `None`/not.
     async fn wait_ready(
         pgid: u32,
-        mut exit_rx: Option<tokio::sync::oneshot::Receiver<i32>>,
+        mut child: Option<ChildGuard>,
         ready: Option<&ReadySpec>,
         timeout: Duration,
     ) -> Option<String> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let exited: Option<Option<i32>> = match exit_rx.as_mut() {
-                Some(rx) => match rx.try_recv() {
-                    Ok(code) => Some(Some(code)),
-                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
-                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Some(None),
-                },
+            let exited: Option<Option<i32>> = match child.as_mut() {
+                Some(c) => c.poll(),
                 None => {
                     if !group_exists_nb(pgid).await {
                         Some(None)
@@ -1875,7 +1920,7 @@ mod imp {
         let (existing, _) = live_record_nb(state_dir.clone(), key.to_string()).await?;
         let started: bool;
         let record: Dict;
-        let mut exit_rx: Option<tokio::sync::oneshot::Receiver<i32>> = None;
+        let mut started_child: Option<ChildGuard> = None;
         let log_offset: u64;
         let mut guard: Option<TeardownOnCancel> = None;
 
@@ -1989,7 +2034,7 @@ mod imp {
                     Ok(())
                 });
             }
-            let mut child = command.spawn().map_err(|e| {
+            let child = command.spawn().map_err(|e| {
                 let (_, detail) = crate::process::describe_spawn_error(&e, &argv[0], None);
                 runtime_error(format!(
                     "service {}: cannot start {}: {detail}",
@@ -1998,8 +2043,7 @@ mod imp {
                 ))
             })?;
             let pid = child.id();
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            exit_rx = Some(rx);
+            let child = ChildGuard::new(child);
             guard = Some(TeardownOnCancel {
                 armed: true,
                 pgid: pid,
@@ -2008,10 +2052,10 @@ mod imp {
                 grace,
             });
 
-            // Read the start time, which only exists while the child is
-            // unreaped, before spawning the thread that reaps it: a child
-            // that already exited is still a zombie (ps/`/proc` can still
-            // find it) until something calls `wait()` on it (#844).
+            // Read the start time, which only exists while the child
+            // is unreaped, before `wait_ready`'s first poll of it: a
+            // child that already exited is still a zombie (ps/`/proc`
+            // can still find it) until something waits on it (#844).
             let outcome: Result<Dict, ToolError> = async {
                 let start_time = process_start_time_nb(pid).await?;
                 let Some(start_time) = start_time else {
@@ -2050,15 +2094,11 @@ mod imp {
                 Ok(rec)
             }
             .await;
-            std::thread::spawn(move || {
-                if let Ok(status) = child.wait() {
-                    let _ = tx.send(exit_code_of(&status));
-                }
-            });
             match outcome {
                 Ok(rec) => {
                     started = true;
                     record = rec;
+                    started_child = Some(child);
                 }
                 Err(err) => {
                     terminate_group(pid, grace).await;
@@ -2079,7 +2119,8 @@ mod imp {
         } else {
             get(&record, "ready").and_then(value_to_ready)
         };
-        let outcome = wait_ready(pgid, exit_rx, effective_ready.as_ref(), ready_timeout).await;
+        let outcome =
+            wait_ready(pgid, started_child, effective_ready.as_ref(), ready_timeout).await;
 
         let ports_value = get(&record, "ports")
             .cloned()
@@ -3063,6 +3104,39 @@ mod imp {
             assert!(!err.contains("vanished"), "{err}");
         }
 
+        /// A `start` with no `ready` at all must still report an
+        /// already-exited command as an exit, not as running --
+        /// otherwise the exit code the reaper reports after this call
+        /// already returned is simply lost, and a dead command looks
+        /// like a running service with no readiness check (#844).
+        #[tokio::test]
+        async fn a_command_that_exits_at_once_with_no_ready_reports_the_exit() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = plugin(dir.path());
+            let name = format!("svc-exit-now-no-ready-{}", std::process::id());
+            let result = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from(name.as_str())),
+                        ("command", Value::List(vec![Value::from("false")])),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(!result.ok);
+            assert_eq!(result.value, Value::None);
+            let raw = result.raw.as_dict().unwrap();
+            assert_eq!(get(raw, "running"), Some(&Value::from(false)));
+            let err = result.stderr.unwrap();
+            assert!(
+                err.contains("exited with code 1 before it was ready"),
+                "{err}"
+            );
+        }
+
         #[tokio::test]
         async fn a_port_held_by_another_process_is_reported_and_never_signalled() {
             let dir = tempdir();
@@ -3406,6 +3480,55 @@ mod imp {
             let parsed = parse_url(&format!("http://127.0.0.1:{port}/old")).unwrap();
             let status = fetch_status(&parsed).await;
             assert_eq!(status, Some(200));
+        }
+
+        fn is_zombie(pid: u32) -> bool {
+            if is_linux_proc() {
+                let Ok(text) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                    return false;
+                };
+                let Some(idx) = text.rfind(')') else {
+                    return false;
+                };
+                return text[idx + 2..].split_whitespace().next() == Some("Z");
+            }
+            let Some((stdout, success)) = helper(&["ps", "-o", "stat=", "-p", &pid.to_string()])
+            else {
+                return false;
+            };
+            success && stdout.trim_start().starts_with('Z')
+        }
+
+        /// A `start` cancelled before its record is even saved --
+        /// dropped while awaiting `process_start_time_nb`/
+        /// `boot_time_nb`, before `wait_ready` ever runs -- must not
+        /// leave a zombie behind: nothing else ever calls `wait()` on
+        /// that exact child once its owning `ChildGuard` is gone,
+        /// unpolled (#844).
+        #[test]
+        fn a_child_guard_reaps_its_child_when_dropped_unpolled() {
+            let child = std::process::Command::new("sh")
+                .args(["-c", "exit 0"])
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !is_zombie(pid) {
+                assert!(
+                    Instant::now() < deadline,
+                    "the child never became a zombie to reap"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            drop(ChildGuard::new(child));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while is_zombie(pid) {
+                assert!(
+                    Instant::now() < deadline,
+                    "the child should have been reaped by now"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
 
         fn tempdir() -> tempfile_shim::TempDir {
