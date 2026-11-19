@@ -13,8 +13,12 @@ next one itself, so a child started this way still gets whatever that
 other `sitecustomize.py` does (on a Homebrew Python install, same-version
 guards and `sys.path`/`sys.executable` fixups).
 
-Must never print anything: a normal `cof run` child's stdout/stderr is
-compared byte-for-byte by some of this suite's own tests.
+Must never print anything on its default path: a normal `cof run`
+child's stdout/stderr is compared byte-for-byte by some of this suite's
+own tests. A caller that can't read the child's own stderr at all (osi
+owns it, piping it to its own log instead of leaving it to the test)
+can still get the dump: setting ``CIRCUITRY_TEST_SIGUSR1_DUMP_FILE``
+writes it there instead of to stderr.
 """
 
 from __future__ import annotations
@@ -28,7 +32,14 @@ from importlib.machinery import PathFinder
 if hasattr(signal, "SIGUSR1"):
     import faulthandler
 
-    faulthandler.register(signal.SIGUSR1, all_threads=True)
+    _dump_file_path = os.environ.get("CIRCUITRY_TEST_SIGUSR1_DUMP_FILE")
+    if _dump_file_path:
+        # Kept open for the life of the process: faulthandler writes to
+        # this file object whenever SIGUSR1 arrives, not just once here.
+        _dump_file = open(_dump_file_path, "a", encoding="utf-8")  # noqa: SIM115
+        faulthandler.register(signal.SIGUSR1, file=_dump_file, all_threads=True)
+    else:
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 _rest_of_path = [p for p in sys.path if os.path.abspath(p or os.curdir) != _this_dir]
