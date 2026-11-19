@@ -1,0 +1,7 @@
+name: c386-use-child-expect-model-reask
+adapter: scripted
+model: test
+effects:
+  - type: use
+    name: outer
+    path: outer.yml

@@ -1,0 +1,13 @@
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '[1, 2]'}
+  - type: loop
+    name: inner
+    flow: tree
+    each: {in: "prime.seed.value", as: "sub"}
+    body:
+      - type: prompt
+        name: step
+        template: "step for {{sub}}"

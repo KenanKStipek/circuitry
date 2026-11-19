@@ -274,3 +274,65 @@ def test_check_extensions_reports_runtime_plugin_load_failure(
 
     assert result.exit_code == 1
     assert "load failed" in result.output
+
+
+def test_check_extensions_reports_scripted_replies_found_and_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _lockdown_env(monkeypatch, adapters="scripted")
+    monkeypatch.setenv("COLUMNS", "500")
+    replies = tmp_path / "replies.yaml"
+    replies.write_text(
+        "prime.a:\n  - text: ok\nprime.b:\n  - text: ok\n  - text: ok again\n",
+        encoding="utf-8",
+    )
+    config = _write_config(
+        tmp_path,
+        runtime={"adapters": {"scripted": {"replies_file": str(replies)}}},
+    )
+
+    result = runner.invoke(app, ["doctor", "--config", str(config)])
+    output = result.output.replace("\n", " ")
+
+    assert result.exit_code == 0
+    assert "scripted" in output
+    assert "3 replies across 2 paths" in output
+
+
+def test_check_extensions_reports_scripted_replies_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _lockdown_env(monkeypatch, adapters="scripted")
+    monkeypatch.setenv("COLUMNS", "500")
+    missing = tmp_path / "no-such-replies.yaml"
+    config = _write_config(
+        tmp_path,
+        runtime={"adapters": {"scripted": {"replies_file": str(missing)}}},
+    )
+
+    result = runner.invoke(app, ["doctor", "--config", str(config)])
+    output = result.output.replace("\n", " ")
+
+    assert result.exit_code == 1
+    assert "scripted" in output
+    assert "cannot read" in output
+
+
+def test_check_extensions_reports_scripted_replies_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _lockdown_env(monkeypatch, adapters="scripted")
+    monkeypatch.setenv("COLUMNS", "500")
+    replies = tmp_path / "replies.yaml"
+    replies.write_text("not a mapping\n", encoding="utf-8")
+    config = _write_config(
+        tmp_path,
+        runtime={"adapters": {"scripted": {"replies_file": str(replies)}}},
+    )
+
+    result = runner.invoke(app, ["doctor", "--config", str(config)])
+    output = result.output.replace("\n", " ")
+
+    assert result.exit_code == 1
+    assert "scripted" in output
+    assert "replies file must be a mapping of path -> list of replies" in output

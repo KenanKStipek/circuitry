@@ -449,10 +449,18 @@ class ScriptedAdapter:
 
     def check(self) -> CheckResult:
         try:
-            self._ensure_loaded()
+            queues = self._ensure_loaded()
         except ScriptedRepliesError as e:
             return CheckResult(ok=False, missing=[], message=str(e))
-        return CheckResult(ok=True)
+        total = sum(len(queue) for queue in queues.values())
+        paths = len(queues)
+        return CheckResult(
+            ok=True,
+            message=(
+                f"{self._path()}: {total} repl{'y' if total == 1 else 'ies'} "
+                f"across {paths} path{'' if paths == 1 else 's'}"
+            ),
+        )
 
 
 def total_replies_by_path(path: Path) -> dict[str, int]:
