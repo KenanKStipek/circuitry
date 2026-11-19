@@ -197,17 +197,17 @@ thread_local! {
     /// `osi`, `cof` or `electricity`, so a pid the OS has since
     /// recycled for some unrelated process is never mistaken for
     /// this test's own.
-    static SPAWNED_OSI_PIDS: RefCell<Vec<(u32, Option<PathBuf>)>> = const { RefCell::new(Vec::new()) };
+    static SPAWNED_OSI_PIDS: RefCell<Vec<(u32, PathBuf)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Records *pid* as one of this test's own spawned `osi` processes,
 /// for [`diagnose_stalled_wait`] to find later from a caller that
-/// never itself sees the `Child` it belongs to -- *trace_path*, when
-/// given, is where that same `osi` was told to write its own
-/// `OSI_EXIT_TRACE` (issue #825), so a stalled wait can print it
-/// however the process itself ended, with no ties to whether `ps`
-/// still finds it alive at that moment.
-fn note_spawned_osi(pid: u32, trace_path: Option<PathBuf>) {
+/// never itself sees the `Child` it belongs to -- *trace_path* is
+/// where that same `osi` was told to write its own `OSI_EXIT_TRACE`
+/// (issue #825), so a stalled wait can print it however the process
+/// itself ended, with no ties to whether `ps` still finds it alive at
+/// that moment.
+fn note_spawned_osi(pid: u32, trace_path: PathBuf) {
     SPAWNED_OSI_PIDS.with(|pids| pids.borrow_mut().push((pid, trace_path)));
 }
 
@@ -291,7 +291,7 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
         });
     }
 
-    let spawned: Vec<(u32, Option<PathBuf>)> = SPAWNED_OSI_PIDS.with(|pids| pids.borrow().clone());
+    let spawned: Vec<(u32, PathBuf)> = SPAWNED_OSI_PIDS.with(|pids| pids.borrow().clone());
     let mut roots: Vec<u32> = spawned.iter().map(|(pid, _)| *pid).collect();
     if let Some(pid) = extra_pid {
         roots.push(pid);
@@ -359,9 +359,6 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
     // ever reaching the point this diagnostic's caller was waiting
     // for.
     for (pid, trace_path) in &spawned {
-        let Some(trace_path) = trace_path else {
-            continue;
-        };
         match std::fs::read_to_string(trace_path) {
             Ok(text) if !text.is_empty() => {
                 out.push_str(&format!("pid {pid} OSI_EXIT_TRACE ({trace_path:?}):\n"));
@@ -1307,7 +1304,7 @@ pub fn spawn_osi_on_pty_with_env(
         });
     }
     let child = cmd.spawn().expect("spawn osi on a pty");
-    note_spawned_osi(child.id(), Some(trace_path));
+    note_spawned_osi(child.id(), trace_path);
     child
 }
 

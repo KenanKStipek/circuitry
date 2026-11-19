@@ -548,21 +548,31 @@ fn supervise_plain(
     signals: &mut Option<SignalWatcher>,
     registry: &mut registry_io::RegistryHandle,
     orchestration: &str,
-) -> (std::process::ExitStatus, Option<ForwardSignal>) {
+) -> (std::process::ExitStatus, Option<SignalEvent>, bool) {
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
     // `OSI_EXIT_TRACE`'s own detail for whichever of the two callers
     // (`do_run`'s plain `--log` loop; `run_tui`'s own fallback once
     // `TerminalGuard::enter` has already failed) this run ends
-    // through -- never read by this function itself, which forwards
-    // every signal it sees exactly as it always has.
-    let mut last_forwarded_signal: Option<ForwardSignal> = None;
+    // through: the first signal's own origin (sender pid, `si_code`
+    // cause), and whether a SIGHUP was forwarded at any point in this
+    // loop, not only the last one -- a terminal lost first and then
+    // followed by an ordinary Ctrl-C before the engine exits is still
+    // a lost terminal. Neither changes what this function forwards or
+    // how, which stays exactly as it always has.
+    let mut first_signal_event: Option<SignalEvent> = None;
+    let mut saw_hup = false;
     loop {
         if let Some(watcher) = signals.as_mut() {
-            for sig in watcher.pending() {
+            for event in watcher.pending_with_origin() {
                 signal_count += 1;
-                last_forwarded_signal = Some(sig);
-                child.forward(sig);
+                if event.signal == ForwardSignal::Hup {
+                    saw_hup = true;
+                }
+                if first_signal_event.is_none() {
+                    first_signal_event = Some(event.clone());
+                }
+                child.forward(event.signal);
                 if signal_count == 1 {
                     print_line(out, clock, None, "cancelling, finally running...");
                 } else if signal_count == 2 {
@@ -590,7 +600,7 @@ fn supervise_plain(
         registry.ensure_written(model, orchestration);
 
         if let Ok(Some(status)) = child.try_wait() {
-            return (status, last_forwarded_signal);
+            return (status, first_signal_event, saw_hup);
         }
         std::thread::sleep(POLL_INTERVAL);
     }
@@ -1337,7 +1347,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     differ.set_label_hint(label_hint.clone());
     model.set_label_hint(label_hint);
 
-    let (exit_status, plain_last_signal) = supervise_plain(
+    let (exit_status, plain_signal_event, _plain_saw_hup) = supervise_plain(
         &mut out,
         &mut clock,
         &mut child,
@@ -1380,7 +1390,9 @@ fn do_run(args: RunArgs) -> ExitCode {
         None,
         "normal_end",
         serde_json::json!({
-            "forwarded_signal": plain_last_signal.map(|s| format!("{s:?}")),
+            "signal": plain_signal_event.as_ref().map(|e| format!("{:?}", e.signal)),
+            "sender_pid": plain_signal_event.as_ref().and_then(|e| e.sender_pid),
+            "cause": plain_signal_event.as_ref().map(|e| e.cause.clone()),
         }),
     );
     ExitCode::from(code)
@@ -2315,7 +2327,7 @@ fn run_tui(
             eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
-            let (exit_status, plain_last_signal) = supervise_plain(
+            let (exit_status, plain_signal_event, plain_saw_hup) = supervise_plain(
                 &mut out,
                 &mut clock,
                 &mut child,
@@ -2329,14 +2341,15 @@ fn run_tui(
                 registry,
                 &document,
             );
-            // A `SIGHUP` forwarded here (`supervise_plain`'s own
-            // signal loop) is the lost-terminal case the issue's own
-            // comments describe: `TerminalGuard::enter` already
-            // failed because the terminal was gone, and the kernel
-            // then delivered the same hang-up as a real signal too.
-            // Any other signal (Ctrl-C, SIGTERM) is an ordinary
+            // A `SIGHUP` forwarded at any point in `supervise_plain`'s
+            // own loop -- not only the last signal it saw -- is the
+            // lost-terminal case the issue's own comments describe:
+            // `TerminalGuard::enter` already failed because the
+            // terminal was gone, and the kernel then delivered the
+            // same hang-up as a real signal too. A run that forwards
+            // only some other signal (Ctrl-C, SIGTERM) is an ordinary
             // cancel, not a lost terminal.
-            let trace_phase = if plain_last_signal == Some(ForwardSignal::Hup) {
+            let trace_phase = if plain_saw_hup {
                 "lost_terminal_plain_stream"
             } else {
                 "terminal_guard_failed"
@@ -2361,7 +2374,9 @@ fn run_tui(
                 trace_phase,
                 serde_json::json!({
                     "error": err.to_string(),
-                    "forwarded_signal": plain_last_signal.map(|s| format!("{s:?}")),
+                    "signal": plain_signal_event.as_ref().map(|e| format!("{:?}", e.signal)),
+                    "sender_pid": plain_signal_event.as_ref().and_then(|e| e.sender_pid),
+                    "cause": plain_signal_event.as_ref().map(|e| e.cause.clone()),
                 }),
             );
             return ExitCode::from(code);
@@ -2479,16 +2494,25 @@ fn run_tui(
     // `stdin_hung_up`'s poll, the event reader thread's read result,
     // or a failed draw actually saw the lost terminal.
     let mut lost_terminal_check: Option<&'static str> = None;
-    // The full `SignalEvent` (sender pid, `si_code` cause) behind
-    // `received_signal` below, kept only for `OSI_EXIT_TRACE` --
-    // `received_signal` itself still drives the real exit-code logic,
-    // completely unchanged.
+    // The io::Error behind `poll_revents`/`read_error`/`draw_errno`'s
+    // own check name, when that check actually has one to give --
+    // `read_disconnected` has no `io::Error` of its own (a channel
+    // disconnect, not an OS read failure).
+    let mut lost_terminal_detail: Option<String> = None;
+    // The full `SignalEvent` (sender pid, `si_code` cause) behind the
+    // first signal this loop ever sees, kept only for `OSI_EXIT_TRACE`
+    // -- recorded regardless of `exit_status`, unlike `received_
+    // signal` below, since a signal that arrives once the finished
+    // screen is already up still decided this run's own exit from the
+    // trace's point of view, even though it must never retroactively
+    // change the real exit code (issue #795, `received_signal`'s own
+    // rule, kept completely unchanged).
     let mut received_signal_event: Option<SignalEvent> = None;
     'tui: loop {
         if let Some(watcher) = signals.as_mut() {
             for event in watcher.pending_with_origin() {
                 let sig = event.signal;
-                if exit_status.is_none() && received_signal_event.is_none() {
+                if received_signal_event.is_none() {
                     received_signal_event = Some(event.clone());
                 }
                 if exit_status.is_none() {
@@ -2764,9 +2788,10 @@ fn run_tui(
                     terminal_gone = true;
                     lost_terminal_check = Some("read_disconnected");
                 }
-                Ok(Err(_)) => {
+                Ok(Err(err)) => {
                     terminal_gone = true;
                     lost_terminal_check = Some("read_error");
+                    lost_terminal_detail = Some(err.to_string());
                 }
                 Ok(Ok(ev)) => match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
@@ -3000,8 +3025,9 @@ fn run_tui(
             });
             last_draw = Instant::now();
             needs_draw = false;
-            if drew.is_err() {
+            if let Err(draw_err) = &drew {
                 lost_terminal_check = Some("draw_errno");
+                lost_terminal_detail = Some(draw_err.to_string());
                 cancel_for_lost_terminal(
                     &child,
                     exit_status,
@@ -3113,6 +3139,7 @@ fn run_tui(
     };
     let trace_detail = serde_json::json!({
         "check": lost_terminal_check,
+        "check_error": lost_terminal_detail,
         "signal": received_signal_event.as_ref().map(|e| format!("{:?}", e.signal)),
         "sender_pid": received_signal_event.as_ref().and_then(|e| e.sender_pid),
         "cause": received_signal_event.as_ref().map(|e| e.cause.clone()),

@@ -258,9 +258,6 @@ pub fn process_alive(pid: i32) -> bool {
     std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-/// Polls pending signals without blocking — used in osi's own 100ms
-/// tick (DESIGN.md §6.1) alongside the live-state/events poll, so one
-/// loop drives everything.
 /// A signal osi just received, with the sender's pid and
 /// `signal-hook`'s own decoding of `si_code` alongside it --
 /// `OSI_EXIT_TRACE`'s own detail for a signal-related exit. Every
@@ -286,6 +283,9 @@ impl SignalEvent {
     }
 }
 
+/// Polls pending signals without blocking — used in osi's own 100ms
+/// tick (DESIGN.md §6.1) alongside the live-state/events poll, so one
+/// loop drives everything.
 pub struct SignalWatcher {
     // `WithOrigin`, not the plain `SignalOnly` alias (`Signals`): the
     // sender's pid and `si_code` a `SignalEvent` needs are only ever
@@ -293,10 +293,16 @@ pub struct SignalWatcher {
     // `siginfo_t`, never reconstructable from a bare signal number
     // read back out later.
     signals: signal_hook::iterator::SignalsInfo<signal_hook::iterator::exfiltrator::WithOrigin>,
-    // Issue #433's own buffering (see `has_pending`'s doc comment),
-    // now of the richer `SignalEvent` so a signal `has_pending`
-    // already drained still carries its own origin once `pending`/
-    // `pending_with_origin` actually hands it to a real caller.
+    // Signals [`SignalWatcher::has_pending`] has already drained from
+    // `signals` but [`SignalWatcher::pending`]/[`SignalWatcher::
+    // pending_with_origin`] haven't been handed yet (issue #433): a
+    // probe loop (`engine::run_probe`) that only wants to know
+    // *whether* a signal is waiting, not forward it itself, must not
+    // make the real caller later -- `do_run`'s own `pending_signal_
+    // exit_code` -- miss it because the probe already consumed it
+    // from `signals` first. Now of the richer `SignalEvent` so a
+    // signal `has_pending` already drained still carries its own
+    // origin once a real caller hands it off.
     buffered: Vec<SignalEvent>,
 }
 
@@ -311,14 +317,28 @@ impl SignalWatcher {
         })
     }
 
+    /// One event per distinct signal pending since the last read --
+    /// `signal_hook`'s `SignalOnly` exfiltrator (what this watched
+    /// before `WithOrigin`) stored one `AtomicBool` per signal, so two
+    /// deliveries of the same signal between two reads already
+    /// collapsed into one event; `WithOrigin` instead queues every
+    /// delivery, so this keeps only the first of each signal in one
+    /// drain to preserve that exact behaviour -- a repeated SIGHUP or
+    /// SIGINT (a terminal hang-up re-sent moments apart, a user
+    /// pressing Ctrl-C twice fast) must still count as one signal, not
+    /// two, to every caller of `pending`/`has_pending`.
     fn drain_new(&mut self) -> Vec<SignalEvent> {
-        self.signals
-            .pending()
-            .filter_map(|origin| {
-                ForwardSignal::from_raw(origin.signal)
-                    .map(|signal| SignalEvent::from_origin(signal, &origin))
-            })
-            .collect()
+        let mut out: Vec<SignalEvent> = Vec::new();
+        for origin in self.signals.pending() {
+            let Some(signal) = ForwardSignal::from_raw(origin.signal) else {
+                continue;
+            };
+            if out.iter().any(|event: &SignalEvent| event.signal == signal) {
+                continue;
+            }
+            out.push(SignalEvent::from_origin(signal, &origin));
+        }
+        out
     }
 
     pub fn pending(&mut self) -> Vec<ForwardSignal> {
@@ -337,6 +357,12 @@ impl SignalWatcher {
         result
     }
 
+    /// Whether a signal has arrived, without consuming it the way
+    /// [`SignalWatcher::pending`]/[`SignalWatcher::pending_with_
+    /// origin`] does (issue #433): a probe loop that only needs to
+    /// know whether to give up early buffers anything it finds here
+    /// instead, so the real signal-handling call this watcher is
+    /// otherwise for still sees it afterwards.
     pub fn has_pending(&mut self) -> bool {
         let new = self.drain_new();
         self.buffered.extend(new);
@@ -347,6 +373,57 @@ impl SignalWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `cargo test` runs this crate's tests concurrently in one
+    // process, but `libc::kill(getpid(), ...)` below is process-wide:
+    // the OS delivers it to every `SignalWatcher` instance alive at
+    // the time, in whichever test created it, not just the one this
+    // test call sent it from. Serializing the two tests that send
+    // real signals keeps one from seeing the other's.
+    static SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn pending_merges_repeated_deliveries_of_the_same_signal() {
+        // Registering this test's own watcher first and sending the
+        // signal to this very process, same as the pre-spawn race
+        // test in `main.rs`: the kernel's own default SIGINT
+        // disposition (process death) is never a risk once a watcher
+        // is already registered. Two SIGINTs sent back to back, read
+        // in one `pending` call, must still collapse into one event
+        // -- the exact `SignalOnly` semantics `WithOrigin` otherwise
+        // breaks (issue #825).
+        let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
+        let mut watcher = SignalWatcher::new().unwrap();
+        let pid = std::process::id() as i32;
+        unsafe {
+            libc::kill(pid, libc::SIGINT);
+            libc::kill(pid, libc::SIGINT);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pending = Vec::new();
+        while pending.is_empty() && Instant::now() < deadline {
+            pending = watcher.pending();
+        }
+        assert_eq!(pending, vec![ForwardSignal::Int]);
+    }
+
+    #[test]
+    fn pending_with_origin_carries_the_senders_pid() {
+        let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
+        let mut watcher = SignalWatcher::new().unwrap();
+        let pid = std::process::id() as i32;
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut events = Vec::new();
+        while events.is_empty() && Instant::now() < deadline {
+            events = watcher.pending_with_origin();
+        }
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].signal, ForwardSignal::Term);
+        assert_eq!(events[0].sender_pid, Some(pid));
+    }
 
     #[test]
     fn process_alive_is_true_for_this_process_and_false_once_a_child_is_reaped() {
