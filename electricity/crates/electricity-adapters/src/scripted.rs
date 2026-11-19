@@ -887,7 +887,10 @@ impl Adapter for ScriptedAdapter {
                 let guard = queues.lock().unwrap();
                 let total: usize = guard.values().map(|q| q.len()).sum();
                 let paths = guard.len();
-                let display = self.resolve_path().expect("ensure_loaded just resolved it").display;
+                let display = self
+                    .resolve_path()
+                    .expect("ensure_loaded just resolved it")
+                    .display;
                 CheckResult {
                     ok: true,
                     missing: Vec::new(),
@@ -1155,12 +1158,7 @@ mod tests {
             ScriptedAdapter::new("scripted", Value::Str(good.to_string_lossy().into_owned()));
         let result = adapter.check().await;
         assert!(result.ok);
-        assert!(
-            result
-                .message
-                .unwrap()
-                .ends_with("1 reply across 1 path")
-        );
+        assert!(result.message.unwrap().ends_with("1 reply across 1 path"));
 
         let (_bad_dir, bad) = write_replies("not a mapping\n", ".yaml");
         // A plain scalar document parses as a YAML string, not a
