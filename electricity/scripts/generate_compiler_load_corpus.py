@@ -1174,6 +1174,34 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
+        # Issue #405: `core/prompt_compose.py::tree_sibling_warnings` --
+        # a `{{> name}}` reference to a sibling under the same `flow:
+        # tree` dynamic, which cannot be guaranteed to have run yet.
+        "name": "tree_sibling_partial_reference_under_flow_tree_warns",
+        "files": {
+            "doc.yml": (
+                "flow: tree\n"
+                "effects:\n"
+                "  - {type: yield, name: a, template: 'hello'}\n"
+                "  - {type: yield, name: b, template: '{{> a}}'}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # The same reference under `flow: chain` (the default) is never
+        # flagged -- chain order is defined, so no warning either way.
+        "name": "tree_sibling_partial_reference_under_flow_chain_is_silent",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - {type: yield, name: a, template: 'hello'}\n"
+                "  - {type: yield, name: b, template: '{{> a}}'}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
         # Issue #564: `timeout_ms` is an integer or `{from, default}`,
         # on both a tool and a prompt.
         "name": "timeout_ms_from_state_is_valid",

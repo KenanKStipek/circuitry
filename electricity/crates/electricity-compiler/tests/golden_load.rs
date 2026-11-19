@@ -235,6 +235,16 @@ fn if_cel_bare_namespace_is_a_check_error() {
 }
 
 #[test]
+fn tree_sibling_partial_reference_under_flow_tree_warns() {
+    run_case("tree_sibling_partial_reference_under_flow_tree_warns");
+}
+
+#[test]
+fn tree_sibling_partial_reference_under_flow_chain_is_silent() {
+    run_case("tree_sibling_partial_reference_under_flow_chain_is_silent");
+}
+
+#[test]
 fn timeout_ms_from_state_is_valid() {
     run_case("timeout_ms_from_state_is_valid");
 }
@@ -578,6 +588,8 @@ fn every_case_in_the_corpus_has_a_test() {
         "timeout_ms_from_state_a_zero_default_is_a_schema_error",
         "timeout_ms_from_state_a_string_default_is_a_schema_error",
         "timeout_ms_from_state_an_extra_key_is_a_schema_error",
+        "tree_sibling_partial_reference_under_flow_tree_warns",
+        "tree_sibling_partial_reference_under_flow_chain_is_silent",
         "runtime_not_an_object_is_a_run_only_error",
         "plugins_not_a_list_is_a_run_only_error",
         "plugins_entry_not_a_string_is_a_run_only_error",

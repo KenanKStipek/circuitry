@@ -4071,6 +4071,124 @@
     }
   },
   {
+    "name": "tree_sibling_partial_reference_under_flow_tree_warns",
+    "files": {
+      "doc.yml": "flow: tree\neffects:\n  - {type: yield, name: a, template: 'hello'}\n  - {type: yield, name: b, template: '{{> a}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[1]: '{{> a}}' names 'a', inside the document's own top-level 'flow: tree' as this reference — tree children dispatch in no fixed order, so this can render '' whenever 'a' has not completed yet. No warning for 'flow: chain', where order is defined."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "a",
+          "template": "hello",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        },
+        {
+          "name": "b",
+          "template": "{{> a}}",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "tree",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "b"
+      ]
+    },
+    "definition_error": null,
+    "digest": "5d7d2481d809be1b5b8bcd78bd45aee4b8928dc3a95ff8816e113efd22e94dd0",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tree_sibling_partial_reference_under_flow_chain_is_silent",
+    "files": {
+      "doc.yml": "effects:\n  - {type: yield, name: a, template: 'hello'}\n  - {type: yield, name: b, template: '{{> a}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "a",
+          "template": "hello",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        },
+        {
+          "name": "b",
+          "template": "{{> a}}",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "b"
+      ]
+    },
+    "definition_error": null,
+    "digest": "65c129d6b7b07fe81967b31c927c45af0c27193efc864bc8c203148fdcee4972",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "timeout_ms_from_state_is_valid",
     "files": {
       "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {from: input.ms}\n  - type: prompt\n    name: p\n    template: 'hi'\n    timeout_ms: {from: prime.t.value, default: 1}\n"
