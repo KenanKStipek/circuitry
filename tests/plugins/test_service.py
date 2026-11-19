@@ -223,6 +223,8 @@ def test_start_ready_status_stop_against_a_local_http_server(
     assert started.ok, started.stderr
     assert started.value["ready"] is True
     assert started.value["already_running"] is False
+    assert "namespace" not in started.value
+    assert "namespace" not in started.raw
     pgid = started.value["pgid"]
     assert _group_alive(pgid)
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
@@ -233,6 +235,7 @@ def test_start_ready_status_stop_against_a_local_http_server(
     assert abs(record["boot_time"] - boot_time()) <= 5
     assert record["ports"] == [port]
     assert record["log"] == str(log.resolve())
+    assert "namespace" not in record
     assert log.exists()
 
     status = plugin.execute(params={"action": "status", "name": "web"})
@@ -247,6 +250,8 @@ def test_start_ready_status_stop_against_a_local_http_server(
     assert stopped.ok, stopped.stderr
     assert stopped.value["stopped"] is True
     assert stopped.value["ports_free"] is True
+    assert "namespace" not in stopped.value
+    assert "namespace" not in stopped.raw
     assert not _group_alive(pgid)
     assert not _port_open(port)
     assert not (state_dir / "web.json").exists()
