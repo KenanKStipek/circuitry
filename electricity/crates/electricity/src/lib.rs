@@ -1678,7 +1678,12 @@ pub async fn run_orchestration_with_config(
                 // `cof trust` recorded it under, so a past consent for
                 // it would never be found (fails closed, never open).
                 let digest = electricity_config::config_trust::config_digest(
-                    &std::fs::read(&req.orchestration_path).unwrap_or_default(),
+                    // Shared with the document load above (#405): this gate's own
+                    // digest hashes the exact same bytes `prepare_document` already
+                    // read, through the same cache, never a second, independent
+                    // read that could by then see different bytes.
+                    &electricity_compiler::file_cache::read_cached(&req.orchestration_path)
+                        .unwrap_or_default(),
                 );
                 let consented = std::env::home_dir()
                     .map(|home| electricity_config::trust_store_path(&home))

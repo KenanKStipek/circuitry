@@ -882,6 +882,15 @@ async fn load_child<R: ParamsCtx>(
                 .to_path_buf();
             let confinement_root =
                 electricity_compiler::project_root::default_project_root(&document_dir);
+            // One on-disk read per file for this child's own
+            // load/digest cycle (#405): dropped at this match arm's own
+            // closing brace, well before `load_child`'s caller ever
+            // `.await`s it, so nothing here crosses a suspension point
+            // -- see `electricity_compiler::file_cache::enter`'s own doc
+            // comment. The compile step a caller makes from the
+            // `LoadedChild` this returns is a separate read, after that
+            // `.await` -- DESIGN.md §13.
+            let _use_child_file_cache = electricity_compiler::file_cache::enter();
             let document = electricity_compiler::load_document(&resolved).map_err(|e| e.0)?;
             if validate {
                 let errors = electricity_compiler::structural_errors(&document);
