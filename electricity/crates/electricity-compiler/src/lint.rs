@@ -7,6 +7,7 @@
 //! valid document invalid, and every message is Circuitry's own, word for
 //! word.
 
+use crate::compose::partial_references;
 use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 use regex::Regex;
@@ -241,7 +242,69 @@ fn find_scope_references<'t>(text: &'t str, name: &str) -> Vec<&'t str> {
     found
 }
 
-/// `core/lint.py::_check_loop_references`.
+/// The warning for one loop-qualified *segment* a reference named,
+/// whichever of the two syntaxes it was written in -- `core/lint.py::
+/// _loop_reference_warning`. *tag* is that literal text, quoted back at
+/// the author; *partial_syntax* picks the matching spelling for the
+/// suggested fix, since `{{prime.<step>.value}}` and `{{> <step>}}` read
+/// the same state.
+fn loop_reference_warning(
+    where_: &str,
+    name: &str,
+    body_names: &HashSet<String>,
+    segment: &str,
+    tag: &str,
+    partial_syntax: bool,
+) -> Option<String> {
+    let (generic_current_pass, concrete_current_pass, last_fix, collected_fix) = if partial_syntax {
+        (
+            "{{> <step>}}".to_string(),
+            format!("{{{{> {segment}}}}}"),
+            format!("{{{{> {name}.last.<step>}}}}"),
+            format!("{{{{> {name}.collected}}}}"),
+        )
+    } else {
+        (
+            "{{prime.<step>.value}}".to_string(),
+            format!("{{{{prime.{segment}.value}}}}"),
+            format!("prime.{name}.last.<step>.value"),
+            format!("prime.{name}.collected.value"),
+        )
+    };
+
+    if ITER_SEGMENT.is_match(segment) {
+        let pass = segment.strip_prefix("iter_").unwrap_or(segment);
+        return Some(format!(
+            "{where_}: '{tag}' names a fixed pass of the loop it sits inside. It does \
+             not fail — it resolves to pass {pass}'s output in every iteration, so \
+             every later pass reads stale data. Use '{generic_current_pass}' for the \
+             current pass; iter_<N> is only meaningful outside the loop."
+        ));
+    }
+    if segment == "last" {
+        return Some(format!(
+            "{where_}: '{tag}' inside the loop it names resolves to the previous pass \
+             at best — 'last' is written when the loop completes. Use \
+             '{generic_current_pass}' for the current pass; '{last_fix}' is only \
+             meaningful after the loop."
+        ));
+    }
+    if body_names.contains(segment) {
+        return Some(format!(
+            "{where_}: '{tag}' never resolves — 'prime.{name}' is the loop's own node \
+             (iter_<N>, last, collected, meta), not a scope its body steps live in. Use \
+             '{concrete_current_pass}' for the current pass, or '{collected_fix}' after \
+             the loop."
+        ));
+    }
+    None
+}
+
+/// `core/lint.py::_check_loop_references`: flags the loop-body reference
+/// forms that silently do the wrong thing, in either spelling -- a direct
+/// `prime.<loop>.<segment>` path, or the dotted `{{> <loop>.<segment>}}`
+/// partial-reference form (#405), which reads the exact same state and
+/// fails the exact same silent way.
 fn check_loop_references(
     effect: &Dict,
     where_: &str,
@@ -263,34 +326,37 @@ fn check_loop_references(
                 if seen.contains(&key) {
                     continue;
                 }
+                let tag = format!("prime.{name}.{segment}");
+                if let Some(warning) =
+                    loop_reference_warning(where_, name, body_names, segment, &tag, false)
+                {
+                    seen.insert(key);
+                    warnings.push(warning);
+                }
+            }
+        }
 
-                if ITER_SEGMENT.is_match(segment) {
+        for ref_name in partial_references(&text) {
+            let Some((head, rest)) = ref_name.split_once('.') else {
+                continue;
+            };
+            let segment = rest.split('.').next().unwrap_or(rest);
+            for scope in &named {
+                let name = scope.name.as_ref().expect("filtered to named scopes");
+                if head != name.as_str() {
+                    continue;
+                }
+                let key = format!("{name}.{segment}");
+                if seen.contains(&key) {
+                    continue;
+                }
+                let body_names = &scope.body_names;
+                let tag = format!("{{{{> {ref_name}}}}}");
+                if let Some(warning) =
+                    loop_reference_warning(where_, name, body_names, segment, &tag, true)
+                {
                     seen.insert(key);
-                    let pass = segment.strip_prefix("iter_").unwrap_or(segment);
-                    warnings.push(format!(
-                        "{where_}: 'prime.{name}.{segment}' names a fixed pass of the \
-                         loop it sits inside. It does not fail — it resolves to pass \
-                         {pass}'s output in every iteration, so every later pass reads \
-                         stale data. Use '{{{{prime.<step>.value}}}}' for the current \
-                         pass; iter_<N> is only meaningful outside the loop."
-                    ));
-                } else if segment == "last" {
-                    seen.insert(key);
-                    warnings.push(format!(
-                        "{where_}: 'prime.{name}.last' inside the loop it names resolves \
-                         to the previous pass at best — 'last' is written when the loop \
-                         completes. Use '{{{{prime.<step>.value}}}}' for the current pass; \
-                         'prime.{name}.last.<step>.value' is only meaningful after the loop."
-                    ));
-                } else if body_names.contains(segment) {
-                    seen.insert(key);
-                    warnings.push(format!(
-                        "{where_}: 'prime.{name}.{segment}' never resolves — 'prime.{name}' \
-                         is the loop's own node (iter_<N>, last, collected, meta), not a \
-                         scope its body steps live in. Use '{{{{prime.{segment}.value}}}}' \
-                         for the current pass, or 'prime.{name}.collected.value' after the \
-                         loop."
-                    ));
+                    warnings.push(warning);
                 }
             }
         }

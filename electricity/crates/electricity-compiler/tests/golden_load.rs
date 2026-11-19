@@ -245,6 +245,31 @@ fn tree_sibling_partial_reference_under_flow_chain_is_silent() {
 }
 
 #[test]
+fn tree_sibling_partial_reference_named_dynamic_warns() {
+    run_case("tree_sibling_partial_reference_named_dynamic_warns");
+}
+
+#[test]
+fn tree_sibling_partial_reference_dotted_same_dynamic_sibling_warns() {
+    run_case("tree_sibling_partial_reference_dotted_same_dynamic_sibling_warns");
+}
+
+#[test]
+fn tree_sibling_partial_reference_loop_body_warns() {
+    run_case("tree_sibling_partial_reference_loop_body_warns");
+}
+
+#[test]
+fn tree_sibling_partial_reference_finally_warns() {
+    run_case("tree_sibling_partial_reference_finally_warns");
+}
+
+#[test]
+fn lint_partial_reference_to_loop_step_never_resolves() {
+    run_case("lint_partial_reference_to_loop_step_never_resolves");
+}
+
+#[test]
 fn timeout_ms_from_state_is_valid() {
     run_case("timeout_ms_from_state_is_valid");
 }
@@ -590,6 +615,11 @@ fn every_case_in_the_corpus_has_a_test() {
         "timeout_ms_from_state_an_extra_key_is_a_schema_error",
         "tree_sibling_partial_reference_under_flow_tree_warns",
         "tree_sibling_partial_reference_under_flow_chain_is_silent",
+        "tree_sibling_partial_reference_named_dynamic_warns",
+        "tree_sibling_partial_reference_dotted_same_dynamic_sibling_warns",
+        "tree_sibling_partial_reference_loop_body_warns",
+        "tree_sibling_partial_reference_finally_warns",
+        "lint_partial_reference_to_loop_step_never_resolves",
         "runtime_not_an_object_is_a_run_only_error",
         "plugins_not_a_list_is_a_run_only_error",
         "plugins_entry_not_a_string_is_a_run_only_error",

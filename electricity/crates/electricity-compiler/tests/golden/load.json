@@ -4085,7 +4085,7 @@
       "ok": true,
       "errors": [],
       "warnings": [
-        "effects[1]: '{{> a}}' names 'a', inside the document's own top-level 'flow: tree' as this reference — tree children dispatch in no fixed order, so this can render '' whenever 'a' has not completed yet. No warning for 'flow: chain', where order is defined."
+        "effects[1]: '{{> a}}' names 'a', and both it and this reference sit inside the document's own top-level 'flow: tree' — tree children dispatch in no fixed order, so this can render '' whenever 'a' has not completed yet."
       ]
     },
     "run_error": null,
@@ -4183,6 +4183,434 @@
     },
     "definition_error": null,
     "digest": "65c129d6b7b07fe81967b31c927c45af0c27193efc864bc8c203148fdcee4972",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tree_sibling_partial_reference_named_dynamic_warns",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: w\n    flow: tree\n    effects:\n      - {type: yield, name: a, template: 'hello'}\n      - {type: yield, name: b, template: '{{> w.a}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0].effects[1]: '{{> w.a}}' names 'w.a', and both it and this reference sit inside the 'flow: tree' dynamic 'w' ('effects[0]') — tree children dispatch in no fixed order, so this can render '' whenever 'w.a' has not completed yet."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "w",
+          "effects": [
+            {
+              "name": "a",
+              "template": "hello",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            },
+            {
+              "name": "b",
+              "template": "{{> w.a}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "flow": "tree",
+          "finally_effects": [],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "resume": "continue",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "b",
+        "w"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f0fa25811c220f61f3b440c2589133be463be4eacc453038fd11315f493a7433",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tree_sibling_partial_reference_dotted_same_dynamic_sibling_warns",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: fan\n    flow: tree\n    effects:\n      - {type: yield, name: first, template: 'hello'}\n      - {type: yield, name: second, template: '{{> fan.first}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0].effects[1]: '{{> fan.first}}' names 'fan.first', and both it and this reference sit inside the 'flow: tree' dynamic 'fan' ('effects[0]') — tree children dispatch in no fixed order, so this can render '' whenever 'fan.first' has not completed yet."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "fan",
+          "effects": [
+            {
+              "name": "first",
+              "template": "hello",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            },
+            {
+              "name": "second",
+              "template": "{{> fan.first}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "flow": "tree",
+          "finally_effects": [],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "resume": "continue",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "fan",
+        "first",
+        "second"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f5eb51983b70903a6d141534799b3a125bb76c91285de0cc63b055101d576baf",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tree_sibling_partial_reference_loop_body_warns",
+    "files": {
+      "doc.yml": "flow: tree\neffects:\n  - {type: yield, name: a, template: 'hello'}\n  - type: loop\n    name: nums\n    each: {in: 'input.items', as: item}\n    body:\n      - {type: yield, name: step1, template: '{{> a}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[1].body[0]: '{{> a}}' names 'a', and both it and this reference sit inside the document's own top-level 'flow: tree' — tree children dispatch in no fixed order, so this can render '' whenever 'a' has not completed yet."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "a",
+          "template": "hello",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        },
+        {
+          "name": "nums",
+          "body": [
+            {
+              "name": "step1",
+              "template": "{{> a}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "tree",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "nums",
+        "step1"
+      ]
+    },
+    "definition_error": null,
+    "digest": "a795fb2152e6bfb8f4b792c027f29a0f0b27f5610e3cec96fe8db4f4b3bf7769",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tree_sibling_partial_reference_finally_warns",
+    "files": {
+      "doc.yml": "flow: tree\neffects:\n  - {type: yield, name: a, template: 'hello'}\n  - type: dynamic\n    name: wrapper\n    effects:\n      - {type: yield, name: noop, template: 'x'}\n    finally:\n      - {type: yield, name: cleanup, template: '{{> a}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[1].finally[0]: '{{> a}}' names 'a', and both it and this reference sit inside the document's own top-level 'flow: tree' — tree children dispatch in no fixed order, so this can render '' whenever 'a' has not completed yet."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "a",
+          "template": "hello",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        },
+        {
+          "name": "wrapper",
+          "effects": [
+            {
+              "name": "noop",
+              "template": "x",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "flow": "chain",
+          "finally_effects": [
+            {
+              "name": "cleanup",
+              "template": "{{> a}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "resume": "continue",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        }
+      ],
+      "flow": "tree",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "cleanup",
+        "noop",
+        "wrapper"
+      ]
+    },
+    "definition_error": null,
+    "digest": "683ec82498bec8258cb63f496b8c6f2c5f55505d967f788d7c6a733881e18868",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_partial_reference_to_loop_step_never_resolves",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: outer\n    each: {in: 'input.items', as: item}\n    body:\n      - {type: prompt, name: first, template: 'FIRST {{item}}'}\n      - {type: prompt, name: second, template: '{{> outer.first}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0].body[1]: '{{> outer.first}}' never resolves — 'prime.outer' is the loop's own node (iter_<N>, last, collected, meta), not a scope its body steps live in. Use '{{> first}}' for the current pass, or '{{> outer.collected}}' after the loop."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "outer",
+          "body": [
+            {
+              "name": "first",
+              "template": "FIRST {{item}}",
+              "template_file": null,
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null,
+              "split": null
+            },
+            {
+              "name": "second",
+              "template": "{{> outer.first}}",
+              "template_file": null,
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null,
+              "split": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "first",
+        "outer",
+        "second"
+      ]
+    },
+    "definition_error": null,
+    "digest": "e70186b12515f34b1b079822035999775c5a32468c23bee6fe5444c237132719",
     "comparison": {
       "validate_errors": [],
       "run_error": null

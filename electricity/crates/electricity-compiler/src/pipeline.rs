@@ -906,7 +906,11 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
             };
         }
     };
-    warnings.extend(compose::tree_sibling_warnings(&document, &origin));
+    warnings.extend(compose::tree_sibling_warnings(
+        &document,
+        &origin,
+        &program.prompts,
+    ));
 
     let merged_runtime = merged_runtime_block(options, &document);
     let config_errors = concurrency_config_errors(merged_runtime.as_ref());

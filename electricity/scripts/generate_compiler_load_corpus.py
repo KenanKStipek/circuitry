@@ -1202,6 +1202,100 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
+        # The same warning, naming a *named* `flow: tree` dynamic rather
+        # than the document's own top-level flow -- the reference is
+        # dotted, since a dynamic's own children are never bare-visible,
+        # even from a sibling in the very same dynamic.
+        "name": "tree_sibling_partial_reference_named_dynamic_warns",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: dynamic\n"
+                "    name: w\n"
+                "    flow: tree\n"
+                "    effects:\n"
+                "      - {type: yield, name: a, template: 'hello'}\n"
+                "      - {type: yield, name: b, template: '{{> w.a}}'}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A dotted reference between two siblings of the same named
+        # `flow: tree` dynamic -- the one way to reach a dynamic's own
+        # child by name, since a dynamic's children are never bare-
+        # visible, even from a sibling in the very same dynamic.
+        "name": "tree_sibling_partial_reference_dotted_same_dynamic_sibling_warns",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: dynamic\n"
+                "    name: fan\n"
+                "    flow: tree\n"
+                "    effects:\n"
+                "      - {type: yield, name: first, template: 'hello'}\n"
+                "      - {type: yield, name: second, template: '{{> fan.first}}'}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A loop body step referencing a sibling of the enclosing `flow:
+        # tree` dynamic the loop itself sits inside.
+        "name": "tree_sibling_partial_reference_loop_body_warns",
+        "files": {
+            "doc.yml": (
+                "flow: tree\n"
+                "effects:\n"
+                "  - {type: yield, name: a, template: 'hello'}\n"
+                "  - type: loop\n"
+                "    name: nums\n"
+                "    each: {in: 'input.items', as: item}\n"
+                "    body:\n"
+                "      - {type: yield, name: step1, template: '{{> a}}'}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A dynamic's own `finally` always runs after the whole of its
+        # `effects`, so a reference to one of its tree-flow siblings
+        # there still warns (the sibling may not be the last to finish).
+        "name": "tree_sibling_partial_reference_finally_warns",
+        "files": {
+            "doc.yml": (
+                "flow: tree\n"
+                "effects:\n"
+                "  - {type: yield, name: a, template: 'hello'}\n"
+                "  - type: dynamic\n"
+                "    name: wrapper\n"
+                "    effects:\n"
+                "      - {type: yield, name: noop, template: 'x'}\n"
+                "    finally:\n"
+                "      - {type: yield, name: cleanup, template: '{{> a}}'}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # Issue #405: a `{{> <loop>.<step>}}` partial reference resolves
+        # through the exact same, never-populated state a direct
+        # `prime.<loop>.<step>` reference does.
+        "name": "lint_partial_reference_to_loop_step_never_resolves",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: outer\n"
+                "    each: {in: 'input.items', as: item}\n"
+                "    body:\n"
+                "      - {type: prompt, name: first, template: 'FIRST {{item}}'}\n"
+                "      - {type: prompt, name: second, template: '{{> outer.first}}'}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
         # Issue #564: `timeout_ms` is an integer or `{from, default}`,
         # on both a tool and a prompt.
         "name": "timeout_ms_from_state_is_valid",

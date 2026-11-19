@@ -51,7 +51,7 @@ fn is_plain_identifier(segment: &str) -> bool {
 /// nope}} {{> nope}}'`, is reported once, not once per occurrence): the
 /// sigil must immediately follow `{{` with no leading whitespace, and
 /// `{{{>x}}}` (a "no escape" tag, not a partial) is excluded.
-fn partial_references(text: &str) -> BTreeSet<String> {
+pub(crate) fn partial_references(text: &str) -> BTreeSet<String> {
     let bytes = text.as_bytes();
     let mut names = BTreeSet::new();
     let mut i = 0;
@@ -388,20 +388,34 @@ fn is_tree_flow(value: Option<&Value>) -> bool {
     )
 }
 
-fn tree_container_label(effect_path: Option<&str>, name: Option<&str>) -> String {
+/// `effect.get("flow") or effect.get("strategy")`'s truthy-OR -- the exact
+/// same fallback `core/compiler.py`'s own `_normalize_flow(effect.get(
+/// "flow") or effect.get("strategy") or "chain")` resolves with, unlike
+/// `Option::or_else`'s missing-key-only fallback (which would miss a
+/// `flow: ""`/`flow: null` alongside a real `strategy: tree`).
+fn flow_or_strategy(effect: &Value) -> Option<&Value> {
+    let flow = dict_get(effect, "flow");
+    if is_truthy(flow) {
+        flow
+    } else {
+        dict_get(effect, "strategy")
+    }
+}
+
+fn tree_container_label(effect_path: Option<&str>, name: Option<&str>, kind: &str) -> String {
     match effect_path {
         None => "the document's own top-level 'flow: tree'".to_string(),
         Some(path) => match name {
-            Some(n) if !n.is_empty() => format!("the 'flow: tree' dynamic '{n}' ('{path}')"),
-            _ => format!("the 'flow: tree' dynamic at '{path}'"),
+            Some(n) if !n.is_empty() => format!("the 'flow: tree' {kind} '{n}' ('{path}')"),
+            _ => format!("the 'flow: tree' {kind} at '{path}'"),
         },
     }
 }
 
-/// The list id *source_path* and *target_path* -- each the sequence of
-/// `(list id, index within that list)` steps from the document root down
-/// to one effect -- first diverge under, or `None` when neither diverges
-/// from the other -- `core/prompt_compose.py::_tree_divergence`.
+/// The id of the list *source_path* and *target_path* -- each the sequence
+/// of `(list id, index within that list)` steps from the document root
+/// down to one effect -- first diverge under, or `None` when neither
+/// diverges from the other -- `core/prompt_compose.py::_tree_divergence`.
 fn tree_divergence(
     source_path: &[(usize, usize)],
     target_path: &[(usize, usize)],
@@ -417,10 +431,42 @@ fn tree_divergence(
     None
 }
 
+/// Every effect name a `{{> name}}` tag in *text* ultimately names,
+/// expanding through *declared* prompts transitively the same way
+/// `_expand` splices them at render time -- `core/prompt_compose.py::
+/// _effect_references`: a reference reached only through one or more
+/// `prompts:` entries still lands, once spliced, at the position of the
+/// effect whose own template/message included the first `{{> name}}`.
+/// Declared-prompt cycles are already [`check_prompt_composition`]'s own
+/// error, raised before this ever runs; *seen* here is just the ordinary
+/// recursion-safety a caller that skipped that check would still need.
+fn effect_references(text: &str, declared: &IndexMap<String, String>) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut stack = vec![text.to_string()];
+    while let Some(current) = stack.pop() {
+        for name in partial_references(&current) {
+            if !name_shape_matches(&name) {
+                continue;
+            }
+            let head = name.split('.').next().unwrap_or(&name).to_string();
+            if let Some(prompt_text) = declared.get(&head) {
+                if seen.insert(head) {
+                    stack.push(prompt_text.clone());
+                }
+                continue;
+            }
+            names.insert(name);
+        }
+    }
+    names
+}
+
 /// Bundles the values that stay constant across every recursive
 /// [`walk_tree_siblings`] call -- the same reasoning as [`WalkCtx`] above.
 struct TreeSiblingCtx<'a> {
     origin: &'a DocumentOrigin,
+    declared: &'a IndexMap<String, String>,
 }
 
 /// The sequence of `(list id, index within that list)` steps from the
@@ -429,8 +475,44 @@ struct TreeSiblingCtx<'a> {
 type TreeSiblingPath = Vec<(usize, usize)>;
 
 /// One pending `{{> name}}` reference: the referencing effect's own path,
-/// its `where` label, and the name it names.
-type TreeSiblingPending = (TreeSiblingPath, String, String);
+/// its `where` label, the name it names, and the bare-lookup scope chain
+/// (innermost first, as indices into [`BareScopes`]) active at that point.
+type TreeSiblingPending = (TreeSiblingPath, String, String, Vec<usize>);
+
+/// The bare-name lookup scopes `walk_tree_siblings` builds -- an arena of
+/// `name -> position` maps, by index, mirroring `core/prompt_compose.py::
+/// tree_sibling_warnings`'s own `out`/`bare_chain` dicts: a named `if`'s
+/// own branch gets a fresh scope that is also pushed onto the bare-lookup
+/// chain; a named `dynamic`'s gets a fresh scope that never is (so nothing
+/// placed there is ever found by a bare lookup, from anywhere).
+struct BareScopes {
+    scopes: Vec<IndexMap<String, TreeSiblingPath>>,
+}
+
+impl BareScopes {
+    fn new() -> (Self, usize) {
+        (
+            BareScopes {
+                scopes: vec![IndexMap::new()],
+            },
+            0,
+        )
+    }
+
+    fn new_scope(&mut self) -> usize {
+        let idx = self.scopes.len();
+        self.scopes.push(IndexMap::new());
+        idx
+    }
+
+    fn register(&mut self, scope: usize, name: &str, path: TreeSiblingPath) {
+        self.scopes[scope].insert(name.to_string(), path);
+    }
+
+    fn get(&self, scope: usize, name: &str) -> Option<&TreeSiblingPath> {
+        self.scopes[scope].get(name)
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn walk_tree_siblings(
@@ -440,9 +522,12 @@ fn walk_tree_siblings(
     label: String,
     container_path: &str,
     prefix: &str,
+    out: usize,
+    bare_chain: &[usize],
     list_flow: &mut Vec<bool>,
     list_label: &mut Vec<String>,
-    positions: &mut IndexMap<String, TreeSiblingPath>,
+    scopes: &mut BareScopes,
+    dotted_positions: &mut IndexMap<String, TreeSiblingPath>,
     pending: &mut Vec<TreeSiblingPending>,
     ctx: &TreeSiblingCtx<'_>,
 ) {
@@ -459,55 +544,80 @@ fn walk_tree_siblings(
 
         if let Some(name) = name {
             if effect_is_text_producing(&effect_type, effect) {
-                positions.insert(name.to_string(), here.clone());
+                scopes.register(out, name, here.clone());
                 if !prefix.is_empty() {
-                    positions.insert(format!("{prefix}{name}"), here.clone());
+                    dotted_positions.insert(format!("{prefix}{name}"), here.clone());
                 }
             }
         }
 
         for text in composable_strings(effect, ctx.origin) {
-            for ref_name in partial_references(&text) {
-                if name_shape_matches(&ref_name) {
-                    pending.push((here.clone(), effect_path.clone(), ref_name));
+            for ref_name in effect_references(&text, ctx.declared) {
+                pending.push((
+                    here.clone(),
+                    effect_path.clone(),
+                    ref_name,
+                    bare_chain.to_vec(),
+                ));
+            }
+        }
+
+        let mut child_prefix = prefix.to_string();
+        let mut child_out = out;
+        let mut child_bare_chain = bare_chain.to_vec();
+        if let Some(n) = name {
+            if is_scope_introducing(&effect_type) {
+                child_prefix = format!("{prefix}{n}.");
+                child_out = scopes.new_scope();
+                if effect_type == "if" {
+                    child_bare_chain.push(child_out);
                 }
             }
         }
 
-        let child_prefix = match name {
-            Some(n) if is_scope_introducing(&effect_type) => format!("{prefix}{n}."),
-            _ => prefix.to_string(),
-        };
-
         match effect_type.as_str() {
-            "dynamic" => {
-                let child_flow = is_tree_flow(dict_get(effect, "flow"));
+            "dynamic" | "reflector" => {
+                // A `reflector` is never in `is_scope_introducing` -- so
+                // `child_prefix`/`child_out`/`child_bare_chain` above are
+                // already just *prefix*/*out*/*bare_chain* unchanged for
+                // one -- its own children stay bare-visible at the level
+                // the reflector itself sits, the same as a loop's body.
+                let child_flow = is_tree_flow(flow_or_strategy(effect));
+                let kind = effect_type.as_str();
                 walk_tree_siblings(
                     effects_or_steps(effect),
                     &here,
                     child_flow,
-                    tree_container_label(Some(&effect_path), name),
+                    tree_container_label(Some(&effect_path), name, kind),
                     &format!("{effect_path}.effects"),
                     &child_prefix,
+                    child_out,
+                    &child_bare_chain,
                     list_flow,
                     list_label,
-                    positions,
+                    scopes,
+                    dotted_positions,
                     pending,
                     ctx,
                 );
-                walk_tree_siblings(
-                    finally_list(effect),
-                    &here,
-                    false,
-                    String::new(),
-                    &format!("{effect_path}.finally"),
-                    &child_prefix,
-                    list_flow,
-                    list_label,
-                    positions,
-                    pending,
-                    ctx,
-                );
+                if effect_type == "dynamic" {
+                    walk_tree_siblings(
+                        finally_list(effect),
+                        &here,
+                        false,
+                        String::new(),
+                        &format!("{effect_path}.finally"),
+                        &child_prefix,
+                        child_out,
+                        &child_bare_chain,
+                        list_flow,
+                        list_label,
+                        scopes,
+                        dotted_positions,
+                        pending,
+                        ctx,
+                    );
+                }
             }
             "loop" => {
                 let body = match dict_get(effect, "body") {
@@ -528,9 +638,12 @@ fn walk_tree_siblings(
                     String::new(),
                     &format!("{effect_path}.body"),
                     &child_prefix,
+                    child_out,
+                    &child_bare_chain,
                     list_flow,
                     list_label,
-                    positions,
+                    scopes,
+                    dotted_positions,
                     pending,
                     ctx,
                 );
@@ -551,9 +664,12 @@ fn walk_tree_siblings(
                     String::new(),
                     &format!("{effect_path}.then"),
                     &child_prefix,
+                    child_out,
+                    &child_bare_chain,
                     list_flow,
                     list_label,
-                    positions,
+                    scopes,
+                    dotted_positions,
                     pending,
                     ctx,
                 );
@@ -564,9 +680,12 @@ fn walk_tree_siblings(
                     String::new(),
                     &format!("{effect_path}.else"),
                     &child_prefix,
+                    child_out,
+                    &child_bare_chain,
                     list_flow,
                     list_label,
-                    positions,
+                    scopes,
+                    dotted_positions,
                     pending,
                     ctx,
                 );
@@ -584,29 +703,48 @@ fn walk_tree_siblings(
 ///
 /// Unlike [`check_prompt_composition`]'s errors, a reference this finds
 /// nothing wrong with still compiles and still runs the same either way:
-/// this is advisory only, the same kind `lint.rs`'s own warnings are. Only
-/// effect-to-effect references are checked -- a declared prompt's own text
-/// can be spliced into more than one place, so it has no single position
-/// to check this against.
-pub(crate) fn tree_sibling_warnings(document: &Value, origin: &DocumentOrigin) -> Vec<String> {
+/// this is advisory only, the same kind `lint.rs`'s own warnings are.
+///
+/// A bare `{{> name}}` is resolved with the exact scope chain
+/// [`check_name`] uses, not a flat, whole-document namespace: innermost
+/// scope first (a named `if`'s own branch -- shared between its `then` and
+/// `else`, never threaded back up past it), then the document root. A
+/// named `dynamic`'s (or `reflector`'s) children are never in that chain
+/// at all, even from a sibling in the same container -- only the dotted
+/// form (`{{> container_name.child}}`) reaches them, resolved from the
+/// document root regardless of where the reference itself sits.
+///
+/// A reference reached only through a declared prompt (`{{> intro}}` where
+/// `intro`'s own text contains `{{> a}}`) is followed transitively
+/// ([`effect_references`]) and checked against the *including* effect's
+/// own position, the same position Circuitry's render-time splicing lands
+/// it at regardless of how many declared prompts it passed through.
+pub(crate) fn tree_sibling_warnings(
+    document: &Value,
+    origin: &DocumentOrigin,
+    declared: &IndexMap<String, String>,
+) -> Vec<String> {
     let mut list_flow: Vec<bool> = Vec::new();
     let mut list_label: Vec<String> = Vec::new();
-    let mut positions: IndexMap<String, TreeSiblingPath> = IndexMap::new();
+    let (mut scopes, root_scope) = BareScopes::new();
+    let mut dotted_positions: IndexMap<String, TreeSiblingPath> = IndexMap::new();
     let mut pending: Vec<TreeSiblingPending> = Vec::new();
-    let ctx = TreeSiblingCtx { origin };
+    let ctx = TreeSiblingCtx { origin, declared };
 
-    let root_flow =
-        is_tree_flow(dict_get(document, "flow").or_else(|| dict_get(document, "strategy")));
+    let root_flow = is_tree_flow(flow_or_strategy(document));
     walk_tree_siblings(
         effects_or_steps(document),
         &[],
         root_flow,
-        tree_container_label(None, None),
+        tree_container_label(None, None, "dynamic"),
         "effects",
         "",
+        root_scope,
+        &[root_scope],
         &mut list_flow,
         &mut list_label,
-        &mut positions,
+        &mut scopes,
+        &mut dotted_positions,
         &mut pending,
         &ctx,
     );
@@ -617,16 +755,27 @@ pub(crate) fn tree_sibling_warnings(document: &Value, origin: &DocumentOrigin) -
         String::new(),
         "finally",
         "",
+        root_scope,
+        &[root_scope],
         &mut list_flow,
         &mut list_label,
-        &mut positions,
+        &mut scopes,
+        &mut dotted_positions,
         &mut pending,
         &ctx,
     );
 
     let mut warnings: BTreeSet<String> = BTreeSet::new();
-    for (source_path, where_, name) in &pending {
-        let Some(target_path) = positions.get(name) else {
+    for (source_path, where_, name, bare_chain) in &pending {
+        let target_path = if name.contains('.') {
+            dotted_positions.get(name)
+        } else {
+            bare_chain
+                .iter()
+                .rev()
+                .find_map(|scope| scopes.get(*scope, name))
+        };
+        let Some(target_path) = target_path else {
             continue;
         };
         if target_path == source_path {
@@ -639,9 +788,9 @@ pub(crate) fn tree_sibling_warnings(document: &Value, origin: &DocumentOrigin) -
             continue;
         }
         warnings.insert(format!(
-            "{where_}: '{{{{> {name}}}}}' names '{name}', inside {} as this reference — tree \
-             children dispatch in no fixed order, so this can render '' whenever '{name}' has \
-             not completed yet. No warning for 'flow: chain', where order is defined.",
+            "{where_}: '{{{{> {name}}}}}' names '{name}', and both it and this reference sit \
+             inside {} — tree children dispatch in no fixed order, so this can render '' \
+             whenever '{name}' has not completed yet.",
             list_label[list_id]
         ));
     }
@@ -1642,7 +1791,7 @@ mod tests {
                 template_effect("b", "yield", "{{> a}}"),
             ],
         );
-        let warnings = super::tree_sibling_warnings(&doc, &origin());
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("effects[1]"));
         assert!(warnings[0].contains("'{{> a}}'"));
@@ -1659,7 +1808,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            super::tree_sibling_warnings(&doc, &origin()),
+            super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new()),
             Vec::<String>::new()
         );
     }
@@ -1671,7 +1820,7 @@ mod tests {
             template_effect("b", "yield", "{{> a}}"),
         ]);
         assert_eq!(
-            super::tree_sibling_warnings(&doc, &origin()),
+            super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new()),
             Vec::<String>::new()
         );
     }
@@ -1687,7 +1836,7 @@ mod tests {
             "tree",
             vec![template_effect("a", "yield", "hello"), wrapper],
         );
-        let warnings = super::tree_sibling_warnings(&doc, &origin());
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("effects[1].effects[0]"));
     }
@@ -1711,7 +1860,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            super::tree_sibling_warnings(&doc, &origin()),
+            super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new()),
             Vec::<String>::new()
         );
     }
@@ -1733,7 +1882,7 @@ mod tests {
             .insert(Value::Str("body".to_string()), Value::List(body));
         let doc = document(vec![loop_effect]);
         assert_eq!(
-            super::tree_sibling_warnings(&doc, &origin()),
+            super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new()),
             Vec::<String>::new()
         );
     }
@@ -1749,7 +1898,7 @@ mod tests {
             "tree",
             vec![template_effect("a", "yield", "hello"), loop_effect],
         );
-        let warnings = super::tree_sibling_warnings(&doc, &origin());
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("effects[1].body[0]"));
     }
@@ -1765,7 +1914,7 @@ mod tests {
             "tree",
             vec![template_effect("a", "yield", "hello"), wrapper],
         );
-        let warnings = super::tree_sibling_warnings(&doc, &origin());
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("effects[1].finally[0]"));
     }
@@ -1774,8 +1923,161 @@ mod tests {
     fn tree_sibling_warnings_unresolved_names_are_silently_skipped() {
         let doc = document_with_flow("tree", vec![template_effect("a", "yield", "{{> nope}}")]);
         assert_eq!(
-            super::tree_sibling_warnings(&doc, &origin()),
+            super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new()),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn tree_sibling_warnings_tree_siblings_inside_a_nested_dynamic_still_warn_via_dotted_name() {
+        let mut wrapper = effect("wrapper", "dynamic", vec![]);
+        wrapper.as_dict_mut().unwrap().insert(
+            Value::Str("flow".to_string()),
+            Value::Str("tree".to_string()),
+        );
+        wrapper.as_dict_mut().unwrap().insert(
+            Value::Str("effects".to_string()),
+            Value::List(vec![
+                template_effect("b", "yield", "{{> a}}"),
+                template_effect("c", "yield", "{{> wrapper.b}}"),
+            ]),
+        );
+        let doc = document_with_flow(
+            "chain",
+            vec![template_effect("a", "yield", "hello"), wrapper],
+        );
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("effects[1].effects[1]"));
+        assert!(warnings[0].contains("'wrapper.b'"));
+        assert!(warnings[0].contains("wrapper"));
+    }
+
+    #[test]
+    fn tree_sibling_warnings_a_bare_reference_resolves_to_the_outer_scope_not_a_same_named_inner_one()
+     {
+        let mut w = effect("w", "dynamic", vec![]);
+        w.as_dict_mut().unwrap().insert(
+            Value::Str("flow".to_string()),
+            Value::Str("tree".to_string()),
+        );
+        w.as_dict_mut().unwrap().insert(
+            Value::Str("effects".to_string()),
+            Value::List(vec![
+                template_effect("a", "yield", "x"),
+                template_effect("b", "yield", "{{> a}}"),
+            ]),
+        );
+        let doc = document(vec![template_effect("a", "yield", "hi"), w]);
+        assert_eq!(
+            super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn tree_sibling_warnings_the_same_reused_name_warns_when_the_outer_scope_is_the_tree_one() {
+        let mut w = effect("w", "dynamic", vec![]);
+        w.as_dict_mut().unwrap().insert(
+            Value::Str("flow".to_string()),
+            Value::Str("chain".to_string()),
+        );
+        w.as_dict_mut().unwrap().insert(
+            Value::Str("effects".to_string()),
+            Value::List(vec![
+                template_effect("a", "yield", "x"),
+                template_effect("b", "yield", "{{> a}}"),
+            ]),
+        );
+        let doc = document_with_flow("tree", vec![template_effect("a", "yield", "hi"), w]);
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("effects[1].effects[1]"));
+    }
+
+    #[test]
+    fn tree_sibling_warnings_a_reflectors_own_flow_tree_children_warn_too() {
+        let plan = effect(
+            "plan",
+            "reflector",
+            vec![
+                ("flow", Value::Str("tree".to_string())),
+                (
+                    "effects",
+                    Value::List(vec![
+                        template_effect("a", "yield", "hello"),
+                        template_effect("b", "yield", "{{> a}}"),
+                    ]),
+                ),
+            ],
+        );
+        let doc = document(vec![plan]);
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("effects[0].effects[1]"));
+        assert!(warnings[0].contains("reflector"));
+    }
+
+    #[test]
+    fn tree_sibling_warnings_a_reflectors_own_children_stay_bare_visible_at_its_own_level() {
+        let plan = effect(
+            "plan",
+            "reflector",
+            vec![(
+                "effects",
+                Value::List(vec![template_effect("a", "yield", "hello")]),
+            )],
+        );
+        let doc = document_with_flow(
+            "tree",
+            vec![plan, template_effect("after", "yield", "{{> a}}")],
+        );
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("effects[1]"));
+    }
+
+    #[test]
+    fn tree_sibling_warnings_strategy_is_honored_as_a_flow_alias_for_tree() {
+        let mut doc = document(vec![
+            template_effect("a", "yield", "hello"),
+            template_effect("b", "yield", "{{> a}}"),
+        ]);
+        doc.as_dict_mut().unwrap().insert(
+            Value::Str("strategy".to_string()),
+            Value::Str("tree".to_string()),
+        );
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn tree_sibling_warnings_an_empty_effects_list_falls_through_to_steps() {
+        let mut doc = document_with_flow("tree", vec![]);
+        doc.as_dict_mut().unwrap().insert(
+            Value::Str("steps".to_string()),
+            Value::List(vec![
+                template_effect("a", "yield", "hello"),
+                template_effect("b", "yield", "{{> a}}"),
+            ]),
+        );
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &IndexMap::new());
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn tree_sibling_warnings_a_reference_reached_only_through_a_declared_prompt_still_warns() {
+        let doc = document_with_flow(
+            "tree",
+            vec![
+                template_effect("a", "yield", "hello"),
+                template_effect("b", "yield", "{{> intro}}"),
+            ],
+        );
+        let prompts = declared(&[("intro", "before: {{> a}}")]);
+        let warnings = super::tree_sibling_warnings(&doc, &origin(), &prompts);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("effects[1]"));
+        assert!(warnings[0].contains("'a'"));
     }
 }
