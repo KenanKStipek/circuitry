@@ -201,6 +201,16 @@ exposes the unused counts via `ScriptedAdapter.leftover_replies()` for a conform
 harness, which built the instance itself, to call after the run and fail the *case* on
 anything left over.
 
+## 6a. `check()`'s own message
+
+`check()` (preflight, `cof doctor`) loads the replies file through the identical path
+`generate()` uses. On success it reports the file's own counts, not a bare "ok" --
+`"<path>: <n> repl{y,ies} across <m> path{,s}"`, e.g. `"replies.yaml: 3 replies across 2
+paths"` -- so `cof doctor`'s table shows which file was read and how much it configures,
+the same way other adapters' `check()` names what they found. On failure it is the
+load error's own message, as in §6/§4 above, naming the replies-file path, never the
+calling effect's.
+
 ## 7. The leftover-replies export (for a subprocess harness)
 
 A conformance harness that runs `cof run` as a subprocess (`tests/conformance/harness.py`)

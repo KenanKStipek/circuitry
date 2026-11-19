@@ -878,13 +878,26 @@ impl Adapter for ScriptedAdapter {
     /// `ok: false` result, so this reproduces `call_check`'s own text
     /// for every non-`ScriptedRepliesError` failure here directly,
     /// rather than leaving preflight's own fold to guess which kind it is.
+    /// On success the message names the counts Python's own `check()`
+    /// reports (`{path}: {n} replies across {m} paths`) -- `resolve_path()`
+    /// cannot fail here, since `ensure_loaded()` just called it itself.
     async fn check(&self) -> CheckResult {
         match self.ensure_loaded() {
-            Ok(_) => CheckResult {
-                ok: true,
-                missing: Vec::new(),
-                message: None,
-            },
+            Ok(queues) => {
+                let guard = queues.lock().unwrap();
+                let total: usize = guard.values().map(|q| q.len()).sum();
+                let paths = guard.len();
+                let display = self.resolve_path().expect("ensure_loaded just resolved it").display;
+                CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: Some(format!(
+                        "{display}: {total} repl{} across {paths} path{}",
+                        if total == 1 { "y" } else { "ies" },
+                        if paths == 1 { "" } else { "s" },
+                    )),
+                }
+            }
             Err(err) if err.py_class == PyExc::ScriptedRepliesError => CheckResult {
                 ok: false,
                 missing: Vec::new(),
@@ -1142,7 +1155,12 @@ mod tests {
             ScriptedAdapter::new("scripted", Value::Str(good.to_string_lossy().into_owned()));
         let result = adapter.check().await;
         assert!(result.ok);
-        assert!(result.message.is_none());
+        assert!(
+            result
+                .message
+                .unwrap()
+                .ends_with("1 reply across 1 path")
+        );
 
         let (_bad_dir, bad) = write_replies("not a mapping\n", ".yaml");
         // A plain scalar document parses as a YAML string, not a

@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #386",
+  "description": "A `use` nested inside another `use`'s inline document, where the inner (child) use declares its own `expect:` -- the model-mode re-ask runs at the inner use's own path, `prime.outer.inner`, same as a top-level use's own expect would.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

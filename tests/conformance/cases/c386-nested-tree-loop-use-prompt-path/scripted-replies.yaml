@@ -1,0 +1,16 @@
+prime.fan.shots.iter_0.child.inner.iter_0.step:
+  - text: "step 0/0"
+    tokens_sent: 1
+    tokens_received: 1
+prime.fan.shots.iter_0.child.inner.iter_1.step:
+  - text: "step 0/1"
+    tokens_sent: 1
+    tokens_received: 1
+prime.fan.shots.iter_1.child.inner.iter_0.step:
+  - text: "step 1/0"
+    tokens_sent: 1
+    tokens_received: 1
+prime.fan.shots.iter_1.child.inner.iter_1.step:
+  - text: "step 1/1"
+    tokens_sent: 1
+    tokens_received: 1
