@@ -8,7 +8,8 @@ started — never anything else on the machine.
 
 One provider, three actions: `params.action` is `start`, `stop` or
 `status`, and `params.name` names the service (letters, digits, `_`, `.`
-and `-`). A name is unique per state directory, so a later `stop` or
+and `-`). A name is unique per namespace within a state directory (bare
+`name` counting as one namespace among the rest), so a later `stop` or
 `status` — in the same run or a later one — finds it by name.
 
 An optional `params.namespace` (same character rule as `name`) keys the
