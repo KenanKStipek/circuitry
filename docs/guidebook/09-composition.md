@@ -259,7 +259,7 @@ effects:
     template: "One line: {{> draft}}"
 ```
 
-The fix is the same as any other ordering problem: move `summary` after `draft` in a `flow: chain` dynamic (the default), or reference something that already finished in an *enclosing* chain — never a sibling (or anything nested under one) inside the same tree.
+The fix is the same as any other ordering problem: move `summary` after `draft` in a `flow: chain` dynamic (the default), or reference something that already finished in an *enclosing* chain — never a sibling (or anything nested under one) inside the same tree. If that chain dynamic has a name, the reference has to become dotted too (`{{> that_dynamic.draft}}`) — a named dynamic's own children are never bare-visible, even to a sibling inside the very same dynamic; only an unnamed one leaves them reachable bare, the way they are at the document's own top level above.
 
 ## Anti-patterns
 

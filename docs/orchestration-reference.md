@@ -717,14 +717,17 @@ Rules of the form:
   any enclosing loop's.
 - **`{{prime.<loop>.<step>.value}}` does not resolve, by design.** `prime.<loop>`
   is the loop's own node — it holds `iter_<N>`, `last`, `collected` and `meta`,
-  never body step names. `cof validate` warns on it.
+  never body step names. `cof validate` warns on it, and on the equivalent
+  `{{> <loop>.<step>}}` partial reference, which reads through the exact same
+  state and fails the exact same silent way.
 - **`iter_<N>` inside the body is a trap.** `N` is a constant, so it does not
   render empty — it renders *pass N's* output during every pass, which is
-  plausible-looking stale data. `cof validate` warns on this too.
+  plausible-looking stale data. `cof validate` warns on this too, and on the
+  equivalent `{{> <loop>.iter_<N>}}`.
 - **`last` is post-loop only, like `iter_<N>`.** It is written when the loop
   completes, so inside the body (or the `while` condition) it resolves to the
   previous pass at best — write `{{prime.<step>.value}}` for the current pass.
-  `cof validate` warns on in-body use.
+  `cof validate` warns on in-body use, and on the equivalent `{{> <loop>.last}}`.
 - In CEL the same forms apply with the `state.` prefix and no braces:
   `state.prime.<step>.value`.
 - **A loop's `each.as` binding and its iteration index are also legal
@@ -2087,7 +2090,7 @@ The inserted text drops one final line break (`\n` or `\r\n`): `{{> voice}}` alo
 
 `cof check` rejects: an unknown name; a name that is both declared and an effect; an effect that is neither a `yield` nor a text `prompt`; a cycle among declared prompts. A template that reaches a run anyway (a generated reflector/decompose plan, a `use: inline` child) fails the same way, under the effect's `on_error`. A child document run with `use` sees only its own declared `prompts:` — never the parent's.
 
-`cof check` also warns — it still compiles and runs — when a `{{> name}}` names an effect that cannot be guaranteed to have run yet: a sibling inside the same `flow: tree` dynamic (or the document's own top-level `flow: tree`), or anything nested under one of that dynamic's children, including inside a loop's body. Tree children dispatch with no fixed order, so the reference renders `""` whenever the named effect has not finished yet; the warning names the reference, the effect it names and the `flow: tree` dynamic it shares one with. No warning for `flow: chain` (the default), where order is defined — including a `flow: tree` dynamic that has already finished entirely before an enclosing `flow: chain` sibling starts; only a container both the reference and the named effect sit inside, at the point their paths diverge, matters. A loop's own `flow` is never the cause: its body runs its steps in order within one pass regardless, whatever the loop's own flow is — only an *enclosing* `flow: tree` dynamic can make a reference inside a loop's body unsafe.
+`cof check` also warns — it still compiles and runs — when a `{{> name}}` names an effect that cannot be guaranteed to have run yet: a sibling inside the same `flow: tree` dynamic or `reflector` (or the document's own top-level `flow: tree`), or anything nested under one of that container's children, including inside a loop's body. Tree children dispatch with no fixed order, so the reference renders `""` whenever the named effect has not finished yet; the warning names the reference, the effect it names and the `flow: tree` container it shares one with. No warning for `flow: chain` (the default), where order is defined — including a `flow: tree` dynamic/`reflector` that has already finished entirely before an enclosing `flow: chain` sibling starts; only a container both the reference and the named effect sit inside, at the point their paths diverge, matters. A loop's own `flow` is never the cause: its body runs its steps in order within one pass regardless, whatever the loop's own flow is — only an *enclosing* `flow: tree` container can make a reference inside a loop's body unsafe. A bare `{{> name}}` is resolved exactly the way an unknown-name check already resolves it (see [Bare sibling references everywhere](#bare-sibling-references-everywhere-not-just-inside-a-loopif)): a named `dynamic`'s or `reflector`'s own children are never bare-visible, even to each other — only the dotted form (`{{> dynamic_name.child}}`) reaches them. A reference reached only through a declared prompt is still checked, against the position of the effect whose own template included it (not the declared prompt's own text, which has none of its own).
 
 Everywhere else a template renders — an `if`/`while` model template, `expect.template`, an asset's `ref` — `{{> name}}` is still unconditionally an error (see the last bullet under [Mustache Template Interpolation](#mustache-template-interpolation)).
 
