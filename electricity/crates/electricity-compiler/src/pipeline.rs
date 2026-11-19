@@ -837,6 +837,15 @@ fn declared_type_outcome(
 /// [`cycles::detect_cycles`]. Each error shape is `validate()`'s
 /// own: a flat `errors` list, with no `"Orchestration validation
 /// failed:"` prefix anywhere.
+///
+/// One known gap: since issue #832, `validate()` goes on to compile every
+/// `use: path:`/legacy `use: orchestration:` child reachable from *path*,
+/// recursively, the same way a run of the root would, failing the root's
+/// own check on a child that fails to resolve, parse, validate or
+/// compile. This function stops at [`cycles::detect_cycles`] and never
+/// performs that walk, so a document whose only problem is such a child
+/// reports `ok: true` here while `cof check` reports `ok: false` for the
+/// same file (electricity/DESIGN.md §13).
 pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
     let text = match load::read_universal_newlines(path) {
         Ok(text) => text,
