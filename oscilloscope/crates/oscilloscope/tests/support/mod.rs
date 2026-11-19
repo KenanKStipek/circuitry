@@ -327,6 +327,21 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
     if keep.is_empty() {
         out.push_str("<this test's own osi/cof/electricity subtree is not alive>\n");
     }
+    // Only a `cof` started under an osi this test spawned through
+    // `spawn_osi_on_pty` inherited the SIGUSR1 stack-dump hook (its
+    // `PYTHONPATH` sitecustomize). Any other `cof` -- one a test started
+    // itself, say -- has no handler, and SIGUSR1's default action would
+    // just kill it, so it is listed but never signalled.
+    let mut dump_capable: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut queue: Vec<u32> = spawned.iter().map(|(pid, _, _)| *pid).collect();
+    while let Some(pid) = queue.pop() {
+        for p in &procs {
+            if p.ppid == pid && dump_capable.insert(p.pid) {
+                queue.push(p.pid);
+            }
+        }
+    }
+
     let mut kept_pids: Vec<u32> = Vec::new();
     let mut cof_pids: Vec<u32> = Vec::new();
     for p in &procs {
@@ -334,7 +349,7 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
             out.push_str(p.line);
             out.push('\n');
             kept_pids.push(p.pid);
-            if p.line.contains("cof") {
+            if p.line.contains("cof") && dump_capable.contains(&p.pid) {
                 cof_pids.push(p.pid);
             }
         }
