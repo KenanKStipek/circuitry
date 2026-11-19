@@ -1,0 +1,25 @@
+name: use-path-child-rewritten-each-chain-loop-pass
+effects:
+  - type: tool
+    name: markers
+    provider: json
+    params: {mode: parse, input: '["one", "two", "three"]'}
+  - type: loop
+    name: passes
+    flow: chain
+    each: {in: "prime.markers.value", as: "marker"}
+    body:
+      - type: tool
+        name: rewrite
+        provider: fs
+        params:
+          mode: write
+          path: scratch/child.yml
+          content: "effects:\n  - type: tool\n    name: result\n    provider: json\n    params: {mode: stringify, input: {marker: \"{{{marker}}}\"}}\n"
+      - type: use
+        name: child
+        path: scratch/child.yml
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: scratch, recursive: true}
