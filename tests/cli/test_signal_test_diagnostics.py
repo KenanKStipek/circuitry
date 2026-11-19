@@ -78,6 +78,50 @@ def test_diagnose_and_fail_dumps_every_thread_stack_and_sigkills(
     assert proc.returncode == -signal.SIGKILL
 
 
+def test_sigusr1_dump_goes_to_file_when_dump_file_env_var_is_set(tmp_path: Path) -> None:
+    """A caller that can't read a stuck child's own stderr (`osi` owns
+    `cof`'s, in the oscilloscope pty harness) still gets the SIGUSR1
+    dump: `sitecustomize.py` writes it to `CIRCUITRY_TEST_SIGUSR1_DUMP_FILE`
+    instead, when that's set (#838).
+    """
+    dump_path = tmp_path / "dump.log"
+    env = _sandboxed_env(tmp_path)
+    env["CIRCUITRY_TEST_SIGUSR1_DUMP_FILE"] = str(dump_path)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _HUNG_CHILD_SCRIPT],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    assert proc.stdout is not None
+    ready_line = proc.stdout.readline()
+    assert ready_line == "ready\n", f"child did not start as expected: {ready_line!r}"
+    try:
+        proc.send_signal(signal.SIGUSR1)
+        deadline = time.monotonic() + 10.0
+        dump_text = ""
+        while time.monotonic() < deadline:
+            if dump_path.exists():
+                dump_text = dump_path.read_text(encoding="utf-8")
+                # The dump writes several threads' frames, in no
+                # guaranteed order relative to the worker's -- wait for
+                # both markers, not just whichever one lands first.
+                if _WORKER_FRAME_NAME in dump_text and "Current thread" in dump_text:
+                    break
+            time.sleep(0.05)
+        assert _WORKER_FRAME_NAME in dump_text, (
+            f"SIGUSR1 handler never wrote the expected dump to {dump_path}: "
+            f"{dump_text!r}"
+        )
+        assert "Current thread" in dump_text
+    finally:
+        proc.kill()
+        _, stderr = proc.communicate(timeout=5.0)
+    # The dump went to the file, not to the child's own stderr.
+    assert "Current thread" not in stderr
+
+
 def _ips_pid(path: Path) -> object:
     """The `pid` field of a macOS `.ips` crash report (its body is a JSON
     object on the second and later lines, after a one-line JSON header),

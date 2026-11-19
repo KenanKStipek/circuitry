@@ -197,7 +197,7 @@ thread_local! {
     /// `osi`, `cof` or `electricity`, so a pid the OS has since
     /// recycled for some unrelated process is never mistaken for
     /// this test's own.
-    static SPAWNED_OSI_PIDS: RefCell<Vec<(u32, PathBuf)>> = const { RefCell::new(Vec::new()) };
+    static SPAWNED_OSI_PIDS: RefCell<Vec<(u32, PathBuf, PathBuf)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Records *pid* as one of this test's own spawned `osi` processes,
@@ -206,9 +206,11 @@ thread_local! {
 /// where that same `osi` was told to write its own `OSI_EXIT_TRACE`
 /// (issue #825), so a stalled wait can print it however the process
 /// itself ended, with no ties to whether `ps` still finds it alive at
-/// that moment.
-fn note_spawned_osi(pid: u32, trace_path: PathBuf) {
-    SPAWNED_OSI_PIDS.with(|pids| pids.borrow_mut().push((pid, trace_path)));
+/// that moment. *sigusr1_dump_path* is where a `cof` this `osi` goes on
+/// to spawn writes its own faulthandler dump on SIGUSR1 (issue #838),
+/// since `osi` -- not this test -- owns that `cof`'s stderr here.
+fn note_spawned_osi(pid: u32, trace_path: PathBuf, sigusr1_dump_path: PathBuf) {
+    SPAWNED_OSI_PIDS.with(|pids| pids.borrow_mut().push((pid, trace_path, sigusr1_dump_path)));
 }
 
 /// What *this test's* own spawned `osi` (and whatever it in turn
@@ -291,8 +293,8 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
         });
     }
 
-    let spawned: Vec<(u32, PathBuf)> = SPAWNED_OSI_PIDS.with(|pids| pids.borrow().clone());
-    let mut roots: Vec<u32> = spawned.iter().map(|(pid, _)| *pid).collect();
+    let spawned: Vec<(u32, PathBuf, PathBuf)> = SPAWNED_OSI_PIDS.with(|pids| pids.borrow().clone());
+    let mut roots: Vec<u32> = spawned.iter().map(|(pid, _, _)| *pid).collect();
     if let Some(pid) = extra_pid {
         roots.push(pid);
     }
@@ -326,12 +328,33 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
         out.push_str("<this test's own osi/cof/electricity subtree is not alive>\n");
     }
     let mut kept_pids: Vec<u32> = Vec::new();
+    let mut cof_pids: Vec<u32> = Vec::new();
     for p in &procs {
         if keep.contains(&p.pid) {
             out.push_str(p.line);
             out.push('\n');
             kept_pids.push(p.pid);
+            if p.line.contains("cof") {
+                cof_pids.push(p.pid);
+            }
         }
+    }
+
+    // Issue #838: ask every `cof` in this subtree for a dump of every
+    // thread's own Python stack, the same way
+    // `tests/cli/_signal_test_support.py` already does for its own CLI
+    // tests -- `spawn_osi_on_pty_with_env` registers the SIGUSR1
+    // handler on every `cof` it starts and points it at the file read
+    // below, since `osi` here owns `cof`'s own stderr, not this test.
+    // A brief wait gives the handler time to actually write the dump
+    // before it's read.
+    for pid in &cof_pids {
+        unsafe {
+            libc::kill(*pid as libc::pid_t, libc::SIGUSR1);
+        }
+    }
+    if !cof_pids.is_empty() {
+        std::thread::sleep(Duration::from_millis(500));
     }
 
     #[cfg(target_os = "linux")]
@@ -358,7 +381,7 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
     // this trace is the run that already exited silently, before
     // ever reaching the point this diagnostic's caller was waiting
     // for.
-    for (pid, trace_path) in &spawned {
+    for (pid, trace_path, sigusr1_dump_path) in &spawned {
         match std::fs::read_to_string(trace_path) {
             Ok(text) if !text.is_empty() => {
                 out.push_str(&format!("pid {pid} OSI_EXIT_TRACE ({trace_path:?}):\n"));
@@ -371,6 +394,24 @@ pub fn diagnose_stalled_wait(extra_pid: Option<u32>) -> String {
             }
             Err(e) => {
                 out.push_str(&format!("pid {pid} OSI_EXIT_TRACE ({trace_path:?}): {e}\n"));
+            }
+        }
+        match std::fs::read_to_string(sigusr1_dump_path) {
+            Ok(text) if !text.is_empty() => {
+                out.push_str(&format!(
+                    "osi pid {pid}'s own cof SIGUSR1 stack dump ({sigusr1_dump_path:?}):\n"
+                ));
+                out.push_str(&text);
+            }
+            Ok(_) => {
+                out.push_str(&format!(
+                    "osi pid {pid}'s own cof SIGUSR1 stack dump ({sigusr1_dump_path:?}): empty\n"
+                ));
+            }
+            Err(e) => {
+                out.push_str(&format!(
+                    "osi pid {pid}'s own cof SIGUSR1 stack dump ({sigusr1_dump_path:?}): {e}\n"
+                ));
             }
         }
     }
@@ -1253,6 +1294,21 @@ fn stdio_from_slave(path: &Path) -> Stdio {
     Stdio::from(fd)
 }
 
+/// The directory `tests/cli/_signal_test_support.py`'s own
+/// `_sandboxed_env` already puts first on a `cof run` child's
+/// PYTHONPATH (issue #558) -- reused here so a `cof` this harness's
+/// own `osi` spawns registers the same SIGUSR1 faulthandler dump
+/// (issue #838). This crate's own `Cargo.toml` lives three levels
+/// below the repository root, the same distance for every caller
+/// since Cargo always sets `CARGO_MANIFEST_DIR` to that fixed
+/// location.
+fn sigusr1_sitecustomize_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/cli/_fixtures/_sigusr1_sitecustomize")
+        .canonicalize()
+        .expect("_sigusr1_sitecustomize fixture directory exists")
+}
+
 /// Spawns `osi` with every one of its standard streams attached to
 /// the pty's slave side, in its own process group (the same
 /// isolation `osi` itself gives `cof`: this repository's tests only
@@ -1288,6 +1344,20 @@ pub fn spawn_osi_on_pty_with_env(
     let trace_id = NEXT_TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let trace_path = home.path().join(format!("exit-trace-{trace_id}.jsonl"));
     cmd.env("OSI_EXIT_TRACE", &trace_path);
+    // Issue #838: a `cof` this `osi` spawns inherits these unchanged --
+    // `osi` neither clears its own env nor sets any of them itself --
+    // so `diagnose_stalled_wait` can ask a stuck `cof` for every
+    // thread's own Python stack via SIGUSR1 and read it back from a
+    // file, since `osi` (not this test) owns that `cof`'s stderr here.
+    let sigusr1_dump_path = home.path().join(format!("cof-sigusr1-dump-{trace_id}.log"));
+    cmd.env("PYTHONFAULTHANDLER", "1");
+    cmd.env("CIRCUITRY_TEST_SIGUSR1_DUMP_FILE", &sigusr1_dump_path);
+    let mut pythonpath = sigusr1_sitecustomize_dir().into_os_string();
+    if let Some(existing) = std::env::var_os("PYTHONPATH") {
+        pythonpath.push(":");
+        pythonpath.push(existing);
+    }
+    cmd.env("PYTHONPATH", &pythonpath);
     // A machine-wide `ps` scan would otherwise let a Select/All pty
     // test see, and open or signal, an orchestration this test
     // never started -- off by default for every pty test spawned
@@ -1342,7 +1412,7 @@ pub fn spawn_osi_on_pty_with_env(
         });
     }
     let child = cmd.spawn().expect("spawn osi on a pty");
-    note_spawned_osi(child.id(), trace_path);
+    note_spawned_osi(child.id(), trace_path, sigusr1_dump_path);
     child
 }
 
