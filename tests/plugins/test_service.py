@@ -913,7 +913,7 @@ def test_pin_refuses_an_unpinned_argv_command_before_anything_starts(state_dir: 
                 "command": ["python3", "-m", "http.server"],
             }
         )
-    assert not list(state_dir.glob("*.json"))
+    assert not state_dir.exists()
 
 
 def test_pin_refuses_a_path_command_even_when_its_bare_name_is_pinned(
@@ -924,7 +924,7 @@ def test_pin_refuses_a_path_command_even_when_its_bare_name_is_pinned(
         pinned.execute(
             params={"action": "start", "name": "web", "command": ["/usr/bin/python3", "-V"]}
         )
-    assert not list(state_dir.glob("*.json"))
+    assert not state_dir.exists()
 
 
 def test_pin_refuses_shell_true_unless_sh_is_pinned(state_dir: Path) -> None:
@@ -933,7 +933,7 @@ def test_pin_refuses_shell_true_unless_sh_is_pinned(state_dir: Path) -> None:
         pinned.execute(
             params={"action": "start", "name": "web", "shell": True, "command": "true"}
         )
-    assert not list(state_dir.glob("*.json"))
+    assert not state_dir.exists()
 
 
 def test_pin_allows_a_pinned_command_to_start(state_dir: Path) -> None:
