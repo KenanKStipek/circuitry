@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod exit_trace;
 mod highlight;
 mod history_io;
 mod icon;
@@ -47,7 +48,8 @@ use ratatui::backend::CrosstermBackend;
 
 use keys::App;
 use oscilloscope_core::supervise::{
-    ForwardSignal, SignalWatcher, SupervisedChild, exit_code, exit_code_for_signal_name,
+    ForwardSignal, SignalEvent, SignalWatcher, SupervisedChild, exit_code,
+    exit_code_for_signal_name,
 };
 use terminal::TerminalGuard;
 
@@ -339,14 +341,24 @@ fn exit_early(code: u8) -> ExitCode {
 /// The exit code osi should use right now, without ever spawning the
 /// engine, if a signal already arrived — the same 128+signum
 /// codes `cof` itself uses. `None` means nothing is pending yet.
-fn pending_signal_exit_code(signals: &mut Option<SignalWatcher>) -> Option<u8> {
+/// `trace_phase` names which of the two call sites this is, for
+/// `OSI_EXIT_TRACE` (issue #825) -- both end `do_run` the exact same
+/// way, before the engine was ever spawned, and only the trace tells
+/// them apart afterwards.
+fn pending_signal_exit_code(signals: &mut Option<SignalWatcher>, trace_phase: &str) -> Option<u8> {
     let watcher = signals.as_mut()?;
-    let sig = watcher.pending().into_iter().next()?;
-    Some(match sig {
-        ForwardSignal::Int => 130,
-        ForwardSignal::Term => 143,
-        ForwardSignal::Hup => 129,
-    })
+    let event = watcher.pending_with_origin().into_iter().next()?;
+    let code = forward_signal_exit_code(event.signal);
+    exit_trace::record(
+        trace_phase,
+        code,
+        serde_json::json!({
+            "signal": format!("{:?}", event.signal),
+            "sender_pid": event.sender_pid,
+            "cause": event.cause,
+        }),
+    );
+    Some(code)
 }
 
 fn unique_run_dir() -> PathBuf {
@@ -536,13 +548,20 @@ fn supervise_plain(
     signals: &mut Option<SignalWatcher>,
     registry: &mut registry_io::RegistryHandle,
     orchestration: &str,
-) -> std::process::ExitStatus {
+) -> (std::process::ExitStatus, Option<ForwardSignal>) {
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
+    // `OSI_EXIT_TRACE`'s own detail for whichever of the two callers
+    // (`do_run`'s plain `--log` loop; `run_tui`'s own fallback once
+    // `TerminalGuard::enter` has already failed) this run ends
+    // through -- never read by this function itself, which forwards
+    // every signal it sees exactly as it always has.
+    let mut last_forwarded_signal: Option<ForwardSignal> = None;
     loop {
         if let Some(watcher) = signals.as_mut() {
             for sig in watcher.pending() {
                 signal_count += 1;
+                last_forwarded_signal = Some(sig);
                 child.forward(sig);
                 if signal_count == 1 {
                     print_line(out, clock, None, "cancelling, finally running...");
@@ -571,7 +590,7 @@ fn supervise_plain(
         registry.ensure_written(model, orchestration);
 
         if let Ok(Some(status)) = child.try_wait() {
-            return status;
+            return (status, last_forwarded_signal);
         }
         std::thread::sleep(POLL_INTERVAL);
     }
@@ -1159,7 +1178,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // "didn't answer in time" notice right before exiting anyway. The
     // run directory doesn't exist yet at this point (created below),
     // so there's nothing to clean up either way.
-    if let Some(code) = pending_signal_exit_code(&mut signals) {
+    if let Some(code) = pending_signal_exit_code(&mut signals, "signal_pending_after_probe") {
         return exit_early(code);
     }
     if let Some(notice) = engine_capability_notice(&engine.caps(), engine.name()) {
@@ -1240,7 +1259,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // to a child started *after* the signal already arrived would
     // still leave a brief, real window where the engine ran
     // unsupervised before the first poll loop iteration ever checked.
-    if let Some(code) = pending_signal_exit_code(&mut signals) {
+    if let Some(code) = pending_signal_exit_code(&mut signals, "signal_pending_after_compile") {
         if is_default_dir {
             let _ = std::fs::remove_dir_all(&run_dir);
         }
@@ -1318,7 +1337,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     differ.set_label_hint(label_hint.clone());
     model.set_label_hint(label_hint);
 
-    let exit_status = supervise_plain(
+    let (exit_status, plain_last_signal) = supervise_plain(
         &mut out,
         &mut clock,
         &mut child,
@@ -1359,6 +1378,10 @@ fn do_run(args: RunArgs) -> ExitCode {
         &history,
         engine.name(),
         None,
+        "normal_end",
+        serde_json::json!({
+            "forwarded_signal": plain_last_signal.map(|s| format!("{s:?}")),
+        }),
     );
     ExitCode::from(code)
 }
@@ -1395,6 +1418,8 @@ fn finish_run(
     history: &history_io::HistoryHandle,
     engine_name: &str,
     received_signal: Option<ForwardSignal>,
+    trace_phase: &str,
+    trace_detail: serde_json::Value,
 ) -> u8 {
     let exit_status = child.wait().unwrap_or(exit_status);
 
@@ -1463,6 +1488,7 @@ fn finish_run(
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
     let code = exit_code_with_signal_priority(received_signal, exit_code(exit_status) as u8);
+    exit_trace::record(trace_phase, code, trace_detail);
     let _ = writeln!(out, "exit {code}");
 
     if print_run_dir {
@@ -2289,7 +2315,7 @@ fn run_tui(
             eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
-            let exit_status = supervise_plain(
+            let (exit_status, plain_last_signal) = supervise_plain(
                 &mut out,
                 &mut clock,
                 &mut child,
@@ -2303,6 +2329,18 @@ fn run_tui(
                 registry,
                 &document,
             );
+            // A `SIGHUP` forwarded here (`supervise_plain`'s own
+            // signal loop) is the lost-terminal case the issue's own
+            // comments describe: `TerminalGuard::enter` already
+            // failed because the terminal was gone, and the kernel
+            // then delivered the same hang-up as a real signal too.
+            // Any other signal (Ctrl-C, SIGTERM) is an ordinary
+            // cancel, not a lost terminal.
+            let trace_phase = if plain_last_signal == Some(ForwardSignal::Hup) {
+                "lost_terminal_plain_stream"
+            } else {
+                "terminal_guard_failed"
+            };
             let code = finish_run(
                 &mut out,
                 &mut clock,
@@ -2320,6 +2358,11 @@ fn run_tui(
                 history,
                 &engine_name,
                 None,
+                trace_phase,
+                serde_json::json!({
+                    "error": err.to_string(),
+                    "forwarded_signal": plain_last_signal.map(|s| format!("{s:?}")),
+                }),
             );
             return ExitCode::from(code);
         }
@@ -2432,9 +2475,22 @@ fn run_tui(
     // Set when the terminal itself went away (see `stdin_hung_up`):
     // ratatui's own `Terminal::drop` must not run then (below).
     let mut lost_terminal = false;
+    // `OSI_EXIT_TRACE`'s own detail (issue #825): which of
+    // `stdin_hung_up`'s poll, the event reader thread's read result,
+    // or a failed draw actually saw the lost terminal.
+    let mut lost_terminal_check: Option<&'static str> = None;
+    // The full `SignalEvent` (sender pid, `si_code` cause) behind
+    // `received_signal` below, kept only for `OSI_EXIT_TRACE` --
+    // `received_signal` itself still drives the real exit-code logic,
+    // completely unchanged.
+    let mut received_signal_event: Option<SignalEvent> = None;
     'tui: loop {
         if let Some(watcher) = signals.as_mut() {
-            for sig in watcher.pending() {
+            for event in watcher.pending_with_origin() {
+                let sig = event.signal;
+                if exit_status.is_none() && received_signal_event.is_none() {
+                    received_signal_event = Some(event.clone());
+                }
                 if exit_status.is_none() {
                     // Issue #828: remembered only while the engine is
                     // still running, from the first real signal this
@@ -2698,11 +2754,20 @@ fn run_tui(
         // `stdin_hung_up()` is still checked every tick regardless of
         // whether the reader thread answered this time.
         let mut terminal_gone = stdin_hung_up();
+        if terminal_gone {
+            lost_terminal_check = Some("poll_revents");
+        }
         if !terminal_gone {
             match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
-                Ok(Err(_)) => terminal_gone = true,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    terminal_gone = true;
+                    lost_terminal_check = Some("read_disconnected");
+                }
+                Ok(Err(_)) => {
+                    terminal_gone = true;
+                    lost_terminal_check = Some("read_error");
+                }
                 Ok(Ok(ev)) => match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
                         let running = exit_status.is_none();
@@ -2936,6 +3001,7 @@ fn run_tui(
             last_draw = Instant::now();
             needs_draw = false;
             if drew.is_err() {
+                lost_terminal_check = Some("draw_errno");
                 cancel_for_lost_terminal(
                     &child,
                     exit_status,
@@ -3033,6 +3099,25 @@ fn run_tui(
     drop(_guard);
     flush_history_notices(history);
 
+    // `OSI_EXIT_TRACE`'s own classification of how this loop ended
+    // (issue #825): a lost terminal takes priority over a forwarded
+    // signal, since `cancel_for_lost_terminal` itself forwards a
+    // synthetic SIGHUP once the terminal is already gone -- that
+    // signal is never the real reason this run ended.
+    let trace_phase = if lost_terminal {
+        "lost_terminal_tui"
+    } else if received_signal.is_some() {
+        "forwarded_signal_tui"
+    } else {
+        "normal_end"
+    };
+    let trace_detail = serde_json::json!({
+        "check": lost_terminal_check,
+        "signal": received_signal_event.as_ref().map(|e| format!("{:?}", e.signal)),
+        "sender_pid": received_signal_event.as_ref().and_then(|e| e.sender_pid),
+        "cause": received_signal_event.as_ref().map(|e| e.cause.clone()),
+    });
+
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let code = finish_run(
@@ -3052,6 +3137,8 @@ fn run_tui(
         history,
         &engine_name,
         received_signal,
+        trace_phase,
+        trace_detail,
     );
     // Design: `spawn_event_reader`'s own
     // background thread may still be stuck forever inside crossterm
@@ -7123,7 +7210,7 @@ mod tests {
         // the way it would be sending a signal *before* any watcher is
         // registered at all.
         let mut signals = SignalWatcher::new().ok();
-        assert_eq!(pending_signal_exit_code(&mut signals), None);
+        assert_eq!(pending_signal_exit_code(&mut signals, "test"), None);
 
         unsafe {
             libc::kill(std::process::id() as i32, libc::SIGINT);
@@ -7131,7 +7218,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut code = None;
         while code.is_none() && std::time::Instant::now() < deadline {
-            code = pending_signal_exit_code(&mut signals);
+            code = pending_signal_exit_code(&mut signals, "test");
         }
         assert_eq!(code, Some(130));
     }

@@ -261,42 +261,85 @@ pub fn process_alive(pid: i32) -> bool {
 /// Polls pending signals without blocking — used in osi's own 100ms
 /// tick (DESIGN.md §6.1) alongside the live-state/events poll, so one
 /// loop drives everything.
+/// A signal osi just received, with the sender's pid and
+/// `signal-hook`'s own decoding of `si_code` alongside it --
+/// `OSI_EXIT_TRACE`'s own detail for a signal-related exit. Every
+/// other caller of [`SignalWatcher::pending`] only ever needed the
+/// plain [`ForwardSignal`] this also carries.
+#[derive(Debug, Clone)]
+pub struct SignalEvent {
+    pub signal: ForwardSignal,
+    pub sender_pid: Option<i32>,
+    pub cause: String,
+}
+
+impl SignalEvent {
+    fn from_origin(
+        signal: ForwardSignal,
+        origin: &signal_hook::low_level::siginfo::Origin,
+    ) -> Self {
+        SignalEvent {
+            signal,
+            sender_pid: origin.process.map(|p| p.pid),
+            cause: format!("{:?}", origin.cause),
+        }
+    }
+}
+
 pub struct SignalWatcher {
-    signals: signal_hook::iterator::Signals,
-    /// Signals [`SignalWatcher::has_pending`] has already drained from
-    /// `signals` but [`SignalWatcher::pending`] hasn't been handed yet
-    /// (issue #433): a probe loop (`engine::run_probe`) that only wants
-    /// to know *whether* a signal is waiting, not forward it itself,
-    /// must not make the real caller later -- `do_run`'s own
-    /// `pending_signal_exit_code` -- miss it because the probe already
-    /// consumed it from `signals` first.
-    buffered: Vec<ForwardSignal>,
+    // `WithOrigin`, not the plain `SignalOnly` alias (`Signals`): the
+    // sender's pid and `si_code` a `SignalEvent` needs are only ever
+    // available at the point signal-hook itself reads the real
+    // `siginfo_t`, never reconstructable from a bare signal number
+    // read back out later.
+    signals: signal_hook::iterator::SignalsInfo<signal_hook::iterator::exfiltrator::WithOrigin>,
+    // Issue #433's own buffering (see `has_pending`'s doc comment),
+    // now of the richer `SignalEvent` so a signal `has_pending`
+    // already drained still carries its own origin once `pending`/
+    // `pending_with_origin` actually hands it to a real caller.
+    buffered: Vec<SignalEvent>,
 }
 
 impl SignalWatcher {
     pub fn new() -> io::Result<Self> {
-        let signals =
-            signal_hook::iterator::Signals::new([libc::SIGINT, libc::SIGTERM, libc::SIGHUP])?;
+        let signals = signal_hook::iterator::SignalsInfo::<
+            signal_hook::iterator::exfiltrator::WithOrigin,
+        >::new([libc::SIGINT, libc::SIGTERM, libc::SIGHUP])?;
         Ok(SignalWatcher {
             signals,
             buffered: Vec::new(),
         })
     }
 
+    fn drain_new(&mut self) -> Vec<SignalEvent> {
+        self.signals
+            .pending()
+            .filter_map(|origin| {
+                ForwardSignal::from_raw(origin.signal)
+                    .map(|signal| SignalEvent::from_origin(signal, &origin))
+            })
+            .collect()
+    }
+
     pub fn pending(&mut self) -> Vec<ForwardSignal> {
+        self.pending_with_origin()
+            .into_iter()
+            .map(|event| event.signal)
+            .collect()
+    }
+
+    /// [`SignalWatcher::pending`], keeping the sender pid and
+    /// `si_code` cause `OSI_EXIT_TRACE` records alongside the signal
+    /// itself.
+    pub fn pending_with_origin(&mut self) -> Vec<SignalEvent> {
         let mut result = std::mem::take(&mut self.buffered);
-        result.extend(self.signals.pending().filter_map(ForwardSignal::from_raw));
+        result.extend(self.drain_new());
         result
     }
 
-    /// Whether a signal has arrived, without consuming it the way
-    /// [`SignalWatcher::pending`] does (issue #433): a probe loop that
-    /// only needs to know whether to give up early buffers anything it
-    /// finds here instead, so the real signal-handling call this
-    /// watcher is otherwise for still sees it afterwards.
     pub fn has_pending(&mut self) -> bool {
-        self.buffered
-            .extend(self.signals.pending().filter_map(ForwardSignal::from_raw));
+        let new = self.drain_new();
+        self.buffered.extend(new);
         !self.buffered.is_empty()
     }
 }
