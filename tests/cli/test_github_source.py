@@ -451,19 +451,124 @@ def test_a_fetched_prompt_file_is_not_listed_as_a_library_entry(
     assert [e.name for e in source.list_entries()] == ["brief"]
 
 
-def test_refresh_refuses_a_prompt_file_reference_that_escapes_the_source_path(
+@pytest.mark.parametrize(
+    "escaping_ref",
+    [
+        # Outside the source's `path` (`library/`) but still inside the repo.
+        "../shared.md",
+        # Outside the repo entirely.
+        "../../etc/passwd",
+        "/etc/passwd",
+    ],
+)
+def test_refresh_skips_a_prompt_file_reference_that_escapes_the_source_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escaping_ref: str
+) -> None:
+    tree = {
+        "library/brief.yml": (
+            f"prompts:\n  brief: {{file: {escaping_ref}}}\n"
+            "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
+        ),
+        "shared.md": "Outside the configured path.",
+    }
+    FakeGitHub(tree=tree).install(monkeypatch)
+
+    result = _source(tmp_path).refresh()
+
+    assert result.status == "updated"
+    assert "brief.yml" in result.detail
+    assert escaping_ref in result.detail
+    assert "outside this source's own path" in result.detail
+    # The escaping reference was never fetched, and no local path leaked.
+    assert "/private" not in result.detail
+    assert str(tmp_path) not in result.detail
+
+
+def test_refresh_skips_a_prompt_file_reference_that_is_missing_from_the_repository(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tree = {
         "library/brief.yml": (
-            "prompts:\n  brief: {file: ../../etc/passwd}\n"
+            "prompts:\n  brief: {file: missing.md}\n"
             "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
         ),
+        "library/my_pipeline.yml": PIPELINE_YML,
+    }
+    FakeGitHub(tree=tree).install(monkeypatch)
+    source = _source(tmp_path)
+
+    result = source.refresh()
+
+    assert result.status == "updated"
+    assert "brief.yml" in result.detail
+    assert "missing.md" in result.detail
+    assert "not found in the repository" in result.detail
+    # Every other document still synced; `brief` itself is listed too --
+    # the broken reference only fails the document at check/run time, the
+    # same as a local folder source's own missing file would.
+    assert {e.name for e in source.list_entries()} == {"brief", "my_pipeline"}
+    assert not (tmp_path / "cache" / "hub" / SHA_ONE / "missing.md").exists()
+
+
+def test_refresh_refuses_a_referenced_prompt_file_over_the_size_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from circuitry.core.prompt_files import MAX_PROMPT_FILE_BYTES
+
+    tree = {
+        "library/brief.yml": (
+            "prompts:\n  brief: {file: big.md}\n"
+            "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
+        ),
+        "library/big.md": "x" * (MAX_PROMPT_FILE_BYTES + 1),
     }
     FakeGitHub(tree=tree).install(monkeypatch)
 
-    with pytest.raises(LibraryFetchError, match="outside the project"):
+    with pytest.raises(LibraryFetchError, match="over the"):
         _source(tmp_path).refresh()
+
+
+def test_refresh_fills_in_a_prompt_file_missing_from_a_cache_made_before_this_fix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cache fetched before `github` sources followed `{file: ...}`
+    references holds the referencing document but not the prompt file it
+    names. Refreshing it again, with the commit unchanged, still notices
+    the gap and fetches it -- no new commit needed.
+    """
+    tree = {
+        "library/brief.yml": (
+            "prompts:\n  brief: {file: voice.md}\n"
+            "effects:\n  - type: yield\n    name: y\n    template: '{{> brief}}'\n"
+        ),
+        "library/voice.md": "Be warm.",
+    }
+    FakeGitHub(tree=tree).install(monkeypatch)
+    source = _source(tmp_path)
+
+    cache_dir = tmp_path / "cache" / "hub" / SHA_ONE
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "brief.yml").write_text(tree["library/brief.yml"], encoding="utf-8")
+    (tmp_path / "cache" / "hub" / "index.json").write_text(
+        json.dumps(
+            {
+                "source": "hub",
+                "repo": REPO,
+                "ref": "main",
+                "path": "library",
+                "sha": SHA_ONE,
+                "fetched_at": "2020-01-01T00:00:00+00:00",
+                "file_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert not (cache_dir / "voice.md").exists()
+
+    result = source.refresh()
+
+    assert result.status == "unchanged"
+    assert (cache_dir / "voice.md").read_text("utf-8") == "Be warm."
 
 
 def test_refresh_asks_for_consent_again_after_a_referenced_prompt_file_changes(
@@ -475,7 +580,12 @@ def test_refresh_asks_for_consent_again_after_a_referenced_prompt_file_changes(
     `ref:` child relying on it ask again, the same as an edited document on
     local disk would.
     """
-    from circuitry.cli.document_consent import ref_child_requirements
+    from circuitry.cli.config import trust_store_path
+    from circuitry.cli.document_consent import (
+        consented_capabilities,
+        record_consent,
+        ref_child_requirements,
+    )
 
     tree = {
         "library/brief.yml": (
@@ -511,12 +621,18 @@ def test_refresh_asks_for_consent_again_after_a_referenced_prompt_file_changes(
     assert reqs[0].required == {"shell"}
     first_digest = reqs[0].digest
 
+    store = trust_store_path()
+    record_consent(first_digest, reqs[0].required, store_path=store)
+    assert consented_capabilities(first_digest, store_path=store) == reqs[0].required
+
     fake.sha = SHA_TWO
     fake.tree["library/voice.md"] = "Second commit's brief."
     LibraryRegistry.from_runtime(runtime).refresh(source="hub")
 
     reqs_after = ref_child_requirements(root, root_path=root_path, runtime=runtime)
     assert reqs_after[0].digest != first_digest
+    # The previous consent doesn't cover the new digest -- the run asks again.
+    assert consented_capabilities(reqs_after[0].digest, store_path=store) is None
 
 
 def test_refresh_recovers_when_cache_tree_is_deleted(

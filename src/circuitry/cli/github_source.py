@@ -37,8 +37,15 @@ a `{file: <path>}` — `template`, `messages[].content`, declared `prompts:`
 (#837) — even when its own extension isn't `.yml`/`.yaml`, so a document
 that names, say, `voice.md` works the same way from a `github` source as it
 already does from a `folder` one. A fetched prompt file is never listed as
-a library entry — only `*.yml`/`*.yaml` files are. A reference outside the
-source's own `path` is refused rather than fetched.
+a library entry — only `*.yml`/`*.yaml` files are. A reference that is
+missing from the repository, or that would escape the source's own `path`,
+is skipped rather than fetched, reported as a warning in the refresh's own
+`detail` rather than failing the whole refresh — the document that names it
+then fails at check or run time, same as a local folder source's own
+missing file would. Refreshing an unchanged commit still fetches a prompt
+file a cached document references but that's missing from the cache, so a
+cache made before a document started naming one more file works again
+after one refresh, without a full re-download.
 """
 
 from __future__ import annotations
@@ -53,6 +60,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -60,6 +68,7 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 from .. import http_conventions
+from ..core.yaml_load import load_yaml
 from .library_sources import (
     FOLDER_SUFFIXES,
     Entry,
@@ -215,25 +224,39 @@ class GitHubSource:
     # -- refresh ------------------------------------------------------------
 
     def refresh(self) -> RefreshResult:
-        """Resolve `ref` → SHA and re-download the subtree when it changed."""
+        """Resolve `ref` → SHA and re-download the subtree when it changed.
+
+        When the SHA is unchanged, the subtree itself is not re-downloaded,
+        but the cached tree is still checked for a prompt file a cached
+        document references that isn't on disk yet — a cache made before
+        #837 — and any that is missing is fetched, so one refresh repairs
+        it without a full re-download.
+        """
         sha = self._resolve_sha()
         if sha == self.cached_sha and (self.cache_dir / sha).is_dir():
+            warnings = self._fill_missing_prompt_files(self.cache_dir / sha, sha=sha)
+            detail = f"{self.repo}@{self.ref} already cached"
+            if warnings:
+                detail += "; " + "; ".join(warnings)
             return RefreshResult(
                 source=self.name,
                 status="unchanged",
                 sha=sha,
-                detail=f"{self.repo}@{self.ref} already cached",
+                detail=detail,
             )
 
-        files = self._download_subtree(sha)
+        files, warnings = self._download_subtree(sha)
         self._write_cache(sha=sha, files=files)
         self._folder = None
         self._folder_dir = None
+        detail = f"{len(files)} file(s) from {self.repo}@{self.ref}"
+        if warnings:
+            detail += "; " + "; ".join(warnings)
         return RefreshResult(
             source=self.name,
             status="updated",
             sha=sha,
-            detail=f"{len(files)} file(s) from {self.repo}@{self.ref}",
+            detail=detail,
         )
 
     # -- internals ----------------------------------------------------------
@@ -284,8 +307,9 @@ class GitHubSource:
             f"{self.repo}@{self.ref}."
         )
 
-    def _download_subtree(self, sha: str) -> dict[str, bytes]:
-        """Walk the contents API from `path`, returning `{relpath: bytes}`."""
+    def _download_subtree(self, sha: str) -> tuple[dict[str, bytes], list[str]]:
+        """Walk the contents API from `path`, returning `{relpath: bytes}` and
+        any warnings from a referenced prompt file this fetch skipped."""
         files: dict[str, bytes] = {}
         item_paths: dict[str, str] = {}
         self._walk(self.path, sha=sha, files=files, item_paths=item_paths)
@@ -295,8 +319,18 @@ class GitHubSource:
                 f"Library source {self.name!r}: no orchestrations (*.yml / *.yaml) "
                 f"found under {where}. Check the source's 'path'."
             )
-        self._fetch_referenced_prompt_files(sha=sha, files=files, item_paths=item_paths)
-        return files
+        def store_file(prompt_rel: str, blob: bytes) -> None:
+            files[prompt_rel] = blob
+
+        yaml_sources = {rel: files[rel] for rel in files if rel.endswith(FOLDER_SUFFIXES)}
+        warnings = self._sync_referenced_prompt_files(
+            sha=sha,
+            yaml_sources=yaml_sources,
+            repo_path_of=lambda rel: item_paths[rel],
+            has_file=lambda prompt_rel: prompt_rel in files,
+            store_file=store_file,
+        )
+        return files, warnings
 
     def _walk(
         self, subpath: str, *, sha: str, files: dict[str, bytes], item_paths: dict[str, str]
@@ -325,14 +359,19 @@ class GitHubSource:
                 files[rel] = self._file_bytes(item, sha=sha)
                 item_paths[rel] = item_path
 
-    def _fetch_referenced_prompt_files(
-        self, *, sha: str, files: dict[str, bytes], item_paths: dict[str, str]
-    ) -> None:
-        """Fetch every ``{file: <path>}`` prompt source a cached document
+    def _sync_referenced_prompt_files(
+        self,
+        *,
+        sha: str,
+        yaml_sources: dict[str, bytes],
+        repo_path_of: Callable[[str], str],
+        has_file: Callable[[str], bool],
+        store_file: Callable[[str, bytes], None],
+    ) -> list[str]:
+        """Fetch every ``{file: <path>}`` prompt source one of *yaml_sources*
         names — ``template``, ``messages[].content`` and declared
-        ``prompts:`` — that isn't already an orchestration file the walk
-        above synced (#837). Uses the exact same walk
-        ``core.prompt_compose.document_content_digest`` hashes
+        ``prompts:`` — that isn't already cached (#837). Uses the exact same
+        walk ``core.prompt_compose.document_content_digest`` hashes
         (:func:`circuitry.core.prompt_compose.iter_referenced_prompt_file_refs`),
         so the two can't drift.
 
@@ -342,10 +381,19 @@ class GitHubSource:
         via the identical confinement check a run applies
         (``core.prompt_files.resolve_prompt_file_path``), performed here
         against an empty scratch directory that mirrors the cache's layout
-        — no actual disk I/O is needed to validate a path that doesn't
-        exist yet. A reference that would escape the tree is refused, with
-        that check's own message, rather than silently skipped or fetched
-        anyway.
+        — no actual disk I/O is needed to validate a path that doesn't exist
+        yet. A reference that is missing from the repository, or that would
+        escape the source's own tree, is skipped rather than fetched — it is
+        reported back as one of this call's warnings, naming the document
+        and the reference exactly as written, never a temporary or cache
+        path, and does not stop any other document or prompt file from
+        syncing. The document that names it then fails at check or run
+        time, the same way a local folder source's missing file would.
+
+        *repo_path_of* maps a cached yaml document's relative path to its
+        full path in the repository; *has_file*/*store_file* let the caller
+        decide where a fetched prompt file's bytes live — an in-memory dict
+        being built fresh, or a directory already on disk being repaired.
         """
         from ..core.prompt_compose import iter_referenced_prompt_file_refs
         from ..core.prompt_files import (
@@ -354,45 +402,84 @@ class GitHubSource:
             resolve_prompt_file_path,
         )
 
-        yaml_files = [rel for rel in list(files) if rel.endswith(FOLDER_SUFFIXES)]
-        if not yaml_files:
-            return
+        if not yaml_sources:
+            return []
 
+        warnings: list[str] = []
         with tempfile.TemporaryDirectory(prefix="circuitry-github-source-") as tmp:
             root = Path(tmp).resolve(strict=False)
-            for rel in yaml_files:
+            for rel, blob in yaml_sources.items():
                 try:
-                    orch = yaml.safe_load(files[rel].decode("utf-8"))
+                    orch = load_yaml(blob.decode("utf-8"))
                 except (UnicodeDecodeError, yaml.YAMLError):
                     continue
                 if not isinstance(orch, dict):
                     continue
 
                 document_dir = root / Path(rel).parent
-                doc_repo_dir = posixpath.dirname(item_paths[rel])
+                doc_repo_dir = posixpath.dirname(repo_path_of(rel))
                 for ref in iter_referenced_prompt_file_refs(orch):
                     try:
                         resolved = resolve_prompt_file_path(
                             ref, document_dir=document_dir, confinement_root=root, field="file"
                         )
-                    except PromptFileError as exc:
-                        raise LibraryFetchError(
-                            f"Library source {self.name!r}: {rel} names a prompt {exc}"
-                        ) from exc
+                    except PromptFileError:
+                        warnings.append(
+                            f"{rel} names prompt file {ref!r}, which is outside this "
+                            "source's own path; it was not fetched"
+                        )
+                        continue
                     prompt_rel = resolved.relative_to(root).as_posix()
-                    if prompt_rel in files:
+                    if has_file(prompt_rel):
                         continue
 
                     item_path = posixpath.normpath(posixpath.join(doc_repo_dir, ref))
-                    blob = self._fetch_prompt_blob(item_path, sha=sha)
-                    if len(blob) > MAX_PROMPT_FILE_BYTES:
+                    try:
+                        prompt_blob = self._fetch_prompt_blob(item_path, sha=sha)
+                    except LibraryFetchError:
+                        warnings.append(
+                            f"{rel} names prompt file {ref!r}, which was not found in "
+                            "the repository; it was not fetched"
+                        )
+                        continue
+                    if len(prompt_blob) > MAX_PROMPT_FILE_BYTES:
                         raise LibraryFetchError(
                             f"Library source {self.name!r}: prompt file {prompt_rel!r} is "
-                            f"{len(blob)} bytes, over the {MAX_PROMPT_FILE_BYTES}-byte limit "
-                            "for a prompt file."
+                            f"{len(prompt_blob)} bytes, over the {MAX_PROMPT_FILE_BYTES}-byte "
+                            "limit for a prompt file."
                         )
-                    files[prompt_rel] = blob
-                    item_paths[prompt_rel] = item_path
+                    store_file(prompt_rel, prompt_blob)
+        return warnings
+
+    def _fill_missing_prompt_files(self, directory: Path, *, sha: str) -> list[str]:
+        """Fetch a prompt file a cached document references but that isn't
+        on disk yet — a cache made before #837 fetched only the referencing
+        document, never the prompt file it names (:meth:`refresh`).
+        """
+        yaml_sources: dict[str, bytes] = {}
+        for candidate in directory.rglob("*"):
+            if candidate.is_file() and candidate.name.endswith(FOLDER_SUFFIXES):
+                rel = candidate.relative_to(directory).as_posix()
+                yaml_sources[rel] = candidate.read_bytes()
+
+        def repo_path_of(rel: str) -> str:
+            return posixpath.join(self.path, rel) if self.path else rel
+
+        def has_file(prompt_rel: str) -> bool:
+            return (directory / prompt_rel).exists()
+
+        def store_file(prompt_rel: str, blob: bytes) -> None:
+            dest = directory / prompt_rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(blob)
+
+        return self._sync_referenced_prompt_files(
+            sha=sha,
+            yaml_sources=yaml_sources,
+            repo_path_of=repo_path_of,
+            has_file=has_file,
+            store_file=store_file,
+        )
 
     def _fetch_prompt_blob(self, item_path: str, *, sha: str) -> bytes:
         """One prompt file's bytes, fetched by its exact repository path."""

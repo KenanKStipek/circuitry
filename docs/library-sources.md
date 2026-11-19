@@ -122,11 +122,17 @@ Refresh resolves `ref` → commit SHA and downloads the subtree's `*.yml` /
 then fetches every prompt file one of those documents names with a
 `{file: <path>}` — a `template`, a `messages[].content`, a declared
 `prompts:` entry — even when its own extension isn't `.yml`/`.yaml` (a
-`voice.md` alongside the orchestration that reads it, say). A reference
-outside the source's own `path` is refused rather than fetched, the same
-confinement rule a local document's `{file: ...}` applies. A fetched prompt
-file is never listed as a library entry; only `*.yml`/`*.yaml` files are.
-Everything lands into:
+`voice.md` alongside the orchestration that reads it, say), applying the same
+confinement rule a local document's `{file: ...}` does. A reference that's
+missing from the repository, or that would escape the source's own `path`,
+is skipped rather than failing the whole refresh — it's reported as a
+warning in the refresh's own output, and the document that names it then
+fails at check or run time instead, the same as a local folder source's own
+missing file would. A fetched prompt file is never listed as a library
+entry; only `*.yml`/`*.yaml` files are. Refreshing an unchanged commit still
+fetches a prompt file a cached document references but that's missing from
+the cache, so a cache from before a source's documents started naming one
+works after a single refresh. Everything lands into:
 
 ```
 ~/.cache/circuitry/library/<source>/<sha>/…
