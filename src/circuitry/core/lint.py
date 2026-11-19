@@ -16,7 +16,10 @@ authored orchestrations) converge on one spelling per construct:
 * loop-body references that do not mean what they look like: a fixed
   ``iter_<N>`` path (stale data, not an error), ``prime.<loop>.last`` (written
   only when the loop completes, so inside the body it is the previous full
-  run's data at best) and ``prime.<loop>.<step>`` (never resolves), all of
+  run's data at best) and ``prime.<loop>.<step>`` (never resolves) — each
+  flagged whether written as a direct ``prime.`` path or as the dotted
+  ``{{> <loop>.<step>}}`` partial-reference form, since the latter resolves
+  through the very same state and fails the very same silent way — all of
   which have the same fix — the canonical within-iteration form
   ``{{prime.<step>.value}}``
 
@@ -249,6 +252,57 @@ def _reference_strings(effect: Mapping[str, Any]) -> list[str]:
     return found
 
 
+def _loop_reference_warning(
+    *,
+    where: str,
+    scope: _LoopScope,
+    segment: str,
+    tag: str,
+    syntax: str,
+) -> str | None:
+    """The warning for one loop-qualified *segment* a reference named,
+    whichever of the two syntaxes it was written in -- *tag* is that
+    literal text, quoted back at the author; *syntax* (``"prime"`` or
+    ``"partial"``) picks the matching spelling for the suggested fix, since
+    ``{{prime.<step>.value}}`` and ``{{> <step>}}`` read the same state.
+    """
+    if syntax == "prime":
+        generic_current_pass = "{{prime.<step>.value}}"
+        concrete_current_pass = f"{{{{prime.{segment}.value}}}}"
+        last_fix = f"prime.{scope.name}.last.<step>.value"
+        collected_fix = f"prime.{scope.name}.collected.value"
+    else:
+        generic_current_pass = "{{> <step>}}"
+        concrete_current_pass = f"{{{{> {segment}}}}}"
+        last_fix = f"{{{{> {scope.name}.last.<step>}}}}"
+        collected_fix = f"{{{{> {scope.name}.collected}}}}"
+
+    if _ITER_SEGMENT.fullmatch(segment):
+        return (
+            f"{where}: '{tag}' names a fixed pass of the loop it sits "
+            f"inside. It does not fail — it resolves to pass "
+            f"{segment.removeprefix('iter_')}'s output in every iteration, "
+            f"so every later pass reads stale data. Use "
+            f"'{generic_current_pass}' for the current pass; iter_<N> is "
+            f"only meaningful outside the loop."
+        )
+    if segment == "last":
+        return (
+            f"{where}: '{tag}' inside the loop it names resolves to the "
+            f"previous pass at best — 'last' is written when the loop "
+            f"completes. Use '{generic_current_pass}' for the current "
+            f"pass; '{last_fix}' is only meaningful after the loop."
+        )
+    if segment in scope.body_names:
+        return (
+            f"{where}: '{tag}' never resolves — 'prime.{scope.name}' is "
+            f"the loop's own node (iter_<N>, last, collected, meta), not a "
+            f"scope its body steps live in. Use '{concrete_current_pass}' "
+            f"for the current pass, or '{collected_fix}' after the loop."
+        )
+    return None
+
+
 def _check_loop_references(
     effect: Mapping[str, Any],
     *,
@@ -256,7 +310,12 @@ def _check_loop_references(
     warnings: list[str],
     loops: tuple[_LoopScope, ...],
 ) -> None:
-    """Flag the loop-body reference forms that silently do the wrong thing.
+    """Flag the loop-body reference forms that silently do the wrong thing,
+    in either spelling: a direct ``prime.<loop>.<segment>`` path, or the
+    dotted ``{{> <loop>.<segment>}}`` partial-reference form (#405) --
+    ``_resolve_effect_text`` reads the very same ``prime.<loop>.<segment>.
+    value`` for a ``{{> <loop>.<segment>}}`` tag that a direct reference
+    would, so it fails exactly the same silent way.
 
     ``iter_<N>`` is the dangerous one: inside the body of the very loop it
     names it does not fail, it resolves to whichever pass ``N`` names —
@@ -276,6 +335,8 @@ def _check_loop_references(
     if not named:
         return
 
+    from .prompt_compose import partial_references
+
     seen: set[str] = set()
     for text in _reference_strings(effect):
         for scope in named:
@@ -285,38 +346,38 @@ def _check_loop_references(
                 key = f"{scope.name}.{segment}"
                 if key in seen:
                     continue
+                warning = _loop_reference_warning(
+                    where=where,
+                    scope=scope,
+                    segment=segment,
+                    tag=f"prime.{scope.name}.{segment}",
+                    syntax="prime",
+                )
+                if warning is not None:
+                    seen.add(key)
+                    warnings.append(warning)
 
-                if _ITER_SEGMENT.fullmatch(segment):
+        for name in partial_references(text):
+            head, sep, rest = name.partition(".")
+            if not sep:
+                continue
+            segment = rest.split(".", 1)[0]
+            for scope in named:
+                if head != scope.name:
+                    continue
+                key = f"{scope.name}.{segment}"
+                if key in seen:
+                    continue
+                warning = _loop_reference_warning(
+                    where=where,
+                    scope=scope,
+                    segment=segment,
+                    tag=f"{{{{> {name}}}}}",
+                    syntax="partial",
+                )
+                if warning is not None:
                     seen.add(key)
-                    warnings.append(
-                        f"{where}: 'prime.{scope.name}.{segment}' names a fixed "
-                        f"pass of the loop it sits inside. It does not fail — it "
-                        f"resolves to pass {segment.removeprefix('iter_')}'s "
-                        f"output in every iteration, so every later pass reads "
-                        f"stale data. Use '{{{{prime.<step>.value}}}}' for the "
-                        f"current pass; iter_<N> is only meaningful outside the "
-                        f"loop."
-                    )
-                elif segment == "last":
-                    seen.add(key)
-                    warnings.append(
-                        f"{where}: 'prime.{scope.name}.last' inside the loop it "
-                        f"names resolves to the previous pass at best — 'last' "
-                        f"is written when the loop completes. Use "
-                        f"'{{{{prime.<step>.value}}}}' for the current pass; "
-                        f"'prime.{scope.name}.last.<step>.value' is only "
-                        f"meaningful after the loop."
-                    )
-                elif segment in scope.body_names:
-                    seen.add(key)
-                    warnings.append(
-                        f"{where}: 'prime.{scope.name}.{segment}' never resolves "
-                        f"— 'prime.{scope.name}' is the loop's own node (iter_<N>, "
-                        f"last, collected, meta), not a scope its body steps live in. "
-                        f"Use '{{{{prime.{segment}.value}}}}' for the current "
-                        f"pass, or 'prime.{scope.name}.collected.value' after the "
-                        f"loop."
-                    )
+                    warnings.append(warning)
 
 
 def _check_effect(

@@ -451,6 +451,90 @@ def test_validate_warns_on_the_loop_qualified_sibling_path() -> None:
     assert "{{prime.first.value}}" in dead[0]
 
 
+def test_validate_warns_on_the_loop_qualified_sibling_partial_reference() -> None:
+    """``{{> outer.first}}`` reads the exact same, never-populated state a
+    direct ``prime.outer.first`` reference does (#405)."""
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {"type": "prompt", "name": "first", "template": "FIRST {{item}}"},
+                    {"type": "prompt", "name": "second", "template": "{{> outer.first}}"},
+                ],
+            }
+        ]
+    }
+    warnings = lint_orchestration(orch)
+
+    dead = [w for w in warnings if "never resolves" in w]
+    assert len(dead) == 1
+    assert "'{{> outer.first}}'" in dead[0]
+    assert "{{> first}}" in dead[0]
+
+
+def test_validate_warns_on_a_partial_reference_to_a_fixed_iteration() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {"type": "prompt", "name": "first", "template": "FIRST {{item}}"},
+                    {"type": "prompt", "name": "second", "template": "{{> outer.iter_0}}"},
+                ],
+            }
+        ]
+    }
+    warnings = lint_orchestration(orch)
+
+    stale = [w for w in warnings if "fixed pass" in w]
+    assert len(stale) == 1
+    assert "'{{> outer.iter_0}}'" in stale[0]
+    assert "{{> <step>}}" in stale[0]
+
+
+def test_validate_warns_on_a_partial_reference_to_last() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {"type": "prompt", "name": "first", "template": "FIRST {{item}}"},
+                    {"type": "prompt", "name": "second", "template": "{{> outer.last}}"},
+                ],
+            }
+        ]
+    }
+    warnings = lint_orchestration(orch)
+
+    stale = [w for w in warnings if "previous pass at best" in w]
+    assert len(stale) == 1
+    assert "'{{> outer.last}}'" in stale[0]
+    assert "{{> outer.last.<step>}}" in stale[0]
+
+
+def test_validate_is_quiet_on_a_partial_reference_outside_the_loop() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "collect": "first",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [{"type": "prompt", "name": "first", "template": "F"}],
+            },
+            {"type": "yield", "name": "after", "template": "{{> outer.collected}}"},
+        ]
+    }
+    assert lint_orchestration(orch) == []
+
+
 def test_validate_warns_on_a_while_condition_pinned_to_one_pass() -> None:
     """A loop's own condition lives in its iteration scope, so it is checked."""
     orch = {
