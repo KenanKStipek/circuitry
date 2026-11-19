@@ -223,6 +223,8 @@ def test_start_ready_status_stop_against_a_local_http_server(
     assert started.ok, started.stderr
     assert started.value["ready"] is True
     assert started.value["already_running"] is False
+    assert "namespace" not in started.value
+    assert "namespace" not in started.raw
     pgid = started.value["pgid"]
     assert _group_alive(pgid)
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
@@ -233,6 +235,7 @@ def test_start_ready_status_stop_against_a_local_http_server(
     assert abs(record["boot_time"] - boot_time()) <= 5
     assert record["ports"] == [port]
     assert record["log"] == str(log.resolve())
+    assert "namespace" not in record
     assert log.exists()
 
     status = plugin.execute(params={"action": "status", "name": "web"})
@@ -247,6 +250,8 @@ def test_start_ready_status_stop_against_a_local_http_server(
     assert stopped.ok, stopped.stderr
     assert stopped.value["stopped"] is True
     assert stopped.value["ports_free"] is True
+    assert "namespace" not in stopped.value
+    assert "namespace" not in stopped.raw
     assert not _group_alive(pgid)
     assert not _port_open(port)
     assert not (state_dir / "web.json").exists()
@@ -363,6 +368,96 @@ def test_a_port_claimed_by_another_service_fails_start(plugin: ServicePlugin) ->
     assert result.ok is False
     assert "service 'web'" in (result.stderr or "")
     plugin.execute(params={"action": "stop", "name": "web"})
+
+
+def test_two_namespaces_with_the_same_name_keep_separate_records_and_processes(
+    plugin: ServicePlugin,
+) -> None:
+    port_a = _free_port()
+    port_b = _free_port()
+    a = _start(plugin, "web", port_a, namespace="ns-a")
+    b = _start(plugin, "web", port_b, namespace="ns-b")
+    assert a.ok, a.stderr
+    assert b.ok, b.stderr
+    assert a.value["pgid"] != b.value["pgid"]
+
+    plugin.execute(params={"action": "stop", "name": "web", "namespace": "ns-a"})
+
+    status_a = plugin.execute(params={"action": "status", "name": "web", "namespace": "ns-a"})
+    status_b = plugin.execute(params={"action": "status", "name": "web", "namespace": "ns-b"})
+    assert status_a.value["running"] is False
+    assert status_b.value["running"] is True
+    assert _group_alive(b.value["pgid"])
+
+    plugin.execute(params={"action": "stop", "name": "web", "namespace": "ns-b"})
+    assert not _group_alive(b.value["pgid"])
+
+
+def test_status_without_a_namespace_never_sees_a_namespaced_record(
+    plugin: ServicePlugin,
+) -> None:
+    port = _free_port()
+    started = _start(plugin, "web", port, namespace="ns-a")
+    assert started.ok, started.stderr
+    try:
+        bare_status = plugin.execute(params={"action": "status", "name": "web"})
+        assert bare_status.value["running"] is False
+    finally:
+        plugin.execute(params={"action": "stop", "name": "web", "namespace": "ns-a"})
+
+
+def test_a_port_held_by_another_namespaces_service_names_it_in_the_refusal(
+    plugin: ServicePlugin,
+) -> None:
+    port = _free_port()
+    first = _start(plugin, "web", port, namespace="ns-a")
+    assert first.ok, first.stderr
+
+    second = plugin.execute(
+        params={
+            "action": "start",
+            "name": "web",
+            "namespace": "ns-b",
+            "command": ["sleep", "60"],
+            "ports": [port],
+        }
+    )
+
+    assert second.ok is False
+    assert "ns-a@web" in (second.stderr or "")
+    plugin.execute(params={"action": "stop", "name": "web", "namespace": "ns-a"})
+
+
+def test_the_record_key_and_default_log_use_the_namespace(
+    plugin: ServicePlugin, state_dir: Path
+) -> None:
+    port = _free_port()
+    started = _start(plugin, "web", port, namespace="ns-a")
+    assert started.ok, started.stderr
+    try:
+        assert (state_dir / "ns-a@web.json").exists()
+        assert not (state_dir / "web.json").exists()
+        record = json.loads((state_dir / "ns-a@web.json").read_text())
+        assert record["namespace"] == "ns-a"
+        assert record["name"] == "web"
+        assert record["log"].endswith("ns-a@web.log")
+    finally:
+        plugin.execute(params={"action": "stop", "name": "web", "namespace": "ns-a"})
+
+
+def test_invalid_namespace_is_rejected_before_anything_runs(
+    plugin: ServicePlugin, state_dir: Path
+) -> None:
+    with pytest.raises(ValueError, match="namespace"):
+        plugin.execute(
+            params={
+                "action": "start",
+                "name": "web",
+                "command": ["true"],
+                "namespace": "../etc",
+            }
+        )
+    assert not list(state_dir.glob("*.json"))
 
 
 def _write_record(state_dir: Path, name: str, **fields: Any) -> Path:
@@ -580,7 +675,7 @@ def test_a_start_cleaning_up_never_stops_a_group_it_did_not_start(
     assert restarted.ok, restarted.stderr
     pgid = restarted.value["pgid"]
 
-    cleanup = plugin._stop("web", grace_seconds=1, expected_pgid=pgid + 1)
+    cleanup = plugin._stop("web", "web", "", grace_seconds=1, expected_pgid=pgid + 1)
 
     assert cleanup.ok and cleanup.value["stopped"] is False
     assert _group_alive(pgid)
@@ -707,9 +802,11 @@ def test_cancelling_while_waiting_for_readiness_stops_the_started_group(
     started_pgids: list[int] = []
     real_save = ServicePlugin._save
 
-    def _spy_save(self: ServicePlugin, directory: Path, record: dict[str, Any]) -> None:
+    def _spy_save(
+        self: ServicePlugin, directory: Path, key: str, record: dict[str, Any]
+    ) -> None:
         started_pgids.append(int(record["pgid"]))
-        real_save(self, directory, record)
+        real_save(self, directory, key, record)
 
     try:
         with pytest.MonkeyPatch.context() as mp:
@@ -804,6 +901,81 @@ def test_invalid_params_are_rejected_before_anything_runs(
     with pytest.raises(ValueError, match=match):
         plugin.execute(params=params)
     assert not list(state_dir.glob("*.json"))
+
+
+def test_pin_refuses_an_unpinned_argv_command_before_anything_starts(state_dir: Path) -> None:
+    pinned = ServicePlugin(state_dir=str(state_dir), pinned_allowed_commands=("node",))
+    with pytest.raises(PermissionError, match=r"not in the host's"):
+        pinned.execute(
+            params={
+                "action": "start",
+                "name": "web",
+                "command": ["python3", "-m", "http.server"],
+            }
+        )
+    assert not state_dir.exists()
+
+
+def test_pin_refuses_a_path_command_even_when_its_bare_name_is_pinned(
+    state_dir: Path,
+) -> None:
+    pinned = ServicePlugin(state_dir=str(state_dir), pinned_allowed_commands=("python3",))
+    with pytest.raises(PermissionError, match=r"not in the host's"):
+        pinned.execute(
+            params={"action": "start", "name": "web", "command": ["/usr/bin/python3", "-V"]}
+        )
+    assert not state_dir.exists()
+
+
+def test_pin_refuses_shell_true_unless_sh_is_pinned(state_dir: Path) -> None:
+    pinned = ServicePlugin(state_dir=str(state_dir), pinned_allowed_commands=("node",))
+    with pytest.raises(PermissionError, match=r"shell: true needs 'sh'"):
+        pinned.execute(
+            params={"action": "start", "name": "web", "shell": True, "command": "true"}
+        )
+    assert not state_dir.exists()
+
+
+def test_pin_allows_a_pinned_command_to_start(state_dir: Path) -> None:
+    pinned = ServicePlugin(state_dir=str(state_dir), pinned_allowed_commands=("sleep",))
+    started = pinned.execute(params={"action": "start", "name": "web", "command": ["sleep", "30"]})
+    assert started.ok, started.stderr
+    pinned.execute(params={"action": "stop", "name": "web"})
+
+
+def test_pin_with_sh_admits_any_shell_true_string(state_dir: Path) -> None:
+    pinned = ServicePlugin(state_dir=str(state_dir), pinned_allowed_commands=("sh",))
+    started = pinned.execute(
+        params={"action": "start", "name": "web", "shell": True, "command": "sleep 30"}
+    )
+    assert started.ok, started.stderr
+    pinned.execute(params={"action": "stop", "name": "web"})
+
+
+def test_without_a_pin_any_bare_command_still_starts(state_dir: Path) -> None:
+    unpinned = ServicePlugin(state_dir=str(state_dir))
+    started = unpinned.execute(
+        params={"action": "start", "name": "web", "command": ["sleep", "30"]}
+    )
+    assert started.ok, started.stderr
+    unpinned.execute(params={"action": "stop", "name": "web"})
+
+
+def test_build_service_reads_the_pin_from_config() -> None:
+    plugin = build_plugin(
+        plugin_name="service",
+        runtime={"plugins": {"service": {"allowed_commands": ["node", "npm"]}}},
+    )
+    assert isinstance(plugin, ServicePlugin)
+    assert plugin.pinned_allowed_commands == ("node", "npm")
+
+
+def test_build_service_rejects_a_non_list_pin() -> None:
+    with pytest.raises(ValueError, match="allowed_commands"):
+        build_plugin(
+            plugin_name="service",
+            runtime={"plugins": {"service": {"allowed_commands": "node"}}},
+        )
 
 
 def test_state_dir_defaults_beside_the_global_config_and_is_configurable(

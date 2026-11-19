@@ -26,14 +26,17 @@ pub struct ServicePlugin {
     /// `runtime.plugins.service.state_dir`; `None` means
     /// [`imp::default_state_dir`].
     pub state_dir: Option<String>,
+    /// `runtime.plugins.service.allowed_commands` -- the host's own pin
+    /// (#381), `None` meaning no pin. An argv command's `command[0]`
+    /// must be a bare name in this pin; `shell: true` is refused unless
+    /// `"sh"` is in it.
+    pub pinned_allowed_commands: Option<Vec<String>>,
 }
 
 /// `plugins/factory.py::_build_service`.
 pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
-    let state_dir = match cfg
-        .as_dict()
-        .and_then(|d| d.get(&Value::Str("state_dir".to_string())))
-    {
+    let dict = cfg.as_dict();
+    let state_dir = match dict.and_then(|d| d.get(&Value::Str("state_dir".to_string()))) {
         None | Some(Value::None) => None,
         // `state_dir or None` (`plugins/factory.py::_build_service`):
         // an empty string means the default directory too.
@@ -47,7 +50,41 @@ pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
             });
         }
     };
-    Ok(Box::new(ServicePlugin { state_dir }))
+    let pinned_allowed_commands =
+        match dict.and_then(|d| d.get(&Value::Str("allowed_commands".to_string()))) {
+            None | Some(Value::None) => None,
+            Some(Value::List(items)) => {
+                let mut commands = Vec::with_capacity(items.len());
+                for item in items {
+                    match item {
+                        Value::Str(s) => commands.push(s.clone()),
+                        _ => {
+                            return Err(ToolError {
+                                py_class: PyExc::ValueError,
+                                message: "runtime.plugins.service.allowed_commands must be a \
+                                          list of strings."
+                                    .to_string(),
+                                cause: ErrorCause::None,
+                            });
+                        }
+                    }
+                }
+                Some(commands)
+            }
+            Some(_) => {
+                return Err(ToolError {
+                    py_class: PyExc::ValueError,
+                    message: "runtime.plugins.service.allowed_commands must be a list of \
+                              strings."
+                        .to_string(),
+                    cause: ErrorCause::None,
+                });
+            }
+        };
+    Ok(Box::new(ServicePlugin {
+        state_dir,
+        pinned_allowed_commands,
+    }))
 }
 
 #[async_trait(?Send)]
@@ -499,6 +536,10 @@ mod imp {
         command: Option<Value>,
         cwd: Option<String>,
         service: Option<String>,
+        /// `claims[port].get("namespace")` on cof's side (#393) -- `None`
+        /// for a foreign process (never a claim) and for a claim whose
+        /// own service has no namespace.
+        namespace: Option<String>,
     }
 
     fn holder_to_value(h: &Holder, ours: Option<bool>) -> Value {
@@ -523,6 +564,9 @@ mod imp {
         if let Some(svc) = &h.service {
             d.insert(Value::from("service"), Value::from(svc.as_str()));
         }
+        if let Some(ns) = &h.namespace {
+            d.insert(Value::from("namespace"), Value::from(ns.as_str()));
+        }
         if let Some(o) = ours {
             d.insert(Value::from("ours"), Value::from(o));
         }
@@ -531,10 +575,14 @@ mod imp {
 
     fn format_holder(h: &Holder) -> String {
         if let Some(service) = &h.service {
+            let label = match &h.namespace {
+                Some(ns) => format!("{ns}@{service}"),
+                None => service.clone(),
+            };
             return format!(
                 "port {} is claimed by service {} (pgid {})",
                 h.port,
-                repr_str(service),
+                repr_str(&label),
                 h.pgid.map(|p| p.to_string()).unwrap_or("None".to_string()),
             );
         }
@@ -616,6 +664,7 @@ mod imp {
             command,
             cwd,
             service: None,
+            namespace: None,
         }
     }
 
@@ -660,6 +709,7 @@ mod imp {
                 command: None,
                 cwd: None,
                 service: None,
+                namespace: None,
             }];
         }
         vec![]
@@ -1234,12 +1284,9 @@ mod imp {
         let _ = fs::remove_file(record_path(dir, name));
     }
 
-    fn save_record(dir: &Path, record: &Dict) -> Result<(), ToolError> {
-        let name = get(record, "name")
-            .and_then(Value::as_str)
-            .expect("records always carry their own name");
-        let path = record_path(dir, name);
-        let tmp = dir.join(format!("{name}.json.tmp"));
+    fn save_record(dir: &Path, key: &str, record: &Dict) -> Result<(), ToolError> {
+        let path = record_path(dir, key);
+        let tmp = dir.join(format!("{key}.json.tmp"));
         let text = dumps(&Value::Dict(record.clone()), WriteMode::PRETTY)
             .map_err(|e| runtime_error(format!("service: cannot encode the record: {e}")))?;
         // 0600 from creation, matching the state directory's own 0700: a
@@ -1438,7 +1485,7 @@ mod imp {
         armed: bool,
         pgid: u32,
         dir: PathBuf,
-        name: String,
+        key: String,
         grace: Duration,
     }
 
@@ -1468,11 +1515,11 @@ mod imp {
             // guarantee cof's own synchronous cleanup gives, reached a
             // different way.
             let dir = self.dir.clone();
-            let name = self.name.clone();
+            let key = self.key.clone();
             let pgid = self.pgid;
             let grace = self.grace;
             register_pending_teardown(tokio::spawn(async move {
-                cancel_teardown(dir, name, pgid, grace).await;
+                cancel_teardown(dir, key, pgid, grace).await;
             }));
         }
     }
@@ -1487,11 +1534,11 @@ mod imp {
     /// tearing down -- and, like `ServicePlugin._stop`, the record is
     /// dropped only once the group is confirmed gone, not before the
     /// signal is even sent.
-    async fn cancel_teardown(dir: PathBuf, name: String, pgid: u32, grace: Duration) {
+    async fn cancel_teardown(dir: PathBuf, key: String, pgid: u32, grace: Duration) {
         let Ok(lock) = LockGuard::acquire(&dir).await else {
             return;
         };
-        let Ok((record, _)) = live_record_nb(dir.clone(), name.clone()).await else {
+        let Ok((record, _)) = live_record_nb(dir.clone(), key.clone()).await else {
             return;
         };
         let Some(rec) = record else {
@@ -1503,7 +1550,7 @@ mod imp {
         }
         let (gone, _sent) = terminate_group(pgid, grace).await;
         if gone {
-            drop_record(&dir, &name);
+            drop_record(&dir, &key);
         }
         drop(lock);
     }
@@ -1628,21 +1675,88 @@ mod imp {
                 repr_str(&name)
             )));
         }
+        let namespace =
+            py_strip(&falsy_or_default(dict.and_then(|d| get(d, "namespace"))).py_str())
+                .to_string();
+        if !namespace.is_empty() && !valid_name(&namespace) {
+            return Err(value_error(format!(
+                "service: params['namespace'] must be letters, digits, '_', '.' and '-' \
+                 (starting with a letter or digit), got {}.",
+                repr_str(&namespace)
+            )));
+        }
+        let key = if namespace.is_empty() {
+            name.clone()
+        } else {
+            format!("{namespace}@{name}")
+        };
         let empty = Dict::new();
         let params_dict = dict.unwrap_or(&empty);
         match action.as_str() {
-            "start" => start(plugin, &name, params_dict, call).await,
+            "start" => start(plugin, &key, &name, &namespace, params_dict, call).await,
             "stop" => {
                 let grace_ms = parse_ms(params_dict, "grace_ms", DEFAULT_GRACE_MS)?;
-                stop_internal(&plugin.dir(), &name, Duration::from_millis(grace_ms), None).await
+                stop_internal(
+                    &plugin.dir(),
+                    &key,
+                    &name,
+                    &namespace,
+                    Duration::from_millis(grace_ms),
+                    None,
+                )
+                .await
             }
-            _ => status(&plugin.dir(), &name).await,
+            _ => status(&plugin.dir(), &key, &name, &namespace).await,
         }
+    }
+
+    /// `ServicePlugin._start`'s own host pin check (#381): before
+    /// anything else `start` does -- no state directory, no port claim,
+    /// no process -- an argv command's bare `command[0]` must be in the
+    /// pin, and `shell: true` is refused unless the pin names `sh`
+    /// (which then admits any string -- the pin is all or nothing in
+    /// shell mode).
+    fn check_pin(pin: &[String], shell: bool, argv: &[String]) -> Result<(), ToolError> {
+        let mut sorted_pin = pin.to_vec();
+        sorted_pin.sort();
+        let pin_repr = list_repr(&sorted_pin);
+        if shell {
+            if !pin.iter().any(|p| p == "sh") {
+                return Err(ToolError {
+                    py_class: PyExc::PermissionError,
+                    message: format!(
+                        "service: shell: true needs 'sh' in the host's \
+                         runtime.plugins.service.allowed_commands pin {pin_repr}."
+                    ),
+                    cause: ErrorCause::None,
+                });
+            }
+            return Ok(());
+        }
+        let exe = &argv[0];
+        if !crate::shell::is_bare_command(exe) || !pin.iter().any(|p| p == exe) {
+            return Err(ToolError {
+                py_class: PyExc::PermissionError,
+                message: format!(
+                    "service: command {} is not in the host's \
+                     runtime.plugins.service.allowed_commands pin {pin_repr}.",
+                    repr_str(exe)
+                ),
+                cause: ErrorCause::None,
+            });
+        }
+        Ok(())
+    }
+
+    fn list_repr(items: &[String]) -> String {
+        Value::List(items.iter().map(|s| Value::from(s.as_str())).collect()).py_repr()
     }
 
     async fn start(
         plugin: &ServicePlugin,
+        key: &str,
         name: &str,
+        namespace: &str,
         params: &Dict,
         call: &ToolCall<'_>,
     ) -> Result<ToolResult, ToolError> {
@@ -1683,6 +1797,10 @@ mod imp {
             return Err(value_error(
                 "service: params['command'] contains a null byte.",
             ));
+        }
+
+        if let Some(pin) = &plugin.pinned_allowed_commands {
+            check_pin(pin, shell, &argv)?;
         }
 
         let raw_ports: Vec<Value> = match get(params, "ports") {
@@ -1751,10 +1869,10 @@ mod imp {
 
         let log_path = match get(params, "log") {
             Some(v) if is_truthy(v) => resolve_path(&expand_user(&v.py_str())),
-            _ => state_dir.join(format!("{name}.log")),
+            _ => state_dir.join(format!("{key}.log")),
         };
 
-        let (existing, _) = live_record_nb(state_dir.clone(), name.to_string()).await?;
+        let (existing, _) = live_record_nb(state_dir.clone(), key.to_string()).await?;
         let started: bool;
         let record: Dict;
         let mut exit_rx: Option<tokio::sync::oneshot::Receiver<i32>> = None;
@@ -1766,7 +1884,7 @@ mod imp {
             record = existing_record;
             log_offset = 0;
         } else {
-            let claims = other_claims_nb(state_dir.clone(), name.to_string()).await?;
+            let claims = other_claims_nb(state_dir.clone(), key.to_string()).await?;
             let mut holders: Vec<Holder> = Vec::new();
             for port in &ports {
                 if let Some(claim) = claims.get(port) {
@@ -1779,6 +1897,9 @@ mod imp {
                             .and_then(Value::as_str)
                             .map(str::to_string),
                         service: get(claim, "name")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        namespace: get(claim, "namespace")
                             .and_then(Value::as_str)
                             .map(str::to_string),
                     });
@@ -1800,6 +1921,9 @@ mod imp {
                 let mut raw = Dict::new();
                 raw.insert(Value::from("action"), Value::from("start"));
                 raw.insert(Value::from("name"), Value::from(name));
+                if !namespace.is_empty() {
+                    raw.insert(Value::from("namespace"), Value::from(namespace));
+                }
                 raw.insert(
                     Value::from("port_holders"),
                     Value::List(holders.iter().map(|h| holder_to_value(h, None)).collect()),
@@ -1885,7 +2009,7 @@ mod imp {
                 armed: true,
                 pgid: pid,
                 dir: state_dir.clone(),
-                name: name.to_string(),
+                key: key.to_string(),
                 grace,
             });
 
@@ -1920,7 +2044,10 @@ mod imp {
                 );
                 rec.insert(Value::from("ready"), ready_to_value(&ready));
                 rec.insert(Value::from("started_at"), Value::from(iso_now()));
-                save_record(&state_dir, &rec)?;
+                if !namespace.is_empty() {
+                    rec.insert(Value::from("namespace"), Value::from(namespace));
+                }
+                save_record(&state_dir, key, &rec)?;
                 Ok(rec)
             }
             .await;
@@ -1969,6 +2096,9 @@ mod imp {
             value.insert(Value::from("ports"), ports_value);
             value.insert(Value::from("log"), log_value);
             value.insert(Value::from("started_at"), started_at_value);
+            if !namespace.is_empty() {
+                value.insert(Value::from("namespace"), Value::from(namespace));
+            }
             let mut raw = Dict::new();
             raw.insert(Value::from("action"), Value::from("start"));
             for (k, v) in value.iter() {
@@ -1981,7 +2111,7 @@ mod imp {
         let tail = log_tail(Path::new(&log_value.py_str()), log_offset);
         let mut running = true;
         if started {
-            let _ = stop_internal(&state_dir, name, grace, Some(pgid)).await;
+            let _ = stop_internal(&state_dir, key, name, namespace, grace, Some(pgid)).await;
             running = false;
         }
         if let Some(g) = guard.as_mut() {
@@ -1997,6 +2127,9 @@ mod imp {
         value.insert(Value::from("ports"), ports_value);
         value.insert(Value::from("log"), log_value.clone());
         value.insert(Value::from("started_at"), started_at_value);
+        if !namespace.is_empty() {
+            value.insert(Value::from("namespace"), Value::from(namespace));
+        }
 
         let message = if tail.is_empty() {
             format!("service {}: {error_text}", repr_str(name))
@@ -2031,7 +2164,7 @@ mod imp {
         })
     }
 
-    fn stopped_false_result(name: &str, stale: Option<String>) -> ToolResult {
+    fn stopped_false_result(name: &str, namespace: &str, stale: Option<String>) -> ToolResult {
         let mut value = Dict::new();
         value.insert(Value::from("name"), Value::from(name));
         value.insert(Value::from("stopped"), Value::from(false));
@@ -2046,6 +2179,9 @@ mod imp {
                 .map(|s| Value::from(s.as_str()))
                 .unwrap_or(Value::None),
         );
+        if !namespace.is_empty() {
+            value.insert(Value::from("namespace"), Value::from(namespace));
+        }
         let mut raw = Dict::new();
         raw.insert(Value::from("action"), Value::from("stop"));
         for (k, v) in value.iter() {
@@ -2084,14 +2220,16 @@ mod imp {
     /// it.
     async fn stop_locked(
         dir: PathBuf,
+        key: String,
         name: String,
+        namespace: String,
         grace: Duration,
         expected_pgid: Option<u32>,
     ) -> Result<StopLocked, ToolError> {
         let lock = LockGuard::acquire(&dir)
             .await
             .map_err(|e| runtime_error(format!("service: cannot lock the state directory: {e}")))?;
-        let (mut record, stale) = live_record_nb(dir.clone(), name.clone()).await?;
+        let (mut record, stale) = live_record_nb(dir.clone(), key.clone()).await?;
         if let Some(rec) = &record {
             if let Some(expected) = expected_pgid {
                 let actual = get(rec, "pgid").and_then(value_as_i64).unwrap_or(-1) as u32;
@@ -2102,7 +2240,7 @@ mod imp {
         }
         let Some(rec) = record else {
             return Ok(StopLocked::Early(Box::new(stopped_false_result(
-                &name, stale,
+                &name, &namespace, stale,
             ))));
         };
         let pgid = get(&rec, "pgid").and_then(value_as_i64).unwrap_or(0) as u32;
@@ -2142,7 +2280,7 @@ mod imp {
                 cost_usd: None,
             })));
         }
-        drop_record(&dir, &name);
+        drop_record(&dir, &key);
         let ports: Vec<i64> = get(&rec, "ports")
             .and_then(Value::as_list)
             .map(|l| l.iter().filter_map(value_as_i64).collect())
@@ -2155,16 +2293,20 @@ mod imp {
     /// after itself), only when the record still names that group.
     async fn stop_internal(
         dir: &Path,
+        key: &str,
         name: &str,
+        namespace: &str,
         grace: Duration,
         expected_pgid: Option<u32>,
     ) -> Result<ToolResult, ToolError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn({
             let dir = dir.to_path_buf();
+            let key = key.to_string();
             let name = name.to_string();
+            let namespace = namespace.to_string();
             async move {
-                let outcome = stop_locked(dir, name, grace, expected_pgid).await;
+                let outcome = stop_locked(dir, key, name, namespace, grace, expected_pgid).await;
                 let _ = tx.send(outcome);
             }
         });
@@ -2214,6 +2356,9 @@ mod imp {
             Value::List(holders.iter().map(|h| holder_to_value(h, None)).collect()),
         );
         value.insert(Value::from("stale_record"), Value::None);
+        if !namespace.is_empty() {
+            value.insert(Value::from("namespace"), Value::from(namespace));
+        }
         let mut raw = Dict::new();
         raw.insert(Value::from("action"), Value::from("stop"));
         for (k, v) in value.iter() {
@@ -2222,12 +2367,17 @@ mod imp {
         Ok(ToolResult::new(Value::Dict(value), Value::Dict(raw)))
     }
 
-    async fn status(dir: &Path, name: &str) -> Result<ToolResult, ToolError> {
+    async fn status(
+        dir: &Path,
+        key: &str,
+        name: &str,
+        namespace: &str,
+    ) -> Result<ToolResult, ToolError> {
         let (record, stale) = {
             let lock = LockGuard::acquire(dir).await.map_err(|e| {
                 runtime_error(format!("service: cannot lock the state directory: {e}"))
             })?;
-            let result = live_record_nb(dir.to_path_buf(), name.to_string()).await?;
+            let result = live_record_nb(dir.to_path_buf(), key.to_string()).await?;
             drop(lock);
             result
         };
@@ -2302,6 +2452,9 @@ mod imp {
                 .map(|s| Value::from(s.as_str()))
                 .unwrap_or(Value::None),
         );
+        if !namespace.is_empty() {
+            value.insert(Value::from("namespace"), Value::from(namespace));
+        }
 
         let mut raw = Dict::new();
         raw.insert(Value::from("action"), Value::from("status"));
@@ -2373,7 +2526,314 @@ mod imp {
         fn plugin(dir: &Path) -> ServicePlugin {
             ServicePlugin {
                 state_dir: Some(dir.to_string_lossy().into_owned()),
+                pinned_allowed_commands: None,
             }
+        }
+
+        fn pinned_plugin(dir: &Path, pin: &[&str]) -> ServicePlugin {
+            ServicePlugin {
+                state_dir: Some(dir.to_string_lossy().into_owned()),
+                pinned_allowed_commands: Some(pin.iter().map(|s| s.to_string()).collect()),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_pinned_argv_command_outside_the_pin_is_refused_before_anything_starts() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = pinned_plugin(dir.path(), &["node"]);
+            let err = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("python3"), Value::from("-V")]),
+                        ),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.message,
+                "service: command 'python3' is not in the host's \
+                 runtime.plugins.service.allowed_commands pin ['node']."
+            );
+            assert_eq!(err.py_class, PyExc::PermissionError);
+            assert!(fs::read_dir(dir.path()).unwrap().next().is_none());
+        }
+
+        #[tokio::test]
+        async fn a_path_command_is_refused_even_when_its_bare_name_is_pinned() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = pinned_plugin(dir.path(), &["python3"]);
+            let err = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("/usr/bin/python3"), Value::from("-V")]),
+                        ),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                err.message.contains("is not in the host's"),
+                "{}",
+                err.message
+            );
+            assert_eq!(err.py_class, PyExc::PermissionError);
+        }
+
+        #[tokio::test]
+        async fn shell_true_is_refused_unless_sh_is_pinned() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = pinned_plugin(dir.path(), &["node"]);
+            let err = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        ("shell", Value::from(true)),
+                        ("command", Value::from("true")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.message,
+                "service: shell: true needs 'sh' in the host's \
+                 runtime.plugins.service.allowed_commands pin ['node']."
+            );
+            assert_eq!(err.py_class, PyExc::PermissionError);
+        }
+
+        #[tokio::test]
+        async fn a_pinned_command_starts_and_a_pinned_sh_admits_shell_true() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = pinned_plugin(dir.path(), &["sleep"]);
+            let started = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("sleep"), Value::from("30")]),
+                        ),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(started.ok, "{:?}", started.stderr);
+            let pgid = value_as_i64(get(started.value.as_dict().unwrap(), "pgid").unwrap()).unwrap()
+                as u32;
+            let stop = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("stop")),
+                        ("name", Value::from("web")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(stop.ok);
+            assert!(!group_exists(pgid));
+
+            let sh_plugin = pinned_plugin(dir.path(), &["sh"]);
+            let started_sh = sh_plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web2")),
+                        ("shell", Value::from(true)),
+                        ("command", Value::from("sleep 30")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(started_sh.ok, "{:?}", started_sh.stderr);
+            let pgid_sh = value_as_i64(get(started_sh.value.as_dict().unwrap(), "pgid").unwrap())
+                .unwrap() as u32;
+            let stop_sh = sh_plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("stop")),
+                        ("name", Value::from("web2")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(stop_sh.ok);
+            assert!(!group_exists(pgid_sh));
+        }
+
+        #[tokio::test]
+        async fn two_namespaces_with_the_same_name_keep_separate_records() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = plugin(dir.path());
+            let a = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        ("namespace", Value::from("ns-a")),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("sleep"), Value::from("30")]),
+                        ),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            let b = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        ("namespace", Value::from("ns-b")),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("sleep"), Value::from("30")]),
+                        ),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(a.ok && b.ok, "{:?} {:?}", a.stderr, b.stderr);
+            let pgid_a =
+                value_as_i64(get(a.value.as_dict().unwrap(), "pgid").unwrap()).unwrap() as u32;
+            let pgid_b =
+                value_as_i64(get(b.value.as_dict().unwrap(), "pgid").unwrap()).unwrap() as u32;
+            assert_ne!(pgid_a, pgid_b);
+            assert!(dir.path().join("ns-a@web.json").exists());
+            assert!(dir.path().join("ns-b@web.json").exists());
+            assert!(!dir.path().join("web.json").exists());
+
+            plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("stop")),
+                        ("name", Value::from("web")),
+                        ("namespace", Value::from("ns-a")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(!group_exists(pgid_a));
+            assert!(group_exists(pgid_b));
+
+            let status_bare = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("status")),
+                        ("name", Value::from("web")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                get(status_bare.value.as_dict().unwrap(), "running"),
+                Some(&Value::from(false))
+            );
+
+            plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("stop")),
+                        ("name", Value::from("web")),
+                        ("namespace", Value::from("ns-b")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(!group_exists(pgid_b));
+        }
+
+        #[tokio::test]
+        async fn a_port_held_by_another_namespaces_service_names_it_in_the_refusal() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = plugin(dir.path());
+            let port = {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                listener.local_addr().unwrap().port()
+            };
+            let first = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        ("namespace", Value::from("ns-a")),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("sleep"), Value::from("30")]),
+                        ),
+                        ("ports", Value::List(vec![Value::from(port as i64)])),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(first.ok, "{:?}", first.stderr);
+            let pgid =
+                value_as_i64(get(first.value.as_dict().unwrap(), "pgid").unwrap()).unwrap() as u32;
+
+            let second = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from("web")),
+                        ("namespace", Value::from("ns-b")),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("sleep"), Value::from("30")]),
+                        ),
+                        ("ports", Value::List(vec![Value::from(port as i64)])),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(!second.ok);
+            assert!(
+                second.stderr.as_deref().unwrap_or("").contains("ns-a@web"),
+                "{:?}",
+                second.stderr
+            );
+
+            plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("stop")),
+                        ("name", Value::from("web")),
+                        ("namespace", Value::from("ns-a")),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .unwrap();
+            assert!(!group_exists(pgid));
         }
 
         #[test]
@@ -2492,6 +2952,8 @@ mod imp {
             let value = start_result.value.as_dict().unwrap();
             assert_eq!(get(value, "running"), Some(&Value::from(true)));
             assert_eq!(get(value, "already_running"), Some(&Value::from(false)));
+            assert!(get(value, "namespace").is_none());
+            assert!(get(start_result.raw.as_dict().unwrap(), "namespace").is_none());
             let pgid = value_as_i64(get(value, "pgid").unwrap()).unwrap() as u32;
             assert!(group_exists(pgid));
 
@@ -2528,6 +2990,8 @@ mod imp {
                 .unwrap();
             let stop_value = stop_result.value.as_dict().unwrap();
             assert_eq!(get(stop_value, "stopped"), Some(&Value::from(true)));
+            assert!(get(stop_value, "namespace").is_none());
+            assert!(get(stop_result.raw.as_dict().unwrap(), "namespace").is_none());
             assert!(!group_exists(pgid));
         }
 

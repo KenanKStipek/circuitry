@@ -1,0 +1,1 @@
+{"runtime": {"plugins": {"service": {"allowed_commands": ["python3"]}}}}

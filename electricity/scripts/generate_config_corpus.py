@@ -389,6 +389,21 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             orch={"runtime": {"adapters": {}}},
         )
     )
+    cases.append(
+        effective_settings_case(
+            "service_allowlist_ceiling_narrows_but_never_widens",
+            config={
+                "runtime": {
+                    "plugins": {"service": {"allowed_commands": ["node", "python3"]}},
+                }
+            },
+            orch={
+                "runtime": {
+                    "plugins": {"service": {"allowed_commands": ["python3", "npm", "curl"]}},
+                }
+            },
+        )
+    )
 
     # --- resolve_effective_settings: sources order, warnings, router precedence ---
     cases.append(

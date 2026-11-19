@@ -1,0 +1,10 @@
+name: c-service-pin-denial-shell
+effects:
+  - type: tool
+    name: result
+    provider: service
+    params:
+      action: start
+      name: web
+      shell: true
+      command: "true"

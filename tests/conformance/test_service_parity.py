@@ -100,6 +100,21 @@ def _write_config(config_path: Path, state_dir: Path) -> None:
     )
 
 
+def _write_config_with_pin(config_path: Path, state_dir: Path, pin: list) -> None:
+    config_path.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "plugins": {
+                        "service": {"state_dir": str(state_dir), "allowed_commands": pin}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_orchestration(doc_path: Path, params: dict, *, on_error: str | None = None) -> None:
     effect = {
         "name": "svc",
@@ -472,6 +487,128 @@ def test_a_service_started_under_one_engine_is_stopped_under_the_other(
             assert stop_result.returncode == 0, f"{stopper_name} stop: {stop_result.stderr}"
             stop_value = _svc_value(stop_result)
             assert stop_value["stopped"] is True
+            assert not _pgid_exists(pgid), (
+                f"{starter_name}-started pgid {pgid} still running after {stopper_name} stop"
+            )
+        finally:
+            _stop_and_wait_free(pgid)
+
+
+def test_a_host_pin_allows_a_pinned_start_and_refuses_an_unpinned_one_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """issue #381: `runtime.plugins.service.allowed_commands` is enforced
+    the same way, with the same denial text, on both engines -- a pinned
+    command starts as it would without a pin, and one outside the pin is
+    refused before anything starts, on both."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    for engine, runner in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-pin"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config_with_pin(config_path, state_dir, ["sleep"])
+
+        _write_orchestration(
+            doc_path,
+            {"action": "start", "name": "web", "command": ["sleep", "30"]},
+        )
+        allowed_result = runner(doc_path, config_path)
+        assert allowed_result.returncode == 0, f"{engine}: {allowed_result.stderr}"
+        pgid = _svc_value(allowed_result)["pgid"]
+        try:
+            assert _pgid_exists(pgid)
+        finally:
+            _write_orchestration(doc_path, {"action": "stop", "name": "web"})
+            runner(doc_path, config_path)
+            _stop_and_wait_free(pgid)
+
+        _write_orchestration(
+            doc_path,
+            {"action": "start", "name": "web2", "command": ["python3", "-V"]},
+        )
+        refused_result = runner(doc_path, config_path)
+        assert refused_result.returncode != 0, f"{engine}: {refused_result.stdout}"
+        payload = json.loads(refused_result.stdout)
+        assert payload["ok"] is False
+        assert (
+            "service: command 'python3' is not in the host's "
+            "runtime.plugins.service.allowed_commands pin ['sleep']." in payload["error"]
+        ), (engine, payload["error"])
+        assert not (state_dir / "web2.json").exists()
+
+
+def test_a_namespaced_service_started_under_one_engine_is_stopped_under_the_other(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """issue #393: the namespace key (`<namespace>@<name>`) is the same
+    record layout on both engines -- a namespaced service started by one
+    can be found and stopped by the other, and the other way round."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    for starter_name, starter, stopper_name, stopper in (
+        (
+            "cof",
+            lambda doc, cfg: _run_cof(doc, cfg, home_dir),
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+            "cof",
+            lambda doc, cfg: _run_cof(doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"ns-{starter_name}-to-{stopper_name}"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        _write_orchestration(
+            doc_path,
+            {
+                "action": "start",
+                "name": "web",
+                "namespace": "ns-a",
+                "command": ["sleep", "30"],
+            },
+        )
+
+        start_result = starter(doc_path, config_path)
+        assert start_result.returncode == 0, f"{starter_name} start: {start_result.stderr}"
+        value = _svc_value(start_result)
+        assert value["namespace"] == "ns-a"
+        pgid = value["pgid"]
+        try:
+            assert _pgid_exists(pgid)
+            assert (state_dir / "ns-a@web.json").exists()
+            assert not (state_dir / "web.json").exists()
+
+            _write_orchestration(doc_path, {"action": "status", "name": "web"})
+            bare_status = stopper(doc_path, config_path)
+            assert bare_status.returncode == 0, bare_status.stderr
+            assert _svc_value(bare_status)["running"] is False
+
+            _write_orchestration(
+                doc_path, {"action": "stop", "name": "web", "namespace": "ns-a"}
+            )
+            stop_result = stopper(doc_path, config_path)
+            assert stop_result.returncode == 0, f"{stopper_name} stop: {stop_result.stderr}"
+            stop_value = _svc_value(stop_result)
+            assert stop_value["stopped"] is True
+            assert stop_value["namespace"] == "ns-a"
             assert not _pgid_exists(pgid), (
                 f"{starter_name}-started pgid {pgid} still running after {stopper_name} stop"
             )

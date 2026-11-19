@@ -26,7 +26,7 @@
 
 use crate::complexity::{RoutingSettings, resolve_complexity_settings};
 use crate::config::{CircuitryConfig, ConfigError};
-use crate::merge::merge_runtime;
+use crate::merge::{CEILING_LIST_KEYS, merge_runtime};
 use crate::profile::ProfileSettings;
 use crate::util::get;
 use electricity_value::{Dict, Value};
@@ -78,9 +78,6 @@ const NOTICE_KEY_DEPTH: usize = 2;
 /// `_NOTICE_KEY_DEPTHS`: a secret is named by its name alone,
 /// `runtime.secrets.<name>` (issue #601).
 const SECRETS_NOTICE_KEY_DEPTH: usize = 1;
-/// `_CEILING_LIST_KEYS`.
-const CEILING_LIST_KEYS: [(&str, &str, &str); 1] = [("plugins", "shell", "allowed_commands")];
-
 fn dict_truthy(value: Option<&Value>) -> bool {
     value
         .and_then(Value::as_dict)

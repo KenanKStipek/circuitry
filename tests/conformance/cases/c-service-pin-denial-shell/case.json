@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #381",
+  "description": "`shell: true` is refused unless a host-level `runtime.plugins.service.allowed_commands` pin names `sh` -- in shell mode the pin is all or nothing. The denial names the setting and the pin.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

@@ -334,6 +334,27 @@ mod tests {
     }
 
     #[test]
+    fn build_plugin_validates_the_service_host_pin_per_attempt() {
+        // `service::make_plugin` (the `_build_service` seam, #381) --
+        // a non-list `allowed_commands` pin fails this one attempt's
+        // build, matching Python's own per-attempt `ValueError`.
+        let mut cfg = electricity_value::Dict::new();
+        let mut plugins = electricity_value::Dict::new();
+        let mut service_cfg = electricity_value::Dict::new();
+        service_cfg.insert(Value::from("allowed_commands"), Value::from("not-a-list"));
+        plugins.insert(Value::from("service"), Value::Dict(service_cfg));
+        cfg.insert(Value::from("plugins"), Value::Dict(plugins));
+        let err = match build_plugin("service", &Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected a bad-pin build error"),
+        };
+        assert_eq!(
+            err.message,
+            "runtime.plugins.service.allowed_commands must be a list of strings."
+        );
+    }
+
+    #[test]
     fn every_m1_native_provider_builds_its_own_still_not_implemented_stub() {
         // `builders()` now has an entry for every M1 native-tool
         // provider, each returning its own stub

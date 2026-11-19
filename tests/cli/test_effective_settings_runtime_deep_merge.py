@@ -208,3 +208,53 @@ def test_applied_host_settings_notice_does_not_tag_an_unpinned_allowlist() -> No
     assert warnings == [
         "Applied host settings from the orchestration: runtime.plugins.shell.allowed_commands"
     ]
+
+
+def test_document_only_narrows_the_service_allowlist_pin_never_widens_it() -> None:
+    """#381 gives `service` the same ceiling as the shell half of #264: the
+    host pin on `runtime.plugins.service.allowed_commands` is an
+    intersection, never replaced outright by a trusted document's own
+    list."""
+    cfg = _trusted_cfg(
+        runtime={"plugins": {"service": {"allowed_commands": ["node", "npm", "python3"]}}}
+    )
+    orch = {
+        "runtime": {"plugins": {"service": {"allowed_commands": ["npm", "python3", "rm"]}}}
+    }
+
+    effective = resolve_effective_settings(cfg=cfg, orch=orch)
+
+    assert effective.runtime["plugins"]["service"]["allowed_commands"] == ["npm", "python3"]
+
+    plugin = build_plugin(plugin_name="service", runtime=effective.runtime)
+    assert plugin.pinned_allowed_commands == ("npm", "python3")  # type: ignore[attr-defined]
+
+
+def test_document_null_service_allowed_commands_cannot_drop_the_host_pin() -> None:
+    cfg = _trusted_cfg(
+        runtime={"plugins": {"service": {"allowed_commands": ["node", "npm"]}}}
+    )
+    orch = {"runtime": {"plugins": {"service": {"allowed_commands": None}}}}
+
+    effective = resolve_effective_settings(cfg=cfg, orch=orch)
+
+    assert effective.runtime["plugins"]["service"]["allowed_commands"] == ["node", "npm"]
+
+
+def test_a_limited_documents_runtime_block_cannot_set_the_service_pin() -> None:
+    """A limited document (the default, untrusted `cfg`) cannot set
+    `runtime.plugins.service.allowed_commands` at all -- `plugins` is not in
+    `ORCHESTRATION_RUNTIME_KEYS`, the same rule that already keeps a
+    limited document from setting `runtime.plugins.shell.allowed_commands`."""
+    cfg = CircuitryConfig(
+        runtime={"plugins": {"service": {"allowed_commands": ["node"]}}}
+    )  # type: ignore[arg-type]
+    orch = {"runtime": {"plugins": {"service": {"allowed_commands": ["rm"]}}}}
+
+    effective = resolve_effective_settings(cfg=cfg, orch=orch)
+
+    assert effective.runtime["plugins"]["service"]["allowed_commands"] == ["node"]
+    assert any(
+        warning.startswith("Ignored runtime.plugins from the orchestration")
+        for warning in effective.warnings
+    )

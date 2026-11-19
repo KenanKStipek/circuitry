@@ -1,0 +1,3 @@
+{
+  "error": "prime.result: service: command 'python3' is not in the host's runtime.plugins.service.allowed_commands pin ['sh']."
+}
