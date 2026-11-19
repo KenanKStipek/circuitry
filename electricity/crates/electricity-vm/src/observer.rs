@@ -233,6 +233,17 @@ pub trait RunObserver {
     /// hook here; only `electricity` (lib)'s own `Observer` implements
     /// it for real.
     fn decision(&self, _path: &EffectPath, _payload: &Value) {}
+
+    /// Whether [`RunObserver::decision`] does anything at all --
+    /// `false` for [`NullObserver`] and every observer that doesn't
+    /// listen for a `decision` line. `exec::conditional`/`exec::loop_`
+    /// check this first and skip building the outcome/inputs payload
+    /// entirely when it's `false`, so a run with no `--events` writer
+    /// pays nothing beyond the condition's own evaluation for every
+    /// `if`/`while` it checks.
+    fn wants_decisions(&self) -> bool {
+        false
+    }
 }
 
 /// The fields a streamed prompt's own throttled live-progress publish

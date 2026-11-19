@@ -35,6 +35,14 @@ const ERROR_MAX_CHARS: usize = 500;
 /// `cli/events.py::_REPORT_DATA_MAX_BYTES`.
 const REPORT_DATA_MAX_BYTES: usize = 16 * 1024;
 
+/// [`EventLog::encoded_size_or_disable`]'s own result: whether a
+/// value's compact JSON fits under [`REPORT_DATA_MAX_BYTES`], or the
+/// byte count it was truncated to instead.
+enum EncodedSize {
+    Fits,
+    Truncated(i64),
+}
+
 fn truncate_error(error: &str) -> String {
     error.chars().take(ERROR_MAX_CHARS).collect()
 }
@@ -131,6 +139,31 @@ impl EventLog {
         let seq = self.seq.get();
         self.seq.set(seq + 1);
         seq
+    }
+
+    /// [`EncodedSize::Fits`] or [`EncodedSize::Truncated`], past
+    /// [`REPORT_DATA_MAX_BYTES`] -- the one encode-and-compare both
+    /// `report`'s own `data`/`data_truncated` choice and `decision`'s
+    /// own `values`/`values_truncated` one go through, rather than
+    /// each writing its own. `None` once *value*'s compact JSON itself
+    /// fails to encode, having already disabled further writes
+    /// (`op` names which line's own failure this was, for the one
+    /// warning `disable_with` logs).
+    fn encoded_size_or_disable(&self, op: &str, value: &Value) -> Option<EncodedSize> {
+        match electricity_json::dumps_default_str(value, electricity_json::WriteMode::EVENTS) {
+            Ok(text) => {
+                let byte_len = text.len();
+                if byte_len > REPORT_DATA_MAX_BYTES {
+                    Some(EncodedSize::Truncated(byte_len as i64))
+                } else {
+                    Some(EncodedSize::Fits)
+                }
+            }
+            Err(err) => {
+                self.disable_with(op, &err);
+                None
+            }
+        }
     }
 
     fn write_line(&self, op: &str, payload: Value) {
@@ -375,22 +408,17 @@ impl EventLog {
             Value::Str(message.to_string()),
         );
         if let Some(data) = data {
-            match electricity_json::dumps_default_str(data, electricity_json::WriteMode::EVENTS) {
-                Ok(text) => {
-                    let byte_len = text.len();
-                    if byte_len > REPORT_DATA_MAX_BYTES {
-                        payload.insert(
-                            Value::Str("data_truncated".to_string()),
-                            Value::from(byte_len as i64),
-                        );
-                    } else {
-                        payload.insert(Value::Str("data".to_string()), data.clone());
-                    }
+            match self.encoded_size_or_disable("report", data) {
+                Some(EncodedSize::Fits) => {
+                    payload.insert(Value::Str("data".to_string()), data.clone());
                 }
-                Err(err) => {
-                    self.disable_with("report", &err);
-                    return;
+                Some(EncodedSize::Truncated(byte_len)) => {
+                    payload.insert(
+                        Value::Str("data_truncated".to_string()),
+                        Value::from(byte_len),
+                    );
                 }
+                None => return,
             }
         }
         self.write_line("report", Value::Dict(payload));
@@ -433,25 +461,17 @@ impl EventLog {
                 _ => continue,
             };
             if key_str == "values" {
-                match electricity_json::dumps_default_str(
-                    value,
-                    electricity_json::WriteMode::EVENTS,
-                ) {
-                    Ok(text) => {
-                        let byte_len = text.len();
-                        if byte_len > REPORT_DATA_MAX_BYTES {
-                            line.insert(
-                                Value::Str("values_truncated".to_string()),
-                                Value::from(byte_len as i64),
-                            );
-                        } else {
-                            line.insert(key.clone(), value.clone());
-                        }
+                match self.encoded_size_or_disable("decision", value) {
+                    Some(EncodedSize::Fits) => {
+                        line.insert(key.clone(), value.clone());
                     }
-                    Err(err) => {
-                        self.disable_with("decision", &err);
-                        return;
+                    Some(EncodedSize::Truncated(byte_len)) => {
+                        line.insert(
+                            Value::Str("values_truncated".to_string()),
+                            Value::from(byte_len),
+                        );
                     }
+                    None => return,
                 }
             } else if key_str == "error" {
                 match value {
@@ -858,6 +878,200 @@ mod tests {
             payload.get(&Value::Str("data_truncated".to_string())),
             Some(&Value::from(encoded.len() as i64))
         );
+        fs::remove_file(&path).unwrap();
+    }
+
+    fn decision_dict(entries: Vec<(&str, Value)>) -> Value {
+        let mut d = electricity_value::Dict::new();
+        for (key, value) in entries {
+            d.insert(Value::Str(key.to_string()), value);
+        }
+        Value::Dict(d)
+    }
+
+    #[test]
+    fn on_decision_if_key_order_and_basic_fields() {
+        let path = temp_path("decision-if-basic");
+        let log = EventLog::open(&path);
+        let mut values = electricity_value::Dict::new();
+        values.insert(
+            Value::Str("state.prime.x.value".to_string()),
+            Value::from(1i64),
+        );
+        log.on_decision(
+            "prime.gate",
+            &decision_dict(vec![
+                ("kind", Value::Str("if".to_string())),
+                ("mode", Value::Str("cel".to_string())),
+                ("branch", Value::Str("then".to_string())),
+                ("values", Value::Dict(values)),
+            ]),
+        );
+        log.close();
+        let lines = read_lines(&path);
+        let event = lines[0].as_dict().unwrap();
+        assert_eq!(
+            event
+                .keys()
+                .map(|k| k.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "v", "seq", "ts", "ev", "path", "kind", "mode", "branch", "values"
+            ],
+        );
+        assert_eq!(
+            event.get(&Value::Str("ev".to_string())),
+            Some(&Value::Str("decision".to_string()))
+        );
+        assert_eq!(
+            event.get(&Value::Str("path".to_string())),
+            Some(&Value::Str("prime.gate".to_string()))
+        );
+        assert_eq!(
+            event.get(&Value::Str("branch".to_string())),
+            Some(&Value::Str("then".to_string()))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn on_decision_while_outcome_and_iteration() {
+        let path = temp_path("decision-while-outcome");
+        let log = EventLog::open(&path);
+        log.on_decision(
+            "prime.lp",
+            &decision_dict(vec![
+                ("kind", Value::Str("while".to_string())),
+                ("mode", Value::Str("cel".to_string())),
+                ("continue", Value::Bool(false)),
+                ("iteration", Value::from(3i64)),
+                ("values", Value::Dict(electricity_value::Dict::new())),
+            ]),
+        );
+        log.close();
+        let lines = read_lines(&path);
+        let event = lines[0].as_dict().unwrap();
+        assert_eq!(
+            event.get(&Value::Str("continue".to_string())),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            event.get(&Value::Str("iteration".to_string())),
+            Some(&Value::from(3i64))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn on_decision_model_mode_carries_answer_and_omits_values() {
+        let path = temp_path("decision-model-answer");
+        let log = EventLog::open(&path);
+        log.on_decision(
+            "prime.gate",
+            &decision_dict(vec![
+                ("kind", Value::Str("if".to_string())),
+                ("mode", Value::Str("model".to_string())),
+                ("branch", Value::Str("else".to_string())),
+                ("answer", Value::Str("no".to_string())),
+            ]),
+        );
+        log.close();
+        let lines = read_lines(&path);
+        let event = lines[0].as_dict().unwrap();
+        assert_eq!(
+            event.get(&Value::Str("mode".to_string())),
+            Some(&Value::Str("model".to_string()))
+        );
+        assert_eq!(
+            event.get(&Value::Str("answer".to_string())),
+            Some(&Value::Str("no".to_string()))
+        );
+        assert!(!event.contains_key(&Value::Str("values".to_string())));
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn on_decision_carries_unset_paths_right_after_values() {
+        let path = temp_path("decision-unset");
+        let log = EventLog::open(&path);
+        let unset = Value::List(vec![Value::Str("state.prime.missing.value".to_string())]);
+        log.on_decision(
+            "prime.gate",
+            &decision_dict(vec![
+                ("kind", Value::Str("if".to_string())),
+                ("mode", Value::Str("cel".to_string())),
+                ("branch", Value::Str("else".to_string())),
+                ("values", Value::Dict(electricity_value::Dict::new())),
+                ("unset", unset.clone()),
+            ]),
+        );
+        log.close();
+        let lines = read_lines(&path);
+        let event = lines[0].as_dict().unwrap();
+        assert_eq!(event.get(&Value::Str("unset".to_string())), Some(&unset));
+        let keys: Vec<&str> = event.keys().map(|k| k.as_str().unwrap()).collect();
+        let values_idx = keys.iter().position(|k| *k == "values").unwrap();
+        let unset_idx = keys.iter().position(|k| *k == "unset").unwrap();
+        assert_eq!(unset_idx, values_idx + 1);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn on_decision_truncates_values_over_16kib() {
+        let path = temp_path("decision-values-truncated");
+        let log = EventLog::open(&path);
+        let mut values = electricity_value::Dict::new();
+        values.insert(
+            Value::Str("state.prime.blob.value".to_string()),
+            Value::Str("x".repeat(20_000)),
+        );
+        let values = Value::Dict(values);
+        let encoded =
+            electricity_json::dumps(&values, electricity_json::WriteMode::EVENTS).unwrap();
+        log.on_decision(
+            "prime.gate",
+            &decision_dict(vec![
+                ("kind", Value::Str("if".to_string())),
+                ("mode", Value::Str("cel".to_string())),
+                ("branch", Value::Str("then".to_string())),
+                ("values", values),
+            ]),
+        );
+        log.close();
+        let lines = read_lines(&path);
+        let event = lines[0].as_dict().unwrap();
+        assert!(!event.contains_key(&Value::Str("values".to_string())));
+        assert_eq!(
+            event.get(&Value::Str("values_truncated".to_string())),
+            Some(&Value::from(encoded.len() as i64))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn on_decision_carries_error_last_and_truncated_to_500_chars() {
+        let path = temp_path("decision-error-truncated");
+        let log = EventLog::open(&path);
+        log.on_decision(
+            "prime.gate",
+            &decision_dict(vec![
+                ("kind", Value::Str("while".to_string())),
+                ("mode", Value::Str("cel".to_string())),
+                ("continue", Value::Bool(false)),
+                ("iteration", Value::from(0i64)),
+                ("values", Value::Dict(electricity_value::Dict::new())),
+                ("error", Value::Str("x".repeat(1000))),
+            ]),
+        );
+        log.close();
+        let lines = read_lines(&path);
+        let event = lines[0].as_dict().unwrap();
+        let keys: Vec<&str> = event.keys().map(|k| k.as_str().unwrap()).collect();
+        assert_eq!(*keys.last().unwrap(), "error");
+        let Value::Str(error) = event.get(&Value::Str("error".to_string())).unwrap() else {
+            panic!("error should be a string");
+        };
+        assert_eq!(error.chars().count(), 500);
         fs::remove_file(&path).unwrap();
     }
 

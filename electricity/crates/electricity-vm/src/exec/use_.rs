@@ -2324,6 +2324,13 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.decision(path, payload);
     }
 
+    // Without this override, a use child's own `if`/`while` would never
+    // build a decision payload to forward at all -- the trait's own
+    // default (`false`) shadows the parent observer's real answer.
+    fn wants_decisions(&self) -> bool {
+        self.parent.wants_decisions()
+    }
+
     fn register_child_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
         self.parent.register_child_graft(node_path, child_root);
     }

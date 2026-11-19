@@ -1055,6 +1055,10 @@ impl RunObserver for Observer<'_> {
             log.on_decision(&path.to_string(), payload);
         }
     }
+
+    fn wants_decisions(&self) -> bool {
+        self.events.is_some()
+    }
 }
 
 /// Whether the report console line may use ANSI color, mirroring Rich's
