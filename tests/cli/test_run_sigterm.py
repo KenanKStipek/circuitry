@@ -131,7 +131,7 @@ def _run_and_sigterm(orch: Path, out_path: Path) -> subprocess.CompletedProcess[
         _diagnose_and_fail(
             proc,
             timeout=15,
-            label="waiting for SIGTERM to stop the run",
+            label="waiting for SIGTERM to stop the run (pid is cof's own)",
             elapsed=time.monotonic() - t0,
             pid=proc.pid,
         )
