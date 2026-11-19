@@ -1961,8 +1961,11 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let doc_path = std::fs::canonicalize(&dir).unwrap().join("doc.yml");
-        std::fs::write(&doc_path, "effects:\n  - type: tool\n    name: s\n    provider: uuid\n")
-            .unwrap();
+        std::fs::write(
+            &doc_path,
+            "effects:\n  - type: tool\n    name: s\n    provider: uuid\n",
+        )
+        .unwrap();
 
         crate::file_cache::reset_read_counts();
         let result = check_for_run(&doc_path, &CheckOptions::default());
