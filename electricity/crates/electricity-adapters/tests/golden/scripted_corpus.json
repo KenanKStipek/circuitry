@@ -890,7 +890,7 @@
       "calls": [
         {
           "kind": "check",
-          "message": null,
+          "message": "replies.yaml: 1 reply across 1 path",
           "missing": [],
           "ok": true
         }

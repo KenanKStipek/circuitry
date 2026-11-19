@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #386",
+  "description": "A prompt in a `use` child, inside a tree loop, inside a tree dynamic -- plus one more level, a second tree loop inside that `use` child, so the call path carries two independent `iter_N` segments across the `use` boundary (`prime.fan.shots.iter_<outer>.child.inner.iter_<inner>.step`) without collision.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

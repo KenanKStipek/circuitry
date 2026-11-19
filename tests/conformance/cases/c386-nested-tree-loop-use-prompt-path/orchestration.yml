@@ -1,0 +1,19 @@
+name: c386-nested-tree-loop-use-prompt-path
+adapter: scripted
+model: test
+interface:
+  inputs:
+    items: {type: array, default: [1, 2]}
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    effects:
+      - type: loop
+        name: shots
+        flow: tree
+        each: {in: "input.items", as: "item"}
+        body:
+          - type: use
+            name: child
+            path: child.yml
