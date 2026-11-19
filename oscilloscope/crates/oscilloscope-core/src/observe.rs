@@ -711,6 +711,20 @@ mod tests {
         assert_eq!(parse_event(&value), None);
     }
 
+    /// Issue #628: `ev: "decision"` (an `if`/`while` condition's own
+    /// outcome) is one more future `ev` -- osi ignores it until the
+    /// Flow screen draws it, the same as any other `ev` this build
+    /// doesn't recognize yet.
+    #[test]
+    fn parse_event_ignores_a_decision_line() {
+        let value: Value = serde_json::from_str(
+            r#"{"v":1,"seq":1,"ts":"t","ev":"decision","path":"prime.gate",
+            "kind":"if","mode":"cel","branch":"then","values":{"state.input.n":5}}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_event(&value), None);
+    }
+
     #[test]
     fn parse_event_reads_a_progress_line() {
         let value: Value = serde_json::from_str(

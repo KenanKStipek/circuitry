@@ -1,0 +1,11 @@
+{"v":1,"seq":0,"ts":"2026-11-18T22:12:06.648Z","ev":"run_start","run_id":"af2986bd-2b99-4f83-9311-db23036643e5","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":83661}
+{"v":1,"seq":1,"ts":"2026-11-18T22:12:06.649Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-18T22:12:06.649Z","ev":"start","id":1,"path":"prime.counter"}
+{"v":1,"seq":3,"ts":"2026-11-18T22:12:06.649Z","ev":"end","id":1,"path":"prime.counter","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-11-18T22:12:06.649Z","ev":"start","id":2,"path":"prime.lp"}
+{"v":1,"seq":5,"ts":"2026-11-18T22:12:06.650Z","ev":"decision","path":"prime.lp","kind":"while","mode":"cel","continue":true,"iteration":0,"values":{"state.prime.counter.value.n":0},"unset":["state.prime.missing.value"]}
+{"v":1,"seq":6,"ts":"2026-11-18T22:12:06.650Z","ev":"start","id":3,"path":"prime.lp.iter_0.step"}
+{"v":1,"seq":7,"ts":"2026-11-18T22:12:06.650Z","ev":"end","id":3,"path":"prime.lp.iter_0.step","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-11-18T22:12:06.650Z","ev":"end","id":2,"path":"prime.lp","ok":true,"ms":1}
+{"v":1,"seq":9,"ts":"2026-11-18T22:12:06.650Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":10,"ts":"2026-11-18T22:12:06.650Z","ev":"run_end","ok":true}

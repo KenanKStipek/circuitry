@@ -390,6 +390,48 @@ class EventLog:
         except Exception as exc:
             self._disable("report", exc)
 
+    def on_decision(self, path: str, payload: dict[str, Any]) -> None:
+        """Write one ``decision`` line (#628): ``v``, ``seq``, ``ts``, ``ev``,
+        ``path``, then *payload*'s own fields in order -- ``kind``, ``mode``,
+        the outcome (``branch`` for an ``if``; ``continue``/``iteration``
+        for a ``while``), the inputs (``values``[/``unset``] for a CEL
+        condition; ``answer`` for a model one) and ``error`` when the
+        condition raised, exactly as :meth:`circuitry.core.store.Store.
+        fire_decision` built it.
+
+        A CEL condition's own ``values`` follows the same 16 KiB rule as a
+        ``report``'s own ``data`` (:func:`encode_report_data`): replaced by
+        ``values_truncated`` (the compact JSON's byte count) past that,
+        with ``unset`` kept either way.
+        """
+        if self._disabled:
+            return
+        try:
+            with self._lock:
+                if self._disabled:
+                    return
+                line: dict[str, Any] = {
+                    "v": 1,
+                    "seq": self._take_seq(),
+                    "ts": _now_iso_ms(),
+                    "ev": "decision",
+                    "path": path,
+                }
+                for key, value in payload.items():
+                    if key == "values":
+                        encoded, truncated = encode_report_data(value)
+                        if truncated is not None:
+                            line["values_truncated"] = truncated
+                        else:
+                            line["values"] = encoded
+                    elif key == "error":
+                        line["error"] = _truncate_error(str(value))
+                    else:
+                        line[key] = value
+                self._write_line(line)
+        except Exception as exc:
+            self._disable("decision", exc)
+
     def run_end(self, *, ok: bool, error: str | None, signal: str | None) -> None:
         if self._disabled:
             return

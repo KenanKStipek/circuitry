@@ -1,8 +1,9 @@
-{"v":1,"seq":0,"ts":"2026-11-10T03:31:17.815Z","ev":"run_start","run_id":"9f0592ce-72cf-4b78-a9af-dabebd64dd4c","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":13420}
-{"v":1,"seq":1,"ts":"2026-11-10T03:31:17.816Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-11-10T03:31:17.816Z","ev":"start","id":1,"path":"prime.gate"}
-{"v":1,"seq":3,"ts":"2026-11-10T03:31:17.817Z","ev":"start","id":2,"path":"prime.gate.else_step"}
-{"v":1,"seq":4,"ts":"2026-11-10T03:31:17.817Z","ev":"end","id":2,"path":"prime.gate.else_step","ok":true,"ms":0}
-{"v":1,"seq":5,"ts":"2026-11-10T03:31:17.817Z","ev":"end","id":1,"path":"prime.gate","ok":false,"ms":0,"error":"scripted adapter: server_error at 'prime.gate'"}
-{"v":1,"seq":6,"ts":"2026-11-10T03:31:17.817Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
-{"v":1,"seq":7,"ts":"2026-11-10T03:31:17.817Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-18T21:35:55.987Z","ev":"run_start","run_id":"5301aa14-be9e-4ccf-b683-4a216f8346d2","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":8333}
+{"v":1,"seq":1,"ts":"2026-11-18T21:35:55.988Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-18T21:35:55.988Z","ev":"start","id":1,"path":"prime.gate"}
+{"v":1,"seq":3,"ts":"2026-11-18T21:35:55.988Z","ev":"decision","path":"prime.gate","kind":"if","mode":"model","branch":"else","answer":null,"error":"scripted adapter: server_error at 'prime.gate'"}
+{"v":1,"seq":4,"ts":"2026-11-18T21:35:55.989Z","ev":"start","id":2,"path":"prime.gate.else_step"}
+{"v":1,"seq":5,"ts":"2026-11-18T21:35:55.989Z","ev":"end","id":2,"path":"prime.gate.else_step","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-11-18T21:35:55.989Z","ev":"end","id":1,"path":"prime.gate","ok":false,"ms":0,"error":"scripted adapter: server_error at 'prime.gate'"}
+{"v":1,"seq":7,"ts":"2026-11-18T21:35:55.989Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":8,"ts":"2026-11-18T21:35:55.989Z","ev":"run_end","ok":true}

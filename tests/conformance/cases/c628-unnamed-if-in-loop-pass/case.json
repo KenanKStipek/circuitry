@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #628",
+  "description": "An unnamed if inside a named chain loop pass's body: its decision line falls back to the pass's own container path (prime.shots.iter_N), not a named node of its own.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,18 @@
+name: c628-model-if-scripted
+adapter: scripted
+model: test
+effects:
+  - type: if
+    if:
+      mode: model
+      template: "should we proceed?"
+    then:
+      - type: tool
+        name: yes_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: no_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

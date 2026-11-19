@@ -563,6 +563,78 @@ class TestStatePaths:
             state_paths("state.a ==")
 
 
+class TestConditionPaths:
+    """``condition_paths`` -- a ``decision`` line's own CEL inputs (#628)."""
+
+    def test_paths_match_state_paths(self):
+        from circuitry.core.cel_eval import condition_paths
+
+        result = condition_paths("state.a.b == 1 && state.c.d == 2")
+        assert result.paths == ("state.a.b", "state.c.d")
+        assert result.reads_whole_state is False
+
+    def test_reads_whole_state_true_for_a_bare_state_use(self):
+        from circuitry.core.cel_eval import condition_paths
+
+        result = condition_paths("size(state) > 0")
+        assert result.reads_whole_state is True
+
+    def test_reads_whole_state_false_for_an_ordinary_dotted_read(self):
+        from circuitry.core.cel_eval import condition_paths
+
+        result = condition_paths("state.a.b == 1")
+        assert result.reads_whole_state is False
+
+
+class TestDecisionInputs:
+    """``decision_inputs`` -- the ``values``/``unset`` split a ``decision``
+    line's own ``inputs`` records for a CEL condition (#628)."""
+
+    def test_values_keyed_by_state_prefixed_path(self):
+        from circuitry.core.cel_eval import decision_inputs
+
+        values, unset = decision_inputs("state.a.b == 1", {"a": {"b": 1}})
+        assert values == {"state.a.b": 1}
+        assert unset == []
+
+    def test_unset_path_in_read_order(self):
+        from circuitry.core.cel_eval import decision_inputs
+
+        values, unset = decision_inputs(
+            "state.a == 1 && state.missing == 2", {"a": 1}
+        )
+        assert values == {"state.a": 1}
+        assert unset == ["state.missing"]
+
+    def test_a_none_value_counts_as_unset(self):
+        from circuitry.core.cel_eval import decision_inputs
+
+        values, unset = decision_inputs("state.a == null", {"a": None})
+        assert values == {}
+        assert unset == ["state.a"]
+
+    def test_duplicate_path_reported_once(self):
+        from circuitry.core.cel_eval import decision_inputs
+
+        values, unset = decision_inputs("state.a > 0 && state.a < 10", {"a": 5})
+        assert values == {"state.a": 5}
+        assert unset == []
+
+    def test_reads_whole_state_records_the_whole_ctx(self):
+        from circuitry.core.cel_eval import decision_inputs
+
+        ctx = {"a": {"b": 1}}
+        values, unset = decision_inputs("size(state) > 0", ctx)
+        assert values == {"state": ctx}
+        assert unset == []
+
+    def test_unparseable_expression_raises(self):
+        from circuitry.core.cel_eval import decision_inputs
+
+        with pytest.raises(CelValidationError):
+            decision_inputs("state.a ==", {})
+
+
 # ---------------------------------------------------------------------------
 # Compiled-expression cache
 # ---------------------------------------------------------------------------

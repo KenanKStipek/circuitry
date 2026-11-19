@@ -4893,4 +4893,62 @@ mod tests {
         let neither = json!({});
         assert_eq!(prompt_chars_for_estimate(&neither), None);
     }
+
+    /// Issue #628: a `decision` line (an `if`/`while` condition's own
+    /// outcome) is a future `ev` this build doesn't draw yet --
+    /// `parse_event` already discards any `ev` it doesn't recognize
+    /// (`observe::tests::parse_event_ignores_an_unrecognized_ev`), so a
+    /// transcript that interleaves `decision` lines among ordinary
+    /// `start`/`end` pairs observes into exactly the same `RunModel` as
+    /// the same transcript with every `decision` line removed.
+    #[test]
+    fn a_transcript_with_decision_lines_observes_the_same_as_without_them() {
+        let with_decisions = concat!(
+            r#"{"v":1,"seq":0,"ts":"t0","ev":"start","id":1,"path":"prime.gate"}"#,
+            "\n",
+            r#"{"v":1,"seq":1,"ts":"t1","ev":"decision","path":"prime.gate","kind":"if","mode":"cel","branch":"then","values":{"state.input.n":5}}"#,
+            "\n",
+            r#"{"v":1,"seq":2,"ts":"t2","ev":"start","id":2,"path":"prime.gate.then_branch"}"#,
+            "\n",
+            r#"{"v":1,"seq":3,"ts":"t3","ev":"end","id":2,"path":"prime.gate.then_branch","ok":true,"ms":1}"#,
+            "\n",
+            r#"{"v":1,"seq":4,"ts":"t4","ev":"start","id":3,"path":"prime.counter"}"#,
+            "\n",
+            r#"{"v":1,"seq":5,"ts":"t5","ev":"decision","path":"prime.counter","kind":"while","mode":"cel","continue":true,"iteration":0,"values":{}}"#,
+            "\n",
+            r#"{"v":1,"seq":6,"ts":"t6","ev":"decision","path":"prime.counter","kind":"while","mode":"cel","continue":false,"iteration":1,"values":{},"error":"boom"}"#,
+            "\n",
+            r#"{"v":1,"seq":7,"ts":"t7","ev":"end","id":3,"path":"prime.counter","ok":false,"ms":2,"error":"boom"}"#,
+            "\n",
+            r#"{"v":1,"seq":8,"ts":"t8","ev":"end","id":1,"path":"prime.gate","ok":true,"ms":5}"#,
+            "\n",
+        );
+        let without_decisions: String = with_decisions
+            .lines()
+            .filter(|line| !line.contains("\"decision\""))
+            .map(|line| format!("{line}\n"))
+            .collect();
+
+        fn observe_all(text: &str) -> RunModel {
+            let mut model = RunModel::new();
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                let value: serde_json::Value = serde_json::from_str(line).unwrap();
+                if let Some(event) = crate::observe::parse_event(&value) {
+                    model.observe_event(&event);
+                }
+            }
+            model
+        }
+
+        let with_model = observe_all(with_decisions);
+        let without_model = observe_all(&without_decisions);
+
+        for path in ["prime.gate", "prime.gate.then_branch", "prime.counter"] {
+            assert_eq!(
+                with_model.event_status(path),
+                without_model.event_status(path),
+                "path {path} diverged"
+            );
+        }
+    }
 }

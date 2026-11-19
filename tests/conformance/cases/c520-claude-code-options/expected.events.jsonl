@@ -1,10 +1,11 @@
-{"v":1,"seq":0,"ts":"2026-11-10T03:31:28.766Z","ev":"run_start","run_id":"b785ec37-0fd4-4921-b519-05312a827aab","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":13606}
-{"v":1,"seq":1,"ts":"2026-11-10T03:31:28.767Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-11-10T03:31:28.768Z","ev":"start","id":1,"path":"prime.opts"}
-{"v":1,"seq":3,"ts":"2026-11-10T03:31:28.914Z","ev":"end","id":1,"path":"prime.opts","ok":true,"ms":146}
-{"v":1,"seq":4,"ts":"2026-11-10T03:31:28.914Z","ev":"start","id":2,"path":"prime.deterministic_only"}
-{"v":1,"seq":5,"ts":"2026-11-10T03:31:28.937Z","ev":"end","id":2,"path":"prime.deterministic_only","ok":true,"ms":23}
-{"v":1,"seq":6,"ts":"2026-11-10T03:31:28.937Z","ev":"start","id":3,"path":"prime.gate"}
-{"v":1,"seq":7,"ts":"2026-11-10T03:31:28.959Z","ev":"end","id":3,"path":"prime.gate","ok":true,"ms":21}
-{"v":1,"seq":8,"ts":"2026-11-10T03:31:28.959Z","ev":"end","id":0,"path":"prime","ok":true,"ms":192}
-{"v":1,"seq":9,"ts":"2026-11-10T03:31:28.959Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-18T21:35:59.381Z","ev":"run_start","run_id":"77d2f8cb-95b0-4d18-9f6c-62f2aa5b1898","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":8370}
+{"v":1,"seq":1,"ts":"2026-11-18T21:35:59.382Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-18T21:35:59.383Z","ev":"start","id":1,"path":"prime.opts"}
+{"v":1,"seq":3,"ts":"2026-11-18T21:35:59.408Z","ev":"end","id":1,"path":"prime.opts","ok":true,"ms":26}
+{"v":1,"seq":4,"ts":"2026-11-18T21:35:59.409Z","ev":"start","id":2,"path":"prime.deterministic_only"}
+{"v":1,"seq":5,"ts":"2026-11-18T21:35:59.431Z","ev":"end","id":2,"path":"prime.deterministic_only","ok":true,"ms":22}
+{"v":1,"seq":6,"ts":"2026-11-18T21:35:59.431Z","ev":"start","id":3,"path":"prime.gate"}
+{"v":1,"seq":7,"ts":"2026-11-18T21:35:59.451Z","ev":"decision","path":"prime.gate","kind":"if","mode":"model","branch":"then","answer":"yes"}
+{"v":1,"seq":8,"ts":"2026-11-18T21:35:59.451Z","ev":"end","id":3,"path":"prime.gate","ok":true,"ms":21}
+{"v":1,"seq":9,"ts":"2026-11-18T21:35:59.452Z","ev":"end","id":0,"path":"prime","ok":true,"ms":69}
+{"v":1,"seq":10,"ts":"2026-11-18T21:35:59.452Z","ev":"run_end","ok":true}

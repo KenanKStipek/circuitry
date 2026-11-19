@@ -1,12 +1,14 @@
-{"v":1,"seq":0,"ts":"2026-11-10T03:31:20.005Z","ev":"run_start","run_id":"0ffa543f-b367-4bcd-aafe-04201917eff6","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":13448}
-{"v":1,"seq":1,"ts":"2026-11-10T03:31:20.006Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-11-10T03:31:20.006Z","ev":"start","id":1,"path":"prime.lp"}
-{"v":1,"seq":3,"ts":"2026-11-10T03:31:20.006Z","ev":"start","id":2,"path":"prime.lp.iter_0.step"}
-{"v":1,"seq":4,"ts":"2026-11-10T03:31:20.006Z","ev":"end","id":2,"path":"prime.lp.iter_0.step","ok":true,"ms":0}
-{"v":1,"seq":5,"ts":"2026-11-10T03:31:20.006Z","ev":"start","id":3,"path":"prime.lp.iter_1.step"}
-{"v":1,"seq":6,"ts":"2026-11-10T03:31:20.006Z","ev":"end","id":3,"path":"prime.lp.iter_1.step","ok":true,"ms":0}
-{"v":1,"seq":7,"ts":"2026-11-10T03:31:20.007Z","ev":"start","id":4,"path":"prime.lp.iter_2.step"}
-{"v":1,"seq":8,"ts":"2026-11-10T03:31:20.007Z","ev":"end","id":4,"path":"prime.lp.iter_2.step","ok":true,"ms":0}
-{"v":1,"seq":9,"ts":"2026-11-10T03:31:20.007Z","ev":"end","id":1,"path":"prime.lp","ok":true,"ms":1}
-{"v":1,"seq":10,"ts":"2026-11-10T03:31:20.007Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
-{"v":1,"seq":11,"ts":"2026-11-10T03:31:20.007Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-18T21:35:58.303Z","ev":"run_start","run_id":"69365aee-7e51-404a-8472-5c476c88f434","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":8362}
+{"v":1,"seq":1,"ts":"2026-11-18T21:35:58.304Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-18T21:35:58.304Z","ev":"start","id":1,"path":"prime.lp"}
+{"v":1,"seq":3,"ts":"2026-11-18T21:35:58.304Z","ev":"start","id":2,"path":"prime.lp.iter_0.step"}
+{"v":1,"seq":4,"ts":"2026-11-18T21:35:58.304Z","ev":"end","id":2,"path":"prime.lp.iter_0.step","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-11-18T21:35:58.304Z","ev":"start","id":3,"path":"prime.lp.iter_1.step"}
+{"v":1,"seq":6,"ts":"2026-11-18T21:35:58.305Z","ev":"end","id":3,"path":"prime.lp.iter_1.step","ok":true,"ms":0}
+{"v":1,"seq":7,"ts":"2026-11-18T21:35:58.305Z","ev":"decision","path":"prime.lp","kind":"while","mode":"model","continue":true,"iteration":2,"answer":"yes"}
+{"v":1,"seq":8,"ts":"2026-11-18T21:35:58.305Z","ev":"start","id":4,"path":"prime.lp.iter_2.step"}
+{"v":1,"seq":9,"ts":"2026-11-18T21:35:58.305Z","ev":"end","id":4,"path":"prime.lp.iter_2.step","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-11-18T21:35:58.305Z","ev":"decision","path":"prime.lp","kind":"while","mode":"model","continue":false,"iteration":3,"answer":"no"}
+{"v":1,"seq":11,"ts":"2026-11-18T21:35:58.305Z","ev":"end","id":1,"path":"prime.lp","ok":true,"ms":1}
+{"v":1,"seq":12,"ts":"2026-11-18T21:35:58.305Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":13,"ts":"2026-11-18T21:35:58.305Z","ev":"run_end","ok":true}
