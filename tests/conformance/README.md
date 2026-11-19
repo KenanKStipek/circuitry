@@ -415,8 +415,8 @@ in this order):
 
 A field either engine's own `--events` writer truncates to a fixed length
 (`cli/events.py::_ERROR_MAX_CHARS`/electricity's own `events.rs::
-ERROR_MAX_CHARS`, 500 characters — today, only an `end` event's own
-`error`) needs one more rule: once a recognised shape's own third-party
+ERROR_MAX_CHARS`, 500 characters — an `end` event's own `error`, or a
+`decision` line's own `error` (#628)) needs one more rule: once a recognised shape's own third-party
 tail might have been cut off partway through, *everything after where
 that tail starts* — Circuitry's own text included — depends on exactly how
 long the tail happened to be on that particular run, so it's third-party
@@ -484,7 +484,13 @@ events occurred in across the two streams — a chain's children run
 strictly one after another in document order on both engines, unlike a
 tree dynamic's branches, which may freely interleave with each other on
 either engine and are excluded from that last check by the `dispatch`
-event check alone.
+event check alone. A `decision` line's own `values` (#628) is itself
+captured state -- a CEL condition that reads a whole effect node (`has(
+state.x)` rather than `state.x.value`) carries that node's own
+`created_at`/`completed_at` straight into the line, so `_comparable_event`
+runs `normalize()` over `values` (and, for a whole-state read, over
+`values["state"]` as that document's own root) the same way it already
+runs over `--out` state, before the two streams are compared.
 
 `--live-state`'s final write is asserted byte-identical to `--out` for
 every success case, in both engines (electricity/DESIGN.md §10.5) — no

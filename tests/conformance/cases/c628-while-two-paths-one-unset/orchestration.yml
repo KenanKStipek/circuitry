@@ -1,0 +1,17 @@
+name: c628-while-two-paths-one-unset
+effects:
+  - type: tool
+    name: counter
+    provider: json
+    params: {mode: parse, input: '{"n": 0}'}
+  - type: loop
+    name: lp
+    max_iterations: 1
+    while:
+      mode: cel
+      expr: "state.prime.counter.value.n < 1 && !has(state.prime.missing.value)"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {done: true}}

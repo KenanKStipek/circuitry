@@ -26,6 +26,14 @@ _ReportCallback = Callable[[str, str, str, Any], None]
 #: ``meta.live``.
 _ProgressCallback = Callable[[str, dict[str, Any]], None]
 
+#: ``Store.decision`` -- ``(path, payload)``, fired by an ``if``/``while``
+#: condition right after it evaluates (#628). *payload* carries ``kind``,
+#: ``mode``, the outcome (``branch`` for an ``if``; ``continue`` +
+#: ``iteration`` for a ``while``), the inputs (``values`` [+``unset``]
+#: for a CEL condition; ``answer`` for a model one) and ``error`` when
+#: the condition raised -- see :meth:`Store.fire_decision`.
+_DecisionCallback = Callable[[str, dict[str, Any]], None]
+
 #: ``Store.open_instance_id`` -- ``(path) -> (instance id, started at) |
 #: None``, a query rather than a notification: the currently open
 #: ``--events`` ``start`` instance for *path*, read the moment a prompt's
@@ -157,6 +165,23 @@ def _prefixed_open_instance_id_cb(
     return _query
 
 
+def _prefixed_decision_cb(
+    callback: _DecisionCallback | None, prefix: str
+) -> _DecisionCallback | None:
+    """Wrap ``decision`` the same way :func:`_prefixed_report_cb` wraps
+    ``report`` (#628) -- an unnamed ``if``/``while`` running directly in a
+    parallel branch's own root fires its decision at that branch's own
+    path, same as an unnamed report does.
+    """
+    if callback is None or not prefix:
+        return callback
+
+    def _forward(path: str, payload: dict[str, Any]) -> None:
+        callback(_under_prefix(prefix, path), payload)
+
+    return _forward
+
+
 @dataclass
 class Store:
     """
@@ -214,6 +239,13 @@ class Store:
     #: timestamps/version), and never on the write that starts or clears
     #: ``meta.live`` itself.
     progress: _ProgressCallback | None = None
+    #: Fired by an ``if``/``while`` condition right after it evaluates
+    #: (#628), never on anything else -- ``(path, payload)``: ``path`` is
+    #: the same fallback :meth:`fire_report` uses (the condition's own
+    #: state path when named, otherwise the path of the container it runs
+    #: in); ``payload`` is :meth:`fire_decision`'s own keyword arguments
+    #: folded into one dict, in the order a ``--events`` line writes them.
+    decision: _DecisionCallback | None = None
     #: See ``_OpenInstanceQuery`` above. ``None`` when nothing is wired
     #: (no ``--events``, or a store built without one, e.g. most tests).
     open_instance_id: _OpenInstanceQuery | None = None
@@ -331,6 +363,7 @@ class Store:
             branch_settled=self.branch_settled,
             report=self.report,
             progress=self.progress,
+            decision=self.decision,
             open_instance_id=self.open_instance_id,
             _path_prefix=new_prefix,
             _lock=self._lock,
@@ -397,6 +430,7 @@ class Store:
                 ),
                 report=_prefixed_report_cb(self.report, self._path_prefix),
                 progress=_prefixed_progress_cb(self.progress, self._path_prefix),
+                decision=_prefixed_decision_cb(self.decision, self._path_prefix),
                 open_instance_id=_prefixed_open_instance_id_cb(
                     self.open_instance_id, self._path_prefix
                 ),
@@ -559,6 +593,39 @@ class Store:
             return
         path = self.own_path if name is None else self.effect_path(name)
         self.report(path, level, message, data)
+
+    def fire_decision(
+        self,
+        name: str | None,
+        *,
+        kind: str,
+        mode: str,
+        outcome: dict[str, Any],
+        inputs: dict[str, Any],
+        error: str | None = None,
+    ) -> None:
+        """Notify ``decision`` (if set) that an ``if``/``while`` condition
+        just evaluated (#628).
+
+        *name* is ``None`` for an unnamed conditional/loop — the same
+        fallback :meth:`fire_report` uses: the path of the container it
+        runs in (:attr:`own_path`) rather than ``effect_path``'s literal
+        ``"None"`` suffix if handed straight through. *outcome* is
+        ``{"branch": ...}`` for an ``if`` or ``{"continue": ...,
+        "iteration": ...}`` for a ``while``; *inputs* is ``{"values": ...}``
+        (plus ``"unset"`` when some read path has none) for a CEL
+        condition, or ``{"answer": ...}`` for a model one. *error* is the
+        same text that became (or would have become) this condition's own
+        ``meta.error`` — folded in last, after *outcome* and *inputs*, the
+        field order a ``--events`` line writes them in.
+        """
+        if self.decision is None:
+            return
+        path = self.own_path if name is None else self.effect_path(name)
+        payload: dict[str, Any] = {"kind": kind, "mode": mode, **outcome, **inputs}
+        if error is not None:
+            payload["error"] = error
+        self.decision(path, payload)
 
     def fire_progress(self, name: str, data: dict[str, Any]) -> None:
         """Notify ``progress`` (if set) of a streamed prompt effect's own

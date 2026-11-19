@@ -82,6 +82,7 @@ from .store import Store
 from .use import (
     _clean_yaml_fences,
     _grafted_snapshot,
+    _namespaced_decision_cb,
     _namespaced_effect_cb,
     _namespaced_open_instance_id_cb,
     _namespaced_progress_cb,
@@ -1066,6 +1067,7 @@ def _build_child_store(
         ),
         report=_namespaced_report_cb(parent_store.report, node_path),
         progress=_namespaced_progress_cb(parent_store.progress, node_path),
+        decision=_namespaced_decision_cb(parent_store.decision, node_path),
         open_instance_id=_namespaced_open_instance_id_cb(
             parent_store.open_instance_id, node_path
         ),

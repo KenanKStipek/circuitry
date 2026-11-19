@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #628",
+  "description": "An unnamed, top-level model-mode if evaluated through the scripted adapter: the decision line's mode is model and its inputs carry answer, the same reply a named node's own meta.answer would record.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
