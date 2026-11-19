@@ -494,8 +494,7 @@ probe, a download). Before the first run of a document that did not come
 from the user's own disk — a `cof run-library`/`run_shared_orchestration`
 asset, a remote (refreshable, e.g. `github`) library source run by bare
 name (`cof run hub:entry`), or any `use: ref:` child, reached from *any*
-document, trusted or not — `circuitry.cli.document_consent.enforce_consent`
-works out, statically,
+document, trusted or not — the capability gate works out, statically,
 every capability the compiled document and its reachable `use` children need,
 and gates it: an interactive `cof run`/`cof run-library` lists them and asks
 y/N; anything else (MCP, REST, CI, no TTY) refuses outright, naming
@@ -578,23 +577,21 @@ now also carries that run's own `remote_library_source` classification
 through the stash, closing a second hole (also #337) where a replay skipped
 the gate the original run applied.
 
-**The separate-read race (#405).** The digest `enforce_consent` hashes for
-the whole-document gate, the `document_hash` a run stamps at
-`runtime.last_run`, `cof trust`'s own recorded digest, a `--resume`
-change check, and the declared-prompt/template text compilation actually
-uses used to each read the document and every referenced prompt file with
-their own, independent call to the filesystem. A file edited in the
-window between one of those reads and compilation's — fast, but not zero,
-especially for a long-running document, a remote filesystem, or a `use:
-ref:` child whose consent is checked well before it is ever dispatched —
-was compiled and run with content nobody was asked to approve. Each of
-those surfaces now owns a file-read cache for its own one load/consent/
-compile cycle (`circuitry.core.prompt_files.FileReadCache`) — never a
-cache shared *across* cycles, which would just move the race rather than
-close it (a `use` effect re-dispatched later, say, must still see
-whatever is on disk *then*, not a stale read from the first time it ran):
-each file is read from disk at most once per cycle, and that cycle's own
-digest and compiled effect tree are built from the exact same bytes.
+**The separate-read race (#405).** The digest for the whole-document
+gate, the `document_hash` a run stamps at `runtime.last_run`, `cof
+trust`'s own recorded digest, a `--resume` change check, and the
+declared-prompt/template text compilation actually uses used to each read
+the document and every referenced prompt file with their own, independent
+call to the filesystem. A file edited in the window between one of those
+reads and compilation's — fast, but not zero, especially for a
+long-running document, a remote filesystem, or a `use: ref:` child whose
+consent is checked well before it is ever dispatched — was compiled and
+run with content nobody was asked to approve. Each of those surfaces now
+owns a cache for its own one load/consent/compile cycle — never a cache
+shared *across* cycles, which would just move the race rather than close
+it (a `use` effect re-dispatched later, say, must still see whatever is
+on disk *then*, not a stale read from the first time it ran): the digest
+and the compiled tree use the same bytes in every cycle.
 Implementation: [`src/circuitry/core/prompt_files.py`](../src/circuitry/core/prompt_files.py),
 [`src/circuitry/core/prompt_compose.py`](../src/circuitry/core/prompt_compose.py),
 [`src/circuitry/core/compiler.py`](../src/circuitry/core/compiler.py).
