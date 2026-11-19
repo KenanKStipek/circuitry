@@ -31,7 +31,11 @@ fn write_document(dir: &std::path::Path) -> (electricity_value::Value, PathBuf) 
     let prompt_path = dir.join("voice.md");
     std::fs::write(&prompt_path, "first content").unwrap();
     let doc_path = dir.join("doc.yml");
-    std::fs::write(&doc_path, "prompts:\n  greeting: {file: voice.md}\neffects: []\n").unwrap();
+    std::fs::write(
+        &doc_path,
+        "prompts:\n  greeting: {file: voice.md}\neffects: []\n",
+    )
+    .unwrap();
     let document = electricity_compiler::load_document(&doc_path).unwrap();
     (document, prompt_path)
 }
