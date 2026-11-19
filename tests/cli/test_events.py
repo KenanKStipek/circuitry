@@ -410,6 +410,120 @@ def test_on_report_data_one_byte_over_16384_is_truncated(tmp_path: Path) -> None
     assert event["data_truncated"] == expected_bytes
 
 
+def test_on_decision_if_key_order_and_basic_fields(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_decision(
+        "prime.gate",
+        {
+            "kind": "if",
+            "mode": "cel",
+            "branch": "then",
+            "values": {"state.prime.x.value": 1},
+        },
+    )
+    log.close()
+
+    raw = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    assert list(json.loads(raw).keys()) == [
+        "v", "seq", "ts", "ev", "path", "kind", "mode", "branch", "values",
+    ]
+    event = json.loads(raw)
+    assert event["ev"] == "decision"
+    assert event["path"] == "prime.gate"
+    assert event["kind"] == "if"
+    assert event["mode"] == "cel"
+    assert event["branch"] == "then"
+    assert event["values"] == {"state.prime.x.value": 1}
+
+
+def test_on_decision_while_outcome_and_iteration(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_decision(
+        "prime.lp",
+        {
+            "kind": "while",
+            "mode": "cel",
+            "continue": False,
+            "iteration": 3,
+            "values": {},
+        },
+    )
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert event["continue"] is False
+    assert event["iteration"] == 3
+
+
+def test_on_decision_model_mode_carries_answer(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_decision(
+        "prime.gate",
+        {"kind": "if", "mode": "model", "branch": "else", "answer": "no"},
+    )
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert event["mode"] == "model"
+    assert event["answer"] == "no"
+    assert "values" not in event
+
+
+def test_on_decision_carries_unset_paths(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_decision(
+        "prime.gate",
+        {
+            "kind": "if",
+            "mode": "cel",
+            "branch": "else",
+            "values": {},
+            "unset": ["state.prime.missing.value"],
+        },
+    )
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert event["unset"] == ["state.prime.missing.value"]
+    keys = list(event.keys())
+    assert keys.index("unset") == keys.index("values") + 1
+
+
+def test_on_decision_truncates_values_over_16kib(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    big = {"state.prime.blob.value": "x" * 20_000}
+    log.on_decision(
+        "prime.gate", {"kind": "if", "mode": "cel", "branch": "then", "values": big}
+    )
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert "values" not in event
+    assert event["values_truncated"] == len(
+        json.dumps(big, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def test_on_decision_carries_error_last_and_truncated(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_decision(
+        "prime.gate",
+        {
+            "kind": "while",
+            "mode": "cel",
+            "continue": False,
+            "iteration": 0,
+            "values": {},
+            "error": "x" * 1000,
+        },
+    )
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert list(event.keys())[-1] == "error"
+    assert len(event["error"]) == 500
+
+
 def test_no_torn_lines_under_concurrent_writers(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
 

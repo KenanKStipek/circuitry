@@ -464,6 +464,8 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `on_error` | string | no | `fail` | `fail`, `continue`, `skip` |
 | `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` (named only — an unnamed `if` has no node to carry it) |
 
+**`--events`.** Right after the condition evaluates, the stream gets one `decision` line naming the branch it took and the values (or model answer) that decided it — named or not. See [Watching a Run](#watching-a-run-cof-run---events) below.
+
 **CEL mode example:**
 ```yaml
 - type: if
@@ -536,6 +538,8 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `min_iterations` | integer | no | `0` | Minimum iterations to run before the condition is checked at all. A forced pass does not evaluate the condition and discard the answer — it never evaluates it. `while` loops only; on an `each` loop it has no effect and `cof check` warns. |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
 | `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` (named only — an unnamed loop has no node to carry it) |
+
+**`--events`.** Right after each `while` check (never for an `each` loop, which has no condition to decide), the stream gets one `decision` line naming whether the loop continues and the values (or model answer) that decided it — named or not. A pass `min_iterations` forces without consulting the condition writes no line. See [Watching a Run](#watching-a-run-cof-run---events) below.
 
 **Each loop example:**
 ```yaml
@@ -2869,6 +2873,7 @@ instant it starts, from whichever worker thread runs it:
 {"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
 {"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
 {"v":1,"seq":20,"ts":"…","ev":"report","path":"prime.each_tree.iter_0","level":"info","message":"Implementing slice 1","data":{"files":["a.py"]}}
+{"v":1,"seq":30,"ts":"…","ev":"decision","path":"prime.gate","kind":"if","mode":"cel","branch":"then","values":{"state.input.n":5}}
 {"v":1,"seq":99,"ts":"…","ev":"run_end","ok":false,"error":"Interrupted (Ctrl-C/SIGINT)","signal":"SIGINT"}
 ```
 
@@ -2877,7 +2882,7 @@ instant it starts, from whichever worker thread runs it:
 | `v` | Format version, `1`. |
 | `seq` | Strictly increasing in file order. |
 | `ts` | Wall-clock UTC, millisecond precision. |
-| `ev` | `run_start`, `dispatch`, `start`, `end`, `progress`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so an older reader built before `report`/`progress` existed still reads the rest of the stream fine. |
+| `ev` | `run_start`, `dispatch`, `start`, `end`, `progress`, `report`, `decision` or `run_end`. A reader skips an `ev` value it doesn't know, so an older reader built before `report`/`progress`/`decision` existed still reads the rest of the stream fine. |
 | `config` | `run_start` only, between `orchestration` and `engine` — after `label` when the run has one. The `--config` file's name (its last path component), the same form `orchestration` already uses -- `--config some/dir/config.json` writes `"config.json"`, never the directory. `null` when the run was given no `--config` (config discovery can merge more than one file, so there is no single path to name). Always present. |
 | `label` | `run_start` only, right after `orchestration`, present only when the run has one — see [Labelling a Run](#labelling-a-run). Absent (never `null`) with no label. |
 | `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
@@ -2888,6 +2893,7 @@ instant it starts, from whichever worker thread runs it:
 | `signal` | On `run_end` after an interruption: `SIGINT`, `SIGTERM` or `SIGHUP`. |
 | `level`, `message`, `data` | On `report` only: the [`report`](#report) effect's own rendered `level`/`message`/`data`. `data` is omitted when the report has none; when its compact JSON exceeds 16 KiB, `data_truncated` (that size, in bytes) replaces it instead — a named report still keeps the full value in the shadow state regardless. `report` never carries `id`: it never pairs with a `start`/`end`, since it fires neither — it is never counted as work. `path` is the report's own state path when it is named, otherwise the path of the container it runs in, the same fallback `dispatch`'s own `path` uses for an unnamed loop/dynamic. |
 | `ms`, `tokens_received_estimate`, `chars_received`, `tokens_sent`, `tokens_sent_estimate`, `first_token_ms` | On `progress` only: a streaming [`prompt`](#streaming-adapters-and-a-prompts-live-progress) effect's own throttled update, the same figures `meta.live` carries (minus its timestamps and version). `id` is the open `start` instance for `path`, `null` when there is none. `ms` is time since that `start`; `first_token_ms` is `ms` at the first `progress` line for the instance's *current attempt*, held fixed for that attempt and reset when the next attempt (a retry) delivers its own first delta. Emitted only on a publish a delta caused — never on the write that starts or clears `meta.live` — so a non-streaming adapter's event stream is unchanged. |
+| `kind`, `mode`, `branch`, `continue`, `iteration`, `values`, `unset`, `values_truncated`, `answer` | On `decision` only: one line right after an [`if`](#if)/[`loop`](#loop) `while` condition evaluates, and before the branch it selects (or the pass it gates) starts — named or not. `decision` never carries `id`: like `report`, it fires neither `start` nor `end`, so it is never counted as work. `path` is the condition's own state path when it is named, otherwise the path of the container it runs in, the same fallback `dispatch`/`report` use. `kind` is `if` or `while`; `mode` is `cel` or `model`, the condition's own `mode`. For an `if`, `branch` is `"then"`, `"else"`, or `null` when the condition raised under `on_error: fail`/`skip`. For a `while`, `continue` is the check's own boolean result (`false` when it raised), and `iteration` is the 0-based index of the pass it gates. For a `mode: cel` condition, `values` holds every `state.`-rooted path the expression read, in the order the expression reads them, that has a value, keyed by that path exactly as read (`state.prime.x.value`); `unset` (omitted when empty) lists, in the same order, every such path that had none. An expression that reads `state` as a whole (`size(state)`, say) records `values: {"state": <the whole state>}` instead. `values`' compact JSON over 16 KiB is replaced by `values_truncated` (that size, in bytes) instead, the same rule `report`'s own `data` follows; `unset` is kept either way. For a `mode: model` condition, `answer` is the model's raw reply — the same value a named node's own `meta.answer` records. `error` (the shared field above) is present when the condition raised, redacted and truncated the same way; a `while` on `error` always has `continue: false`, an `if` has `branch: null` under `on_error: fail`/`skip` and `branch: "else"` under `on_error: continue`. No line at all when the condition isn't evaluated — a `while` pass `min_iterations` forces, a `while` check `max_iterations` stops the loop before it ever runs, or a resumed run's one already-open pass. |
 
 `run_start` is always the first line. `run_end` is always the last, written
 only after `--live-state`'s own final write — seeing it means that final

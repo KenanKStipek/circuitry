@@ -180,6 +180,27 @@ def _namespaced_progress_cb(
     return _forward
 
 
+def _namespaced_decision_cb(
+    callback: Callable[[str, dict[str, Any]], None] | None, node_path: str
+) -> Callable[[str, dict[str, Any]], None] | None:
+    """Wrap ``decision`` the same way :func:`_namespaced_report_cb` wraps
+    ``report`` (#628) -- an unnamed ``if``/``while`` running directly in
+    the child's own root lands at *node_path* itself, same as an unnamed
+    report does.
+    """
+    if callback is None:
+        return None
+
+    def _forward(child_path: str, payload: dict[str, Any]) -> None:
+        relative = _relative_child_path(child_path)
+        if relative is None:
+            callback(node_path, payload)
+            return
+        callback(f"{node_path}.{relative}", payload)
+
+    return _forward
+
+
 def _namespaced_open_instance_id_cb(
     callback: Callable[[str], Any] | None, node_path: str
 ) -> Callable[[str], Any] | None:
@@ -1767,6 +1788,7 @@ class UseRuntime:
                         ),
                         report=_namespaced_report_cb(store.report, node_path),
                         progress=_namespaced_progress_cb(store.progress, node_path),
+                        decision=_namespaced_decision_cb(store.decision, node_path),
                         open_instance_id=_namespaced_open_instance_id_cb(
                             store.open_instance_id, node_path
                         ),

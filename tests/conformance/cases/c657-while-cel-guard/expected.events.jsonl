@@ -1,10 +1,13 @@
-{"v":1,"seq":0,"ts":"2026-11-10T03:31:57.241Z","ev":"run_start","run_id":"4a2fd04f-dca0-469b-ab69-18841a6fadc3","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":14101}
-{"v":1,"seq":1,"ts":"2026-11-10T03:31:57.243Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-11-10T03:31:57.243Z","ev":"start","id":1,"path":"prime.counter"}
-{"v":1,"seq":3,"ts":"2026-11-10T03:31:57.243Z","ev":"start","id":2,"path":"prime.counter.iter_0.step"}
-{"v":1,"seq":4,"ts":"2026-11-10T03:31:57.243Z","ev":"end","id":2,"path":"prime.counter.iter_0.step","ok":true,"ms":0}
-{"v":1,"seq":5,"ts":"2026-11-10T03:31:57.243Z","ev":"start","id":3,"path":"prime.counter.iter_1.step"}
-{"v":1,"seq":6,"ts":"2026-11-10T03:31:57.244Z","ev":"end","id":3,"path":"prime.counter.iter_1.step","ok":true,"ms":0}
-{"v":1,"seq":7,"ts":"2026-11-10T03:31:57.244Z","ev":"end","id":1,"path":"prime.counter","ok":true,"ms":1}
-{"v":1,"seq":8,"ts":"2026-11-10T03:31:57.244Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
-{"v":1,"seq":9,"ts":"2026-11-10T03:31:57.244Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-18T21:36:03.864Z","ev":"run_start","run_id":"0d739b7d-0cd2-4ad0-a734-4e900c4c09b5","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":8451}
+{"v":1,"seq":1,"ts":"2026-11-18T21:36:03.865Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-18T21:36:03.865Z","ev":"start","id":1,"path":"prime.counter"}
+{"v":1,"seq":3,"ts":"2026-11-18T21:36:03.866Z","ev":"decision","path":"prime.counter","kind":"while","mode":"cel","continue":true,"iteration":0,"values":{"state.iter.count":0},"unset":["state.input.cfg","state.input.cfg.limit"]}
+{"v":1,"seq":4,"ts":"2026-11-18T21:36:03.866Z","ev":"start","id":2,"path":"prime.counter.iter_0.step"}
+{"v":1,"seq":5,"ts":"2026-11-18T21:36:03.866Z","ev":"end","id":2,"path":"prime.counter.iter_0.step","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-11-18T21:36:03.866Z","ev":"decision","path":"prime.counter","kind":"while","mode":"cel","continue":true,"iteration":1,"values":{"state.iter.count":1},"unset":["state.input.cfg","state.input.cfg.limit"]}
+{"v":1,"seq":7,"ts":"2026-11-18T21:36:03.866Z","ev":"start","id":3,"path":"prime.counter.iter_1.step"}
+{"v":1,"seq":8,"ts":"2026-11-18T21:36:03.866Z","ev":"end","id":3,"path":"prime.counter.iter_1.step","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-11-18T21:36:03.867Z","ev":"decision","path":"prime.counter","kind":"while","mode":"cel","continue":false,"iteration":2,"values":{"state.iter.count":2},"unset":["state.input.cfg","state.input.cfg.limit"]}
+{"v":1,"seq":10,"ts":"2026-11-18T21:36:03.867Z","ev":"end","id":1,"path":"prime.counter","ok":true,"ms":1}
+{"v":1,"seq":11,"ts":"2026-11-18T21:36:03.867Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":12,"ts":"2026-11-18T21:36:03.867Z","ev":"run_end","ok":true}

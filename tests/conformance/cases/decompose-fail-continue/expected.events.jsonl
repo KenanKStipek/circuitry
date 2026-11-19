@@ -1,14 +1,16 @@
-{"v":1,"seq":0,"ts":"2026-11-10T03:32:18.263Z","ev":"run_start","run_id":"44d576ef-be40-4203-bc93-5cbcdd49f7c5","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":14379}
-{"v":1,"seq":1,"ts":"2026-11-10T03:32:18.264Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-11-10T03:32:18.266Z","ev":"start","id":1,"path":"prime.big"}
-{"v":1,"seq":3,"ts":"2026-11-10T03:32:18.288Z","ev":"start","id":2,"path":"prime.big.plan"}
-{"v":1,"seq":4,"ts":"2026-11-10T03:32:18.290Z","ev":"end","id":2,"path":"prime.big.plan","ok":true,"ms":2}
-{"v":1,"seq":5,"ts":"2026-11-10T03:32:18.290Z","ev":"start","id":3,"path":"prime.big.check"}
-{"v":1,"seq":6,"ts":"2026-11-10T03:32:18.291Z","ev":"end","id":3,"path":"prime.big.check","ok":true,"ms":1}
-{"v":1,"seq":7,"ts":"2026-11-10T03:32:18.291Z","ev":"start","id":4,"path":"prime.big.result_path"}
-{"v":1,"seq":8,"ts":"2026-11-10T03:32:18.291Z","ev":"end","id":4,"path":"prime.big.result_path","ok":true,"ms":0}
-{"v":1,"seq":9,"ts":"2026-11-10T03:32:18.292Z","ev":"start","id":5,"path":"prime.big.done"}
-{"v":1,"seq":10,"ts":"2026-11-10T03:32:18.292Z","ev":"end","id":5,"path":"prime.big.done","ok":true,"ms":0}
-{"v":1,"seq":11,"ts":"2026-11-10T03:32:18.293Z","ev":"end","id":1,"path":"prime.big","ok":false,"ms":27,"error":"decomposition of 'big' failed (invalid_plan): the emitted orchestration has no top-level effect named 'merge', so nothing writes result_path 'prime.merge.value'"}
-{"v":1,"seq":12,"ts":"2026-11-10T03:32:18.293Z","ev":"end","id":0,"path":"prime","ok":true,"ms":29}
-{"v":1,"seq":13,"ts":"2026-11-10T03:32:18.293Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-18T21:49:48.076Z","ev":"run_start","run_id":"207df0b3-0584-4816-aa56-bd5afe122b9a","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":26739}
+{"v":1,"seq":1,"ts":"2026-11-18T21:49:48.077Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-18T21:49:48.079Z","ev":"start","id":1,"path":"prime.big"}
+{"v":1,"seq":3,"ts":"2026-11-18T21:49:48.102Z","ev":"start","id":2,"path":"prime.big.plan"}
+{"v":1,"seq":4,"ts":"2026-11-18T21:49:48.103Z","ev":"end","id":2,"path":"prime.big.plan","ok":true,"ms":1}
+{"v":1,"seq":5,"ts":"2026-11-18T21:49:48.103Z","ev":"start","id":3,"path":"prime.big.check"}
+{"v":1,"seq":6,"ts":"2026-11-18T21:49:48.104Z","ev":"end","id":3,"path":"prime.big.check","ok":true,"ms":1}
+{"v":1,"seq":7,"ts":"2026-11-18T21:49:48.104Z","ev":"decision","path":"prime.big","kind":"while","mode":"cel","continue":false,"iteration":0,"values":{"state.prime.check.value.ok":true,"state.prime.plan.value.chunks":[{"name":"a","job":"handle the first half"},{"name":"b","job":"handle the second half"}],"state.input.max_chunks":5}}
+{"v":1,"seq":8,"ts":"2026-11-18T21:49:48.104Z","ev":"start","id":4,"path":"prime.big.result_path"}
+{"v":1,"seq":9,"ts":"2026-11-18T21:49:48.104Z","ev":"end","id":4,"path":"prime.big.result_path","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-11-18T21:49:48.105Z","ev":"decision","path":"prime.big","kind":"if","mode":"cel","branch":"then","values":{"state.prime.check.value.ok":true,"state.prime.plan.value.chunks":[{"name":"a","job":"handle the first half"},{"name":"b","job":"handle the second half"}],"state.input.max_chunks":5}}
+{"v":1,"seq":11,"ts":"2026-11-18T21:49:48.105Z","ev":"start","id":5,"path":"prime.big.done"}
+{"v":1,"seq":12,"ts":"2026-11-18T21:49:48.105Z","ev":"end","id":5,"path":"prime.big.done","ok":true,"ms":0}
+{"v":1,"seq":13,"ts":"2026-11-18T21:49:48.107Z","ev":"end","id":1,"path":"prime.big","ok":false,"ms":28,"error":"decomposition of 'big' failed (invalid_plan): the emitted orchestration has no top-level effect named 'merge', so nothing writes result_path 'prime.merge.value'"}
+{"v":1,"seq":14,"ts":"2026-11-18T21:49:48.107Z","ev":"end","id":0,"path":"prime","ok":true,"ms":29}
+{"v":1,"seq":15,"ts":"2026-11-18T21:49:48.107Z","ev":"run_end","ok":true}

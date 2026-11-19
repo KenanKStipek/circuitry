@@ -220,6 +220,30 @@ pub trait RunObserver {
         _data: &ProgressData,
     ) {
     }
+
+    /// An `if`/`while` condition just evaluated (#628) -- `--events`'s
+    /// own `decision` line. *path* is the same fallback [`RunObserver::
+    /// report`] uses: the condition's own state path when named,
+    /// otherwise the path of the container it runs in. *payload* is
+    /// `kind`/`mode` plus the outcome (`branch` for an `if`;
+    /// `continue`/`iteration` for a `while`), the inputs (`values`[/
+    /// `unset`] for a CEL condition; `answer` for a model one) and
+    /// `error` when the condition raised -- in exactly the order a
+    /// `--events` line writes them. Default no-op, like every other
+    /// hook here; only `electricity` (lib)'s own `Observer` implements
+    /// it for real.
+    fn decision(&self, _path: &EffectPath, _payload: &Value) {}
+
+    /// Whether [`RunObserver::decision`] does anything at all --
+    /// `false` for [`NullObserver`] and every observer that doesn't
+    /// listen for a `decision` line. `exec::conditional`/`exec::loop_`
+    /// check this first and skip building the outcome/inputs payload
+    /// entirely when it's `false`, so a run with no `--events` writer
+    /// pays nothing beyond the condition's own evaluation for every
+    /// `if`/`while` it checks.
+    fn wants_decisions(&self) -> bool {
+        false
+    }
 }
 
 /// The fields a streamed prompt's own throttled live-progress publish
@@ -264,5 +288,6 @@ mod tests {
         observer.register_tree_branches(&path, &[]);
         observer.clear_tree_branches(&path, &[]);
         observer.report(&path, ReportLevel::Info, "hi", None);
+        observer.decision(&path, &Value::None);
     }
 }

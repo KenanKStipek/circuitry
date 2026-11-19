@@ -70,6 +70,7 @@ first time it compiles, with the same message.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import logging
 import math
@@ -957,6 +958,84 @@ def state_paths(expr: str) -> tuple[str, ...]:
     Raises :class:`CelValidationError` if *expr* does not parse.
     """
     return tuple(path for path, _guarded in _compile(expr).paths)
+
+
+@dataclass(frozen=True)
+class ConditionPaths:
+    """:func:`condition_paths`'s own result — ``electricity-cel``'s
+    ``ConditionPaths`` struct, ported."""
+
+    #: Every ``state.``-rooted path *expr* reads, raw and unfiltered —
+    #: :func:`state_paths`'s own shape, guarded or not.
+    paths: tuple[str, ...]
+    #: Whether *expr* also reads ``state`` as a whole value (``size(state)``,
+    #: say) — when ``True``, no projection by *paths* could narrow what the
+    #: expression might read.
+    reads_whole_state: bool
+
+
+def condition_paths(expr: str) -> ConditionPaths:
+    """Every ``state.``-rooted path *expr* reads, plus whether it also
+    reads ``state`` as a whole value — everything an ``if``/``while``
+    condition's own ``--events`` ``decision`` line (#628) needs to
+    report what a CEL condition read, before :func:`evaluate_cel` ever
+    runs it. :func:`state_paths` returns less (``reads_whole_state`` is
+    dropped) and exists for a different caller (``core.state_ns``'s own
+    grammar check).
+
+    Raises :class:`CelValidationError` if *expr* does not parse.
+    """
+    compiled = _compile(expr)
+    return ConditionPaths(
+        paths=tuple(path for path, _guarded in compiled.paths),
+        reads_whole_state=compiled.reads_whole_state,
+    )
+
+
+def decision_inputs(expr: str, ctx: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """The ``values``/``unset`` a CEL condition's own ``decision`` line
+    (#628) records: every path :func:`condition_paths` returns, in order,
+    split into what *ctx* (the ``state`` binding :func:`evaluate_cel`
+    itself takes) has a value for and what it doesn't — a value of
+    ``None`` counts as unset, the same absent-reads-empty rule this
+    module's own evaluation already applies. A duplicate path (the same
+    ``state.`` read occurring twice in *expr*) is reported once, at its
+    first occurrence. An expression that reads ``state`` as a whole
+    (:attr:`ConditionPaths.reads_whole_state`) records ``{"state": ctx}``
+    instead, with nothing unset — no projection could narrow it.
+
+    Raises :class:`CelValidationError` if *expr* does not parse, the same
+    as :func:`condition_paths`.
+
+    Every value kept is :func:`copy.deepcopy`'d out of *ctx* first: a
+    ``decision`` line's own writer serializes this later, on its own
+    schedule, and *ctx* is the live run state -- a concurrent branch
+    could still be mutating the very dict or list a whole-node read
+    (``has(state.x)``) captured a reference to.
+    """
+    compiled = condition_paths(expr)
+    if compiled.reads_whole_state:
+        return {"state": copy.deepcopy(ctx)}, []
+    values: dict[str, Any] = {}
+    unset: list[str] = []
+    seen: set[str] = set()
+    for path in compiled.paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        current: Any = ctx
+        resolved = True
+        for part in path.split(".")[1:]:
+            if isinstance(current, Mapping) and part in current:
+                current = current[part]
+            else:
+                resolved = False
+                break
+        if resolved and current is not None:
+            values[path] = copy.deepcopy(current)
+        else:
+            unset.append(path)
+    return values, unset
 
 
 def free_identifiers(expr: str) -> tuple[str, ...]:

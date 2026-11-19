@@ -1,0 +1,16 @@
+name: c628-decision-whole-state-read
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '{"n": 1}'}
+  - type: if
+    if:
+      mode: cel
+      expr: "size(state) > 0"
+    then:
+      - type: tool
+        name: yes_branch
+        provider: json
+        params: {mode: stringify, input: {ok: true}}
+    else: []

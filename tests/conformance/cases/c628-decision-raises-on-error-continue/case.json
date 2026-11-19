@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #628",
+  "description": "A strict CEL if whose condition reads an unset path and raises, under on_error: continue: the decision line carries branch: \"else\" and the error text, with values/unset still reflecting what the condition actually read.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
