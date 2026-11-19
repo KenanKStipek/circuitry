@@ -206,10 +206,9 @@ anything left over.
 `check()` (preflight, `cof doctor`) loads the replies file through the identical path
 `generate()` uses. On success it reports the file's own counts, not a bare "ok" --
 `"<path>: <n> repl{y,ies} across <m> path{,s}"`, e.g. `"replies.yaml: 3 replies across 2
-paths"` -- so `cof doctor`'s table shows which file was read and how much it configures,
-the same way other adapters' `check()` names what they found. On failure it is the
-load error's own message, as in §6/§4 above, naming the replies-file path, never the
-calling effect's.
+paths"` -- so `cof doctor`'s table shows which file was read and how much it configures.
+On failure it is the load error's own message, as in §6/§4 above, naming the
+replies-file path, never the calling effect's.
 
 ## 7. The leftover-replies export (for a subprocess harness)
 

@@ -1,7 +1,0 @@
-{
-  "spec_case": "issue #386",
-  "description": "A reflector whose generated plan is itself a `prompt` effect, not just a `tool` -- pins the generated plan's own model-call path alongside the planner's own `inner` call.",
-  "engines": ["python", "electricity"],
-  "config": "config.json",
-  "expect": "success"
-}
