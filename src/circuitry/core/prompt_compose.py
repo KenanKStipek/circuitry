@@ -48,7 +48,7 @@ import os
 import re
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import chevron.tokenizer  # type: ignore[import-untyped]
 
@@ -71,6 +71,7 @@ __all__ = [
     "known_effect_names",
     "referenced_prompt_file_paths",
     "render_with_composition",
+    "tree_sibling_warnings",
 ]
 
 #: The ``runtime_config`` key a document's own compiled ``prompts:`` rides
@@ -687,6 +688,225 @@ def check_prompt_composition(
 
     errors.extend(_declared_prompt_cycles(declared))
     return errors
+
+
+def _is_tree_flow(value: Any) -> bool:
+    """Canonicalized the same way ``core.lint.DEPRECATED_FLOW_ALIASES`` warns
+    about them — duplicated rather than imported, since a 4-entry mapping is
+    cheaper to repeat here than a dependency from this module (which
+    ``core.compiler`` itself imports) onto ``core.lint``.
+    """
+    return str(value or "").strip().lower() in ("tree", "tree_of_thought", "tot")
+
+
+def _tree_container_label(*, effect_path: str | None, name: str | None) -> str:
+    if effect_path is None:
+        return "the document's own top-level 'flow: tree'"
+    if name:
+        return f"the 'flow: tree' dynamic '{name}' ('{effect_path}')"
+    return f"the 'flow: tree' dynamic at '{effect_path}'"
+
+
+def _tree_divergence(
+    source_path: tuple[tuple[int, int], ...],
+    target_path: tuple[tuple[int, int], ...],
+) -> int | None:
+    """The id of the list *source_path* and *target_path* — each the
+    sequence of ``(list id, index within that list)`` steps from the
+    document root down to one effect — first diverge under, or ``None``
+    when neither diverges from the other (same effect, or one a prefix of
+    the other — never happens here, since the target of a ``{{> name}}``
+    reference is always a leaf with no children of its own).
+
+    Two paths sharing the same list id but a different index are two
+    members of that one list — true siblings, or (one level further down)
+    something nested under two different ones: that list id is where they
+    diverge. Two paths whose list id differs at the same position are two
+    *different* fields of the same parent (a dynamic's own ``effects`` vs.
+    its ``finally``, a loop's ``body`` vs. its enclosing dynamic's
+    ``finally``, ...) — always sequenced relative to each other regardless
+    of either one's own flow (``finally`` always runs after the whole of
+    ``effects``), so neither path diverges there at all.
+    """
+    for (src_list, src_idx), (tgt_list, tgt_idx) in zip(source_path, target_path, strict=False):
+        if src_list != tgt_list:
+            return None
+        if src_idx != tgt_idx:
+            return src_list
+    return None
+
+
+def tree_sibling_warnings(
+    orch: Mapping[str, Any],
+    *,
+    document_dir: Path | None = None,
+    confinement_root: Path | None = None,
+) -> list[str]:
+    """``cof check`` advisories for a ``{{> name}}`` that names an effect
+    which cannot be guaranteed to have run yet, because it sits — or the
+    reference itself sits — somewhere a ``flow: tree`` container dispatches
+    with no fixed order among its own members (#405).
+
+    Unlike :func:`check_prompt_composition`'s errors, a reference this finds
+    nothing wrong with still compiles and still runs the same either way:
+    this is advisory only, the same kind lint.py's own warnings are. A
+    reference it has nothing to say about may still be a genuine miss (an
+    untaken ``if`` branch, one later in a ``flow: chain`` list) — those
+    render ``""`` at run time regardless, exactly as documented
+    (:func:`_resolve_effect_text`); this only names the subset caused by
+    ``flow: tree`` ordering specifically, since that is the one case no
+    amount of reading the document top-to-bottom tells you about.
+
+    Only effect-to-effect references are checked — a declared prompt's own
+    text can be spliced into more than one place, so it has no single
+    position to check this against; :func:`check_prompt_composition` already
+    resolves its own references just the same regardless.
+
+    A ``loop``'s own ``flow`` is not tracked here at all: its ``body``
+    dispatches sequentially within one pass regardless (``LoopRuntime``'s
+    own per-pass dispatch is a plain ``for`` loop over ``self.defn.body``) —
+    ``flow: tree`` on a loop only changes whether *different passes* run
+    concurrently, and a pass has no name of its own a ``{{> name}}`` could
+    single out — only its own body steps do, always bare-bound to "this
+    pass" by ``core.loop``'s own context override, never to another one. A
+    loop nested inside a ``flow: tree`` dynamic is still flagged like any
+    other effect, through that dynamic's own flow, not the loop's.
+    """
+    if not isinstance(orch, Mapping):
+        return []
+
+    list_flow: dict[int, Literal["chain", "tree"]] = {}
+    list_label: dict[int, str] = {}
+    positions: dict[str, tuple[tuple[int, int], ...]] = {}
+    pending: list[tuple[tuple[tuple[int, int], ...], str, str]] = []
+    list_ids = itertools.count()
+
+    def walk(
+        effects: Any,
+        *,
+        parent_path: tuple[tuple[int, int], ...],
+        flow: Literal["chain", "tree"],
+        label: str,
+        container_path: str,
+        prefix: str,
+    ) -> None:
+        if not isinstance(effects, list):
+            return
+        list_id = next(list_ids)
+        list_flow[list_id] = flow
+        list_label[list_id] = label
+        for idx, effect in enumerate(effects):
+            if not isinstance(effect, dict):
+                continue
+            here = (*parent_path, (list_id, idx))
+            effect_path = f"{container_path}[{idx}]"
+            raw_name = effect.get("name")
+            name = raw_name if isinstance(raw_name, str) and raw_name else None
+            etype = str(effect.get("type") or "").strip().lower()
+
+            if name and _effect_is_text_producing(etype, effect):
+                positions[name] = here
+                if prefix:
+                    positions[f"{prefix}{name}"] = here
+
+            for text in _iter_composable_strings(
+                effect, document_dir=document_dir, confinement_root=confinement_root
+            ):
+                pending.extend(
+                    (here, effect_path, ref)
+                    for ref in sorted(partial_references(text))
+                    if _NAME_SHAPE.match(ref)
+                )
+
+            child_prefix = prefix
+            if name and etype in _SCOPE_INTRODUCING_TYPES:
+                child_prefix = f"{prefix}{name}."
+
+            if etype == "dynamic":
+                child_flow: Literal["chain", "tree"] = (
+                    "tree" if _is_tree_flow(effect.get("flow")) else "chain"
+                )
+                walk(
+                    effect.get("effects")
+                    if effect.get("effects") is not None
+                    else effect.get("steps"),
+                    parent_path=here,
+                    flow=child_flow,
+                    label=_tree_container_label(effect_path=effect_path, name=name),
+                    container_path=f"{effect_path}.effects",
+                    prefix=child_prefix,
+                )
+                walk(
+                    effect.get("finally"),
+                    parent_path=here,
+                    flow="chain",
+                    label="",
+                    container_path=f"{effect_path}.finally",
+                    prefix=child_prefix,
+                )
+            elif etype == "loop":
+                walk(
+                    effect.get("body"),
+                    parent_path=here,
+                    flow="chain",
+                    label="",
+                    container_path=f"{effect_path}.body",
+                    prefix=child_prefix,
+                )
+            elif etype in ("if", "conditional"):
+                walk(
+                    effect.get("then"),
+                    parent_path=here,
+                    flow="chain",
+                    label="",
+                    container_path=f"{effect_path}.then",
+                    prefix=child_prefix,
+                )
+                walk(
+                    effect.get("else"),
+                    parent_path=here,
+                    flow="chain",
+                    label="",
+                    container_path=f"{effect_path}.else",
+                    prefix=child_prefix,
+                )
+
+    root_flow: Literal["chain", "tree"] = (
+        "tree" if _is_tree_flow(orch.get("flow") or orch.get("strategy")) else "chain"
+    )
+    walk(
+        orch.get("effects") if orch.get("effects") is not None else orch.get("steps"),
+        parent_path=(),
+        flow=root_flow,
+        label=_tree_container_label(effect_path=None, name=None),
+        container_path="effects",
+        prefix="",
+    )
+    walk(
+        orch.get("finally"),
+        parent_path=(),
+        flow="chain",
+        label="",
+        container_path="finally",
+        prefix="",
+    )
+
+    warnings: set[str] = set()
+    for source_path, where, name in pending:
+        target_path = positions.get(name)
+        if target_path is None or target_path == source_path:
+            continue
+        divergence = _tree_divergence(source_path, target_path)
+        if divergence is None or list_flow.get(divergence) != "tree":
+            continue
+        warnings.add(
+            f"{where}: '{{{{> {name}}}}}' names '{name}', inside "
+            f"{list_label[divergence]} as this reference — tree children "
+            "dispatch in no fixed order, so this can render '' whenever "
+            f"'{name}' has not completed yet. No warning for 'flow: chain', "
+            "where order is defined."
+        )
+    return sorted(warnings)
 
 
 def _dfs_find_cycle(

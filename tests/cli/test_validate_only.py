@@ -92,6 +92,29 @@ def test_validate_only_passes_a_valid_document_without_executing(tmp_path: Path)
     assert "a" not in result.state.get("prime", {})
 
 
+def test_validate_only_warns_about_a_flow_tree_sibling_reference(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "tree_sibling.yml",
+        "flow: tree\n"
+        "effects:\n"
+        "  - {type: yield, name: a, template: 'hello'}\n"
+        "  - {type: yield, name: b, template: '{{> a}}'}\n",
+    )
+    result = run(
+        RunRequest(
+            orchestration_path=path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=True,
+            config=CircuitryConfig(),
+        )
+    )
+    assert result.ok is True, result.error
+    assert any("flow: tree" in warning for warning in result.warnings)
+
+
 def test_api_validate_only_matches_api_validate_orchestration(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

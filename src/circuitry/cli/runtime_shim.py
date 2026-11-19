@@ -950,17 +950,18 @@ def run(req: RunRequest) -> RunResult:
         from .library_sources import confinement_root_for_document
 
         _document_dir = req.orchestration_path.resolve().parent
+        _confinement_root = confinement_root_for_document(
+            req.orchestration_path,
+            _document_dir,
+            library_registry=library_registry,
+            is_cache_path=document_is_cache_path,
+            remote_library_source=req.remote_library_source,
+        )
         root_def = compile_orchestration(
             orch=orch,
             root_name="prime",
             document_dir=_document_dir,
-            confinement_root=confinement_root_for_document(
-                req.orchestration_path,
-                _document_dir,
-                library_registry=library_registry,
-                is_cache_path=document_is_cache_path,
-                remote_library_source=req.remote_library_source,
-            ),
+            confinement_root=_confinement_root,
             # The same trust the document's `runtime:` block gets: a document
             # run by path can name any `within` for a prompt's
             # `file: {from: ...}`; a limited one stays inside its project.
@@ -1137,9 +1138,15 @@ def run(req: RunRequest) -> RunResult:
             # instead of building the adapter or dispatching any effect
             # (#302).
             from ..core.lint import lint_orchestration
+            from ..core.prompt_compose import tree_sibling_warnings
 
             warnings.extend(lint_orchestration(orch))
             warnings.extend(unknown_key_warnings(orch))
+            warnings.extend(
+                tree_sibling_warnings(
+                    orch, document_dir=_document_dir, confinement_root=_confinement_root
+                )
+            )
             state["runtime"]["last_run"]["completed_at"] = _now_iso()
             return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
 
@@ -1841,21 +1848,27 @@ def validate(
         # with, without resolving model/adapter/profile too (#274). Also a
         # `use: path:` child's own trust (#611): it inherits the root's.
         trusted = trust_document or (config is not None and config.trust_orchestration_runtime)
+        _confinement_root = confinement_root_for_document(
+            orchestration_path,
+            _document_dir,
+            library_registry=library_registry,
+            is_cache_path=document_is_cache_path,
+        )
         root_def = compile_orchestration(
             orch=orch,
             root_name="prime",
             document_dir=_document_dir,
-            confinement_root=confinement_root_for_document(
-                orchestration_path,
-                _document_dir,
-                library_registry=library_registry,
-                is_cache_path=document_is_cache_path,
-            ),
+            confinement_root=_confinement_root,
             trusted=trusted,
             # This check's own single on-disk read (#405), already used
             # above for the parse -- a `{file: ...}` prompt source this
             # document references sees the exact same bytes here.
             file_cache=file_cache,
+        )
+        from ..core.prompt_compose import tree_sibling_warnings
+
+        lint_warnings += tree_sibling_warnings(
+            orch, document_dir=_document_dir, confinement_root=_confinement_root
         )
         # The secrets the document names (#598), for `cof check` to list;
         # compiling already refused them in a limited document.
