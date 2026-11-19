@@ -9,7 +9,6 @@ real `cof run` subprocess, not by faking an adapter in-process.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import signal
 import subprocess
@@ -18,6 +17,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _signal_test_support import _diagnose_and_fail, _sandboxed_env
 
 requires_sleep = pytest.mark.skipif(
     shutil.which("sleep") is None, reason="requires the 'sleep' binary"
@@ -71,14 +71,6 @@ effects:
     return orch
 
 
-def _sandboxed_env(tmp_path: Path) -> dict[str, str]:
-    """A child-process env whose fake $HOME keeps it off the real
-    ~/.config/circuitry/last-run.json and global config (CLAUDE.md hermeticity)."""
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    return {**os.environ, "HOME": str(home)}
-
-
 def _find_node(state: object, name: str) -> dict[str, object] | None:
     """Recursively find the ``{name: {..., "meta": {...}}}`` node anywhere in
     *state*'s tree, regardless of nesting (e.g. under a ``dynamic`` effect)."""
@@ -130,15 +122,19 @@ def _run_and_sigterm(orch: Path, out_path: Path) -> subprocess.CompletedProcess[
     try:
         _wait_for_step1(live_state_path)
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=10.0, label="waiting for step1 to complete")
+    t0 = time.monotonic()
     proc.send_signal(signal.SIGTERM)
     try:
         stdout, stderr = proc.communicate(timeout=15)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=15,
+            label="waiting for SIGTERM to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=proc.pid,
+        )
     return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
 
 
